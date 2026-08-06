@@ -148,6 +148,14 @@ When a provider requests a retry delay longer than `retry.provider.maxRetryDelay
 | `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
 
+### Rust Cells
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
+
+Toolchain locations are environment variables, not settings: `WASMEDGE_AGENT_CARGO`, `WASMEDGE_AGENT_WASMEDGE`, `WASMEDGE_AGENT_TEMPLATE_DIR`, `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`.
+
 ### Shell
 
 | Setting | Type | Default | Description |

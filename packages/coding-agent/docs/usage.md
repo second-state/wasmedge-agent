@@ -2,7 +2,7 @@
 
 This page collects day-to-day usage details that do not fit on the quickstart page.
 
-Prime Agent is built around one model-facing tool: a persistent IPython kernel. The kernel retains Python state across turns and acts as a control environment for file operations, project commands, installed Python skills, MCP-backed skills, and recursive subagents. The TypeScript host remains responsible for provider calls, session state, tool execution, scheduling, and child-agent lifecycles.
+Prime Agent is built around a sandboxed Rust cell engine plus a `bash` tool. Each cell compiles to WebAssembly and runs in WasmEdge; workspace state (`rlm::state`, `agent_lib`) persists across cells and acts as the control environment for file operations, installed Rust skills, MCP-backed capabilities, and recursive subagents, while `bash` runs the project's own commands. The TypeScript host remains responsible for provider calls, session state, tool execution, scheduling, and child-agent lifecycles.
 
 ## Interactive Mode
 
@@ -102,21 +102,18 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 Normal interactive sessions are persistent agents backed by isolated worker processes. Closing the TUI detaches the client; use `prime-agent agents`, `prime-agent list`, or `prime-agent attach <agent>` to find and reattach to running work. `prime-agent stop <agent>` stops one root agent, while `prime-agent shutdown` stops all workers and the local supervisor.
 
-Within a session, the model can delegate through the `rlm` callable already available in IPython:
+Within a session, the model can delegate through the `rlm` crate already available in cells:
 
-```python
-# Spawn independent children. Each call returns at admission with a child handle,
-# never the child's answer.
-review = await rlm(
-    "Review authentication and reply to the parent with findings.",
-    name="auth-reviewer",
-)
-tests = await rlm("Find missing regression tests and reply to the parent.", name="test-reviewer")
-docs = await rlm("Find stale public documentation and reply to the parent.", name="docs-reviewer")
+```rust
+// Spawn independent children. Each call returns at admission with a child handle,
+// never the child's answer.
+let review = rlm::spawn_named("Review authentication and reply to the parent with findings.", "auth-reviewer")?;
+let tests = rlm::spawn_named("Find missing regression tests and reply to the parent.", "test-reviewer")?;
+let docs = rlm::spawn_named("Find stale public documentation and reply to the parent.", "docs-reviewer")?;
 
-# Children reply from their own sessions with:
-# await agent_message.send(message, receiver_role="parent")
-# Their replies arrive here as ordinary agent messages.
+// Children reply from their own sessions with:
+//   rlm::msg::send_to_parent(message)?
+// Their replies arrive here as ordinary agent messages.
 
 # Recover handles and follow up with a retained child.
 children = await rlm.list_subagents()
@@ -231,7 +228,7 @@ Use `prime-agent session export <file> [output]` to export a session to HTML.
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools |
 
-Built-in tools: `ipython`.
+Built-in tools: `rust`, `bash`.
 
 ### Resource Options
 
@@ -341,8 +338,8 @@ prime-agent --model sonnet:high "Solve this complex problem"
 # Limit model cycling
 prime-agent --models "claude-*,gpt-4o"
 
-# Restrict to the built-in IPython tool
-prime-agent --tools ipython -p "Review the code"
+# Restrict to the built-in rust cell tool
+prime-agent --tools rust -p "Review the code"
 ```
 
 ### Environment Variables
@@ -360,16 +357,20 @@ prime-agent --tools ipython -p "Review the code"
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing when it has `agent_traces` scope |
 | `PRIME_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
 | `PRIME_AGENT_TRACES_BASE_URL` | Override the Prime Agent trace upload API base URL |
-| `PRIME_AGENT_KERNEL_PYTHON` | Use an existing Python environment with `ipykernel` instead of bootstrapping `~/.prime/agent/kernel-venv` |
+| `WASMEDGE_AGENT_CARGO` | Path to the `cargo` binary; default is PATH, then `~/.cargo/bin/cargo` |
+| `WASMEDGE_AGENT_WASMEDGE` | Path to the `wasmedge` binary; default is PATH, then `~/.wasmedge/bin/wasmedge` |
+| `WASMEDGE_AGENT_TEMPLATE_DIR` | Override the cell workspace template location |
+| `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` | Bound parallel cell compiles across sessions in one process |
+| `WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL` | `1` makes postinstall vendor and prebuild the workspace template |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 The remaining `PI_*` variables are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.prime/agent` configuration path.
 
 ## Design Principles
 
-Prime Agent keeps the model-facing tool surface small while making the IPython runtime powerful and composable. The built-in `ipython` tool provides durable state, project command execution, Python skills, MCP-backed integrations, and the native `rlm` delegation API without presenting each capability as a separate model tool.
+Prime Agent keeps the model-facing tool surface small while making the cell runtime powerful and composable. The built-in `rust` tool provides durable workspace state, Rust skills, MCP-backed integrations, and the native `rlm` delegation API without presenting each capability as a separate model tool; `bash` covers the project's own commands.
 
-Recursive subagents are a core capability, not an optional extension. The TypeScript host owns every parent and child agent loop so recursion uses the same provider, session, tool, skill, scheduling, usage-accounting, and recovery infrastructure. The Python `rlm` package is a thin host bridge rather than a separate agent implementation.
+Recursive subagents are a core capability, not an optional extension. The TypeScript host owns every parent and child agent loop so recursion uses the same provider, session, tool, skill, scheduling, usage-accounting, and recovery infrastructure. The guest `rlm` crate is a thin host bridge rather than a separate agent implementation.
 
 Extensions, skills, prompt templates, themes, and Prime Agent packages remain the primary customization surfaces. They can add project-specific workflows, custom tools and UI, permission policies, provider integrations, and orchestration patterns around the built-in runtime.
 

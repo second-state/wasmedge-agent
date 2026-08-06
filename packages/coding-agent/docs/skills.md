@@ -4,14 +4,14 @@
 
 Skills are self-contained capability packages that Prime Agent loads on demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
 
-Prime Agent implements the [Agent Skills standard](https://agentskills.io/specification), warning about violations but remaining lenient. It also supports Python-backed skills: a superset of markdown skills that install Python packages into the persistent IPython kernel.
+Prime Agent implements the [Agent Skills standard](https://agentskills.io/specification), warning about violations but remaining lenient. It also supports Rust crate skills: a superset of markdown skills that mount a crate into the cell workspace and expose it as typed calls under `agent_lib::skills`.
 
 ## Table of Contents
 
 - [Locations](#locations)
 - [Built-in Skills](#built-in-skills)
 - [How Skills Work](#how-skills-work)
-- [Python-Backed Skills](#python-backed-skills)
+- [Rust Crate Skills](#rust-crate-skills)
 - [Creating Skills with Prime Agent](#creating-skills-with-prime-agent)
 - [Skill Commands](#skill-commands)
 - [Skill Structure](#skill-structure)
@@ -48,9 +48,8 @@ Disable discovery with `--no-skills` (explicit `--skill` paths still load).
 
 Prime Agent ships with built-in skills that load by default:
 
-- `prime-intellect` - Prime Intellect products and workflows via the prime CLI: verifiers environments and the Environments Hub, evaluations (local and hosted), Hosted Training and prime-rl, sandboxes, tunnels, Prime Inference, GPU compute, and storage. Reference docs for each area load on demand from the skill's `references/` directory.
-- `skill-creator` - teaches the agent to create new skills: markdown skill layout, frontmatter rules, placement and precedence, and the full Python-backed skill contract (package layout, `run()` convention, optional CLI, kernel venv behavior) with a working template in `references/python-skills.md`.
-- `websearch` - a Python-backed Google search skill using the [Serper](https://serper.dev) API.
+- `skill-creator` - teaches the agent to create new skills: markdown skill layout, frontmatter rules, placement and precedence, and the full Rust crate skill contract (crate layout, `run()` convention, workspace-dependency rules) with a working template in `references/rust-skills.md`.
+- `websearch` - a Rust crate Google search skill using the [Serper](https://serper.dev) API; the crate calls a typed host request, so the API key never enters the sandbox.
 
 Built-in skills behave like any other skill but have the lowest precedence: a user, project, package, or `--skill` skill with the same name overrides the built-in one.
 
@@ -71,10 +70,11 @@ export PRIME_AGENT_WEBSEARCH_NUM_RESULTS=5
 
 A `SERPER_API_KEY` in the environment, if set, takes precedence over the stored key.
 
-Once loaded, the model can call it directly in the IPython kernel by import name:
+Once mounted, the model calls it from a rust cell:
 
-```python
-print(await websearch("latest Prime Agent release"))
+```rust
+let results = agent_lib::skills::websearch::run("latest Prime Agent release")?;
+println!("{results}");
 ```
 
 Until a key is configured, web search returns a clear message telling the agent
@@ -102,7 +102,7 @@ To disable all built-in skills, set `enableBuiltinSkills` to `false` in `setting
 
 ```json
 {
-  "skills": ["-prime-intellect/SKILL.md"]
+  "skills": ["-websearch/SKILL.md"]
 }
 ```
 
@@ -130,84 +130,54 @@ For project-level Claude Code skills, add to `.prime/agent/settings.json`:
 ## How Skills Work
 
 1. At startup, Prime Agent scans skill locations and extracts names, descriptions, type, and file locations
-2. The system prompt includes visible skills in XML format per the [specification](https://agentskills.io/integrate-skills)
-3. When a task matches, the agent uses `ipython` to load the full `SKILL.md` (models don't always do this; use prompting or `/skill:name` to force it)
-4. The agent follows the instructions, using relative paths to reference scripts and assets
+2. The system prompt includes visible skills in XML format per the [specification](https://agentskills.io/integrate-skills); Rust skills additionally list their `agent_lib::skills` use path
+3. When a task matches, the agent reads the full `SKILL.md` from a rust cell (models don't always do this; use prompting or `/skill:name` to force it)
+4. The agent follows the instructions — calling the mounted crate for a Rust skill, or using relative paths to reference scripts and assets for a markdown skill
 
 This is progressive disclosure: only descriptions are always in context, full instructions load on-demand.
 
 Skills with `disable-model-invocation: true` are hidden from the startup skill list. They can still be invoked explicitly with `/skill:name`.
 
-## Python-Backed Skills
+## Rust Crate Skills
 
-A Python-backed skill uses the same `SKILL.md` metadata and invocation behavior as a markdown skill, but also provides a Python package for the IPython kernel.
+A Rust crate skill uses the same `SKILL.md` metadata and invocation behavior as a markdown skill, but also provides a crate that Prime Agent mounts into the cell workspace.
 
 ```
 web-search/
 ├── SKILL.md
-├── pyproject.toml
+├── Cargo.toml
 └── src/
-    └── web_search/
-        └── __init__.py
+    └── lib.rs
 ```
 
 Detection rules:
 - `SKILL.md` is still required
-- `pyproject.toml` marks the skill as Python-backed
-- the import name is the skill name with hyphens converted to underscores
-- `src/<import_name>/__init__.py` must exist
+- `Cargo.toml` marks the skill as a Rust crate skill
+- the crate name is the skill name with hyphens converted to underscores
+- `src/lib.rs` must exist
 
-For `web-search`, Prime Agent exposes `web_search` in IPython. If the module defines `run()`, the module is wrapped as an async callable:
+For `web-search`, Prime Agent exposes `agent_lib::skills::web_search` in cells. The convention is a documented `run()` entry point, with any richer typed API alongside it:
 
-```python
-await web_search("prime agent skills")
-await web_search.run("prime agent skills")
-help(web_search)
+```rust
+use agent_lib::skills::web_search;
+
+let summary = web_search::run("prime agent skills")?;
 ```
 
-Python skills are installed editable into the kernel venv during kernel setup. By default this is `~/.prime/agent/kernel-venv`; set `PRIME_AGENT_KERNEL_VENV` to override it. If `pyproject.toml` changes, Prime Agent rebuilds the kernel venv so dependency changes are picked up.
+At session start (and on `/reload`) the skill directory is linked into the workspace as `skills/<crate>` and added to the cargo workspace, so edits to the skill source take effect on the next cell compile — there is no install step. When the mounted set or a manifest changes, each skill gets a probe build; a skill that fails to compile is unmounted with a diagnostic while every other skill and cells keep working.
 
-If you set `PRIME_AGENT_KERNEL_PYTHON`, Prime Agent does not install packages into that environment. The Python must already have `ipykernel`, `prime-agent-runtime`, and the default runtime packages installed. Missing Python skill imports are disabled with a warning and calling the skill raises a `RuntimeError`.
-
-### Optional CLI Command
-
-A Python skill can expose a shell command by declaring a console script in `pyproject.toml`. The script name must exactly match the Python import name, including underscores:
-
-```toml
-[project]
-name = "web-search"
-version = "0.1.0"
-dependencies = ["requests"]
-
-[project.scripts]
-web_search = "rlm.skill:cli"
-```
-
-The `rlm.skill:cli` helper imports `web_search.run`, parses CLI arguments with `tyro`, awaits async results, and prints non-`None` return values.
-
-```python
-async def run(query: str, limit: int = 5) -> str:
-    """Search the web and return a concise summary."""
-    ...
-```
-
-The model can then call the skill from normal Python or from shell mode:
-
-```python
-await web_search("prime agent")
-!web_search "prime agent" --limit 3
-```
+Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
 ## Creating Skills with Prime Agent
 
-Prime Agent ships with a built-in `skill-creator` skill that teaches the agent both the Agent Skills format and the Python-backed package contract. You can ask for a skill in normal language:
+Prime Agent ships with a built-in `skill-creator` skill that teaches the agent both the Agent Skills format and the Rust crate contract. You can ask for a skill in normal language:
 
 ```text
-Create a project Python-backed skill named release-audit in
+Create a project Rust crate skill named release-audit in
 .prime/agent/skills/release-audit. It should expose
-await release_audit(repository, target_version), include concise SKILL.md
-instructions, declare its dependencies, and verify the callable in a fresh
-Prime Agent session.
+agent_lib::skills::release_audit::run(repository, target_version), include
+concise SKILL.md instructions, use workspace dependencies, and verify the
+call compiles and runs in a cell.
 ```
 
 To force the creation workflow explicitly, invoke the built-in skill command:
@@ -219,16 +189,16 @@ To force the creation workflow explicitly, invoke the built-in skill command:
 Tell the agent three things:
 
 1. **Scope:** use `.prime/agent/skills/<name>/` for a project skill committed with the repository, or `~/.prime/agent/skills/<name>/` for a personal skill.
-2. **Kind:** ask for a markdown skill when the capability is primarily instructions; ask for a Python-backed skill when the agent should call reusable functionality from IPython.
-3. **Contract:** describe the intended Python call, inputs, output, dependencies, credentials, and verification behavior.
+2. **Kind:** ask for a markdown skill when the capability is primarily instructions; ask for a Rust crate skill when the agent should call reusable functionality from cells.
+3. **Contract:** describe the intended Rust call, inputs, output, dependencies, credentials, and verification behavior.
 
-The agent should create `SKILL.md` in both cases. For a Python-backed skill it should also create `pyproject.toml` and `src/<import_name>/__init__.py`, expose a documented callable, and verify that the package imports in the kernel.
+The agent should create `SKILL.md` in both cases. For a Rust crate skill it should also create `Cargo.toml` and `src/lib.rs`, expose a documented `run()` callable, and verify the crate compiles and answers from a cell.
 
-Use `/reload` to rediscover new or edited skill metadata. Start a fresh Prime Agent session after adding a Python-backed skill so kernel setup can install and import the package.
+Use `/reload` to rediscover new or edited skill metadata and remount the workspace; source edits to an already-mounted crate need no reload at all — the symlink means the next cell compile picks them up.
 
 ### Installed Skills and Continual Harness Skills
 
-An installed Python-backed skill is a real package on disk that adds executable functionality to the kernel. A continual harness skill entry is a persisted description of a reusable Python call, including its reference and argument contract. `/refine` can create or update the latter after a repeated procedure emerges, but it does not replace packaging new functionality with `skill-creator`.
+An installed Rust crate skill is real code on disk that adds executable functionality to cells. A continual harness skill entry is a persisted description of a reusable call, including its `{"type": "rust", "use": ...}` reference and argument contract. `/refine` (and `rlm::harness`) can create or update the latter after a repeated procedure emerges, but it does not replace packaging new functionality with `skill-creator`.
 
 ## Skill Commands
 

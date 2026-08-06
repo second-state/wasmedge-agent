@@ -691,7 +691,7 @@ Behavior guarantees:
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
 pi.on("tool_call", async (event, ctx) => {
-  // event.toolName - "ipython", "bash", "edit", etc.
+  // event.toolName - "rust", "bash", "edit", etc.
   // event.toolCallId
   // event.input - tool parameters (mutable)
 
@@ -705,7 +705,7 @@ pi.on("tool_call", async (event, ctx) => {
     }
   }
 
-  if (isToolCallEventType("ipython", event)) {
+  if (isToolCallEventType("rust", event)) {
     // event.input is { code: string }
     console.log(`Python code: ${event.input.code}`);
   }
@@ -1489,10 +1489,10 @@ Manage active tools. This works for both built-in tools and dynamically register
 const active = pi.getActiveTools();
 const all = pi.getAllTools();
 // [{
-//   name: "ipython",
-//   description: "Execute Python code in a persistent IPython kernel...",
+//   name: "rust",
+//   description: "Compile and run a Rust cell in the WasmEdge sandbox...",
 //   parameters: ..., 
-//   sourceInfo: { path: "<builtin:ipython>", source: "builtin", scope: "temporary", origin: "top-level" }
+//   sourceInfo: { path: "<builtin:rust>", source: "builtin", scope: "temporary", origin: "top-level" }
 // }, ...]
 const names = all.map(t => t.name);
 const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
@@ -1824,10 +1824,10 @@ pi.registerTool({
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`ipython`, `bash`, `edit`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
+Extensions can override built-in tools (`rust`, `bash`, `edit`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
 
 ```bash
-# Extension's ipython tool replaces built-in ipython
+# Extension's rust tool replaces the built-in rust tool
 prime-agent -e ./tool-override.ts
 ```
 
@@ -1846,7 +1846,7 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
-- [ipython.ts](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/tools/ipython.ts) - `IpythonToolDetails`
+- [rust.ts](../src/core/tools/rust.ts) - `RustToolDetails`
 - [bash.ts](../src/core/tools/bash.ts) - `BashToolDetails`
 - [edit.ts](../src/core/tools/edit.ts)
 

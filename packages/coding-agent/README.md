@@ -66,9 +66,9 @@ prime-agent
 /login  # Then select provider
 ```
 
-Then just talk to Prime Agent. By default, Prime Agent gives the model one tool: `ipython`. The model uses the persistent kernel to read files, run commands, edit code, and inspect data. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [Prime Agent packages](#prime-agent-packages).
+Then just talk to Prime Agent. By default, Prime Agent gives the model two tools: `rust` and `bash`. The model writes Rust cells that compile to WebAssembly and run sandboxed in [WasmEdge](https://wasmedge.org) — reading files, editing code, inspecting data, and persisting state across cells — while `bash` runs the project's own commands. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [Prime Agent packages](#prime-agent-packages).
 
-The Python kernel runtime is set up automatically on first invocation. Set `PRIME_AGENT_KERNEL_PYTHON` to use an existing Python environment with `ipykernel`.
+The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` binary; the installer offers to set both up, the workspace template prebuilds automatically, and `doctor --fix` repairs the rest. Set `WASMEDGE_AGENT_CARGO` / `WASMEDGE_AGENT_WASMEDGE` to use specific binaries.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -291,7 +291,7 @@ Place in `~/.prime/agent/prompts/`, `.prime/agent/prompts/`, or a [Prime Agent p
 
 ### Skills
 
-On-demand capability packages following the [Agent Skills standard](https://agentskills.io). At startup, Prime Agent gives the model each visible skill's name, type, description, and location. The full `SKILL.md` stays out of context until the model inspects it with `ipython` or you explicitly invoke `/skill:name`.
+On-demand capability packages following the [Agent Skills standard](https://agentskills.io). At startup, Prime Agent gives the model each visible skill's name, type, description, and location. The full `SKILL.md` stays out of context until the model reads it from a rust cell or you explicitly invoke `/skill:name`.
 
 ```markdown
 <!-- ~/.prime/agent/skills/my-skill/SKILL.md -->
@@ -307,7 +307,7 @@ description: Use this skill when the user asks about X.
 2. Then that
 ```
 
-Skills can also be Python-backed. A Python skill is a normal skill directory with `SKILL.md` plus a Python package at `src/<import_name>/`. Prime Agent installs it into the persistent IPython kernel and exposes it by import name, so the model can call it directly, inspect it with `help()`, or use any console scripts the skill declares.
+Skills can also be Rust crates. A Rust skill is a normal skill directory with `SKILL.md` plus `Cargo.toml` and `src/lib.rs`. Prime Agent mounts it into the cell workspace and exposes it as `agent_lib::skills::<crate>`, so the model calls documented typed functions (conventionally `run(...)`) directly from cells.
 
 Place in `~/.prime/agent/skills/`, `~/.agents/skills/`, `.prime/agent/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [Prime Agent package](#prime-agent-packages) to share with others. See [docs/skills.md](docs/skills.md).
 
@@ -315,15 +315,14 @@ Prime Agent ships with a built-in `websearch` skill (Google search via the [Serp
 
 ### MCP Integrations
 
-Connect external services (Linear, Notion, …) over the [Model Context Protocol](https://modelcontextprotocol.io). Consistent with the single-tool design, MCP is **not** exposed as new agent tools — each integration is a Python skill package the model imports and calls from the kernel:
+Connect external services (Linear, Notion, …) over the [Model Context Protocol](https://modelcontextprotocol.io). Consistent with the host-mediated I/O design, MCP is **not** exposed as new agent tools — the host owns the connections, and cells reach them through typed requests:
 
-```python
-import linear
-issues = await linear.list_issues(team="Engineering")   # tools auto-discovered from the server
-help(linear.list_issues)                                 # description + argument schema
+```rust
+let tools = rlm::mcp::list_tools("linear")?;                                   // discovered from the server
+let issues = rlm::mcp::call_tool("linear", "list_issues", json!({"team": "Engineering"}))?;
 ```
 
-Built-in integrations for Linear and Notion ship disabled. **Logging in enables them**: open `/login`, switch to **MCP Connections**, pick the integration, and complete OAuth in the browser. The integration's skill then becomes visible and is auto-imported into the kernel. `/mcp` opens the same tab, while its subcommands support direct management:
+Built-in integrations for Linear and Notion ship disabled. **Logging in enables them**: open `/login`, switch to **MCP Connections**, pick the integration, and complete OAuth in the browser. The connected server then becomes visible to the model in its system prompt. `/mcp` opens the same tab, while its subcommands support direct management:
 
 ```
 /mcp                 list integrations and connection status
@@ -331,9 +330,9 @@ Built-in integrations for Linear and Notion ship disabled. **Logging in enables 
 /mcp logout <name>   disconnect
 ```
 
-Credentials are stored once in `~/.prime/agent/auth.json` (under `mcp:<name>`); the kernel reads them directly and the host refreshes expired tokens. Enablement is derived from whether valid credentials exist, so there is no separate on/off switch.
+Credentials are stored once in `~/.prime/agent/auth.json` (under `mcp:<name>`); the host injects the bearer token and refreshes expired tokens — credentials never enter the sandbox. Enablement is derived from whether valid credentials exist, so there is no separate on/off switch.
 
-**Add your own server.** Declare it under `mcpServers` in settings, then ship a tiny Python skill package that subclasses `McpIntegration`:
+**Add your own server.** Declare it under `mcpServers` in settings:
 
 ```jsonc
 // ~/.prime/agent/settings.json
@@ -344,21 +343,7 @@ Credentials are stored once in `~/.prime/agent/auth.json` (under `mcp:<name>`); 
 }
 ```
 
-```python
-# ~/.prime/agent/skills/acme/src/acme/__init__.py
-from rlm import McpIntegration
-
-class Acme(McpIntegration):
-    server = "acme"
-    url = "https://mcp.acme.com/mcp"
-
-acme = Acme()
-
-def __getattr__(name):     # so `import acme; await acme.<tool>(...)` works
-    return getattr(acme, name)
-```
-
-The base class connects with the official `mcp` SDK, injects the bearer token from `auth.json`, and binds the server's tools as async methods. Use `await acme.call_tool("name", {...})` for tools whose names aren't valid Python identifiers, or a static `bearerTokenEnvVar` instead of OAuth.
+The host connects with the official `mcp` SDK over streamable HTTP. Use `"headers"` for static header auth or `"bearerTokenEnvVar"` to read a token from the environment instead of OAuth; stdio servers are not supported.
 
 See [docs/mcp-integrations.md](docs/mcp-integrations.md) for the full authoring guide (package layout, auth options, the `McpIntegration` API, and caveats).
 
@@ -578,7 +563,7 @@ Use `prime-agent session export <file> [output]` to export a saved session to HT
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools by default but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools by default |
 
-Available built-in tools: `ipython`
+Available built-in tools: `rust`, `bash`
 
 ### Resource Options
 
@@ -657,8 +642,8 @@ prime-agent --model sonnet:high "Solve this complex problem"
 # Limit model cycling
 prime-agent --models "claude-*,gpt-4o"
 
-# Restrict to the built-in IPython tool
-prime-agent --tools ipython -p "Review the code"
+# Restrict to the built-in rust cell tool
+prime-agent --tools rust -p "Review the code"
 
 # High thinking level
 prime-agent --thinking high "Solve this complex problem"
@@ -679,7 +664,11 @@ prime-agent --thinking high "Solve this complex problem"
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
 | `PRIME_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
 | `PRIME_AGENT_TRACES_BASE_URL` | Override the Prime Agent trace upload API base URL |
-| `PRIME_AGENT_KERNEL_PYTHON` | Use an existing Python environment with `ipykernel` instead of auto-bootstrapping `~/.prime/agent/kernel-venv` |
+| `WASMEDGE_AGENT_CARGO` | Path to the `cargo` binary (default: PATH, then `~/.cargo/bin/cargo`) |
+| `WASMEDGE_AGENT_WASMEDGE` | Path to the `wasmedge` binary (default: PATH, then `~/.wasmedge/bin/wasmedge`) |
+| `WASMEDGE_AGENT_TEMPLATE_DIR` | Override the cell workspace template location |
+| `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` | Bound parallel cell compiles across sessions in one process |
+| `WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL` | `1` makes postinstall vendor and prebuild the workspace template |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 The remaining `PI_*` variables in this table are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.prime/agent` configuration path.
