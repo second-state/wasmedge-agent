@@ -21,8 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..");
 const TASKS_DIR = join(HERE, "tasks");
 const RESULTS_DIR = join(HERE, "results");
-const PRIME_AGENT_SH =
-	process.env.BENCH_PRIME_AGENT ?? "/Users/hydai/workspace/ss/prime-agent/prime-agent.sh";
+const PRIME_AGENT_SH = process.env.BENCH_PRIME_AGENT ?? "prime-agent";
 const EXTENSION_DIR = join(REPO, "poc", "extension");
 const SHARED_KERNEL_VENV = join(homedir(), ".wasmedge-agent", "bench", "kernel-venv");
 const MODELS_JSON = join(homedir(), ".prime", "agent", "models.json");

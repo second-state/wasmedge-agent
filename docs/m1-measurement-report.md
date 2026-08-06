@@ -7,7 +7,7 @@ B 組（rust/WasmEdge）pass rate **100%（73/73）**，高於 baseline（A 組 
 ## 1. 設定
 
 - 任務：12 項 × 5 類別（DESIGN 附錄 C；fixture 決定性、check 離線）
-- 矩陣：12 任務 × {A: ipython baseline, B: rust extension} × 3 reps × {claude-sonnet-4-6, claude-opus-5}（gateway gateway）
+- 矩陣：12 任務 × {A: ipython baseline, B: rust extension} × 3 reps × {claude-sonnet-4-6, claude-opus-5}（同一 Anthropic 相容 gateway）
 - B 組 D17 sub-A/B：r1/r3 = example、r2 = noexample（2:1，見 §5 註記）
 - 有效 runs：**146**（wave-1 60 + wave-2 84 + 管線 smoke 2；04 任務 12 個因 driver `--resume` bug 作廢重跑，不計入）
 - 量測中修復的 harness 問題（均為 driver 而非受測系統）：headless `--resume` 需明確 session 路徑；runId slug 消毒；analyze 遞迴掃描
@@ -58,7 +58,7 @@ REPORT §2.6 的最大未知數（風險 1）是「模型以 cell=program 模式
 
 ## 5. 已知侷限
 
-1. Gateway 串流不回報 input tokens（兩組同偏差，對比有效；token 閘用 output）。cost 欄位同樣缺——本輪成本以牆鐘與 tokOut 估算（wave-1 ~75 分、wave-2 ~85 分、合計 ~93K output tokens 級）。
+1. 所用 gateway 串流不回報 input tokens（兩組同偏差，對比有效；token 閘用 output）。cost 欄位同樣缺——本輪成本以牆鐘與 tokOut 估算（wave-1 ~75 分、wave-2 ~85 分、合計 ~93K output tokens 級）。
 2. noexample 樣本 12/條件（split 2:1）；A 組混入 2 個 smoke run（同設定，無偏差方向）。
 3. 單機（Apple Silicon）、單 gateway；開源權重模型組（D21 第三家）未跑——列 Phase 1 前置或並行補測。
 4. 任務為合成 fixture（中小型）；真實中大型 repo 的表現由 Phase 1 dogfood 檢驗。

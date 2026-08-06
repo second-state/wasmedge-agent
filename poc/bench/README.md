@@ -51,8 +51,8 @@ node poc/bench/run.ts --groups A,B --reps 3 --variant split \
 node poc/bench/analyze.ts
 ```
 
-Requirements: `~/.prime/agent/models.json` configured (gateway gateway),
-`TOKEN_STATION_TOKEN` in env, prime-agent runnable from source
+Requirements: `~/.prime/agent/models.json` configured with your OpenAI/Anthropic-compatible
+provider (the API key env var it references must be set), prime-agent runnable from source
 (`BENCH_PRIME_AGENT` overrides the path), and for group B the PoC extension
 prerequisites (see `../README.md`). Group A bootstraps a shared kernel venv on
 first run (`~/.wasmedge-agent/bench/kernel-venv`, one-time).
@@ -69,7 +69,7 @@ p50/p95, error tool results. Aggregates are medians per (model, group[/variant])
 with the D20 gate evaluated per model: B pass-rate ≥ A − 15pp and B median
 output tokens ≤ 2.0 × A.
 
-Known caveat: the gateway gateway does not report input tokens in streaming
+Known caveat: some gateways do not report input tokens in streaming
 responses, so `tokensIn` reads 0 through this provider. Both groups measure
 through the same path, so the A/B comparison is unaffected; the D20 token gate
 uses output tokens.
