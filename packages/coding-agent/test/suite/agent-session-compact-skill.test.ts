@@ -6,7 +6,7 @@ import { createHarness, type Harness } from "./harness.js";
 type SessionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 	_shouldStopAfterTurn: (context: ShouldStopAfterTurnContext) => Promise<boolean>;
-	_createKernelHostHandlers: () => Record<string, unknown>;
+	_createHostRequestHandlers: () => Record<string, unknown>;
 };
 
 function createAssistant(
@@ -288,12 +288,12 @@ describe("AgentSession compact skill host requests", () => {
 			"the compact skill is disabled in this session",
 		);
 		const internals = harness.session as unknown as SessionInternals;
-		expect(Object.keys(internals._createKernelHostHandlers())).not.toContain("compact.run");
+		expect(Object.keys(internals._createHostRequestHandlers())).not.toContain("compact.run");
 
 		const enabledHarness = await createHarness();
 		harnesses.push(enabledHarness);
 		const enabledInternals = enabledHarness.session as unknown as SessionInternals;
-		expect(Object.keys(enabledInternals._createKernelHostHandlers())).toEqual(
+		expect(Object.keys(enabledInternals._createHostRequestHandlers())).toEqual(
 			expect.arrayContaining(["compact.run", "compact.status"]),
 		);
 	});

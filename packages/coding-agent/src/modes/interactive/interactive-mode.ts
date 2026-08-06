@@ -95,7 +95,6 @@ import type {
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
 import { emptyGoalState, formatGoalUsage, GOAL_CONTEXT_PREVIEW_LABEL, type GoalState } from "../../core/goals.js";
-import type { KernelSentAgentMessage } from "../../core/host-bridge/types.js";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import {
 	bashOutputToText,
@@ -922,8 +921,6 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
-	private ipythonToolComponents = new Map<string, ToolExecutionComponent>();
-	private lateIpythonSentAgentMessages = new Map<string, KernelSentAgentMessage[]>();
 	private pendingToolCreations = new Set<string>();
 	private startedToolCalls = new Set<string>();
 	private pendingToolGeneration = 0;
@@ -2815,8 +2812,6 @@ export class InteractiveMode {
 		this.resetPendingToolState();
 		this.agentRunFileChanges.clear();
 		this.renderRecap();
-		this.ipythonToolComponents.clear();
-		this.lateIpythonSentAgentMessages.clear();
 		this.resetSubagentSummary();
 		this.setGoalAnnouncementBaseline(this.getGoalState());
 		this.syncGoalTray(this.getGoalState());
@@ -2911,16 +2906,6 @@ export class InteractiveMode {
 		);
 	}
 
-	private registerIpythonToolComponent(toolName: string, toolCallId: string, component: ToolExecutionComponent): void {
-		if (toolName !== "ipython") {
-			return;
-		}
-		this.ipythonToolComponents.set(toolCallId, component);
-		for (const lateMessage of this.lateIpythonSentAgentMessages.get(toolCallId) ?? []) {
-			component.appendSentAgentMessage(lateMessage);
-		}
-	}
-
 	private async getOrCreatePendingToolComponent(
 		toolCall: PendingToolCallRenderInput,
 	): Promise<ToolExecutionComponent | undefined> {
@@ -2966,7 +2951,6 @@ export class InteractiveMode {
 			selectLatestToolExpandHint(this.chatContainer.children, component);
 			this.chatContainer.addChild(component);
 			this.pendingTools.set(latestToolCall.id, component);
-			this.registerIpythonToolComponent(latestToolCall.name, latestToolCall.id, component);
 			return component;
 		} finally {
 			this.pendingToolCreations.delete(toolCall.id);
@@ -5492,17 +5476,6 @@ export class InteractiveMode {
 				break;
 			}
 
-			case "ipython_sent_agent_message": {
-				const messages = this.lateIpythonSentAgentMessages.get(event.toolCallId) ?? [];
-				if (!messages.some((message) => message.id === event.message.id)) {
-					messages.push(event.message);
-					this.lateIpythonSentAgentMessages.set(event.toolCallId, messages);
-				}
-				this.ipythonToolComponents.get(event.toolCallId)?.appendSentAgentMessage(event.message);
-				this.ui.requestRender();
-				break;
-			}
-
 			case "turn_end":
 				mergeTurnFileChanges(this.agentRunFileChanges, event.message, event.toolResults, this.getCurrentCwd());
 				break;
@@ -6351,8 +6324,6 @@ export class InteractiveMode {
 		this.resetPendingToolState();
 		const transcriptMessages = this.orderMessagesForTranscript(sessionContext.messages);
 		const messagesToRender = options.limitTranscript ? initialRenderMessages(transcriptMessages) : transcriptMessages;
-		this.ipythonToolComponents.clear();
-		this.lateIpythonSentAgentMessages.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		const toolNames: string[] = [];
 		for (const message of messagesToRender) {
@@ -6420,7 +6391,6 @@ export class InteractiveMode {
 						component.setExpanded(this.toolOutputExpanded);
 						selectLatestToolExpandHint(this.chatContainer.children, component);
 						this.chatContainer.addChild(component);
-						this.registerIpythonToolComponent(content.name, content.id, component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;

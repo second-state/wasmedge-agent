@@ -862,7 +862,7 @@ export interface RefinementPlan {
  * Produce a refinement proposal (the LLM pass, or a rollback proposal) without
  * mutating any harness state. Separated from {@link applyRefinementProposal} so
  * callers can re-read the harness file immediately before applying — the LLM call
- * here can take many seconds, during which the kernel or another session may write
+ * here can take many seconds, during which a cell or another session may write
  * the shared `harness_state.json`.
  */
 export async function planRefinement(

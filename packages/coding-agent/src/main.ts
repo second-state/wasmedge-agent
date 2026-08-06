@@ -1265,9 +1265,9 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager,
 			sessionStartEvent,
 			...resolvedSessionOptions,
-			// Main agents boot their kernel in the background at session creation;
-			// subagent sessions (rlmDepth > 0) keep the lazy first-call start.
-			prewarmIpythonKernel: true,
+			// Main agents warm their rust workspace in the background at session
+			// creation; subagent sessions (rlmDepth > 0) keep the lazy first-call start.
+			prewarmRustWorkspace: true,
 			// Read serializedRefine from the merged runtime config (passed
 			// from the JSON/print client through AgentSessionRuntimeConfig)
 			// so it survives the daemon worker's appMode="daemon" context.

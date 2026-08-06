@@ -370,8 +370,8 @@ describe("skills", () => {
 			const introText = result.substring(0, xmlStart);
 
 			expect(introText).toContain("The following skills provide specialized instructions");
-			expect(introText).toContain("Use ipython to inspect a skill's file");
-			expect(introText).toContain("Skills with a python_import are prepared");
+			expect(introText).toContain("Read a skill's file in a rust cell");
+			expect(introText).not.toContain("ipython");
 		});
 
 		it("should escape XML special characters", () => {

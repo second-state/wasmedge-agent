@@ -11,7 +11,7 @@ export interface DeleteSessionFileOptions {
 
 /**
  * Permanently remove a session's artifact directory (durable schedule state,
- * kernel snapshot, RLM scratch files, …), which lives at
+ * rust workspace, RLM scratch files, …), which lives at
  * `<dirname(sessionDir)>/session-artifacts/<id>`.
  * Only invoked on delete, never on deactivation.
  */
@@ -59,7 +59,7 @@ async function removeSessionFile(sessionPath: string): Promise<DeleteSessionFile
  * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
  * Also permanently removes the session's artifact directory, but only
  * once the session file itself is gone — otherwise a failed delete would orphan a
- * session whose kernel snapshot has already been destroyed.
+ * session whose workspace has already been destroyed.
  */
 export async function deleteSessionFile(
 	sessionPath: string,

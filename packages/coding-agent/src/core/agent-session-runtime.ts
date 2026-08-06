@@ -60,7 +60,7 @@ export interface AgentSessionRuntimeMetadata {
 	/** Runtime restored from an already-persisted completed registry entry. */
 	rehydratedCompleted?: boolean;
 	prompt?: string;
-	/** Source of the IPython cell that spawned this subagent, for display. */
+	/** Source of the rust cell that spawned this subagent, for display. */
 	spawnCode?: string;
 	sessionDir?: string;
 }
@@ -223,7 +223,7 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 		});
 		await flushAgentTraceUpload(this.session.sessionManager).catch(() => undefined);
 		this.beforeSessionInvalidate?.();
-		// Await the kernel's final snapshot flush before invalidating the session.
+		// Drain the session's async teardown before invalidating it.
 		await this.session.disposeAsync();
 		await this.disposeHostedSubagentRuntimes();
 	}
@@ -724,7 +724,7 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			disposeError ??= error;
 		}
 		try {
-			// Await the kernel's final snapshot flush before tearing the session down.
+			// Drain the session's async teardown before tearing it down.
 			await this.session.disposeAsync();
 		} catch (error) {
 			disposeError ??= error;

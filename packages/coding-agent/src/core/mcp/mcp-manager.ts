@@ -1,5 +1,6 @@
-// Host side of MCP integrations. The protocol itself runs Python-side in the kernel; the host
-// only registers OAuth providers, gates integration skills by auth, and serves mcp.* host-requests.
+// Host side of MCP integrations. The host registers OAuth providers, gates
+// integration skills by auth, and serves mcp.* host-requests; cells reach the
+// protocol through rlm::mcp (host-side client handlers land with WP6).
 
 import {
 	BUILTIN_MCP_CATALOG,
@@ -152,20 +153,20 @@ export class McpManager {
 		return overrides;
 	}
 
-	/** Host-request handlers exposed to the kernel. */
+	/** Host-request handlers exposed to cells. */
 	hostHandlers(): Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> {
 		const handlers: Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> = {
 			"mcp.refresh": async (payload) => {
 				const server = String(payload.server ?? "");
 				if (!server) throw new Error("mcp.refresh requires a server");
-				// getApiKey refreshes + rewrites auth.json under lock; Python re-reads.
-				// Surface failure (throw) instead of a false success so the kernel can
+				// getApiKey refreshes + rewrites auth.json under lock; the guest re-reads.
+				// Surface failure (throw) instead of a false success so the cell can
 				// report a refresh error rather than a misleading "not enabled".
 				const key = await this.authStorage.getApiKey(this.providerId(server));
 				if (!key) throw new Error(`Could not refresh credentials for ${server}`);
 				return {};
 			},
-			// Resolved config so the kernel skill connects to the same URL the host
+			// Resolved config so the guest connects to the same URL the host
 			// registered/authenticated (honors a user's mcpServers `url` override).
 			"mcp.config": async (payload) => {
 				const server = String(payload.server ?? "");
@@ -179,8 +180,8 @@ export class McpManager {
 				return config;
 			},
 		};
-		// Only expose begin_login when an interactive login is actually wired, so the
-		// kernel doesn't get a handler whose only behavior is to throw.
+		// Only expose begin_login when an interactive login is actually wired, so
+		// cells don't get a handler whose only behavior is to throw.
 		const beginLogin = this.beginLogin;
 		if (beginLogin) {
 			handlers["mcp.begin_login"] = async (payload) => {

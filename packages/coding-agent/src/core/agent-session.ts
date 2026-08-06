@@ -169,7 +169,7 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
-import type { HostRequestHandlers, KernelSentAgentMessage } from "./host-bridge/types.js";
+import type { HostRequestHandlers } from "./host-bridge/types.js";
 import type { McpManager } from "./mcp/mcp-manager.js";
 import {
 	type BashExecutionMessage,
@@ -185,6 +185,7 @@ import {
 	HEARTBEAT_PROMPT_CUSTOM_TYPE,
 	HEARTBEAT_PROMPT_PREVIEW_LABEL,
 	isSessionSlashCommandMessage,
+	RUST_STATE_RESTORED_CUSTOM_TYPE,
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
@@ -313,11 +314,6 @@ export type CompactionReason = "manual" | "threshold" | "overflow" | "requested"
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
-	| {
-			type: "ipython_sent_agent_message";
-			toolCallId: string;
-			message: KernelSentAgentMessage;
-	  }
 	| { type: "session_action_update"; actions: SessionActionSnapshot }
 	| {
 			type: "compaction_start";
@@ -408,7 +404,7 @@ export interface AgentSessionConfig {
 	settingsManager: SettingsManager;
 	serviceTierPreference?: ServiceTier;
 	cwd: string;
-	/** Config dir backing credentials (auth.json); exported to the kernel for skills. */
+	/** Config dir backing credentials (auth.json) and host-side skill lookups. */
 	agentDir?: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
@@ -418,13 +414,13 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
-	/** Initial active built-in tool names. Default: [ipython] */
+	/** Initial active built-in tool names. Default: [rust, bash] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];
 	/**
 	 * Whether the built-in long-running goals feature is available: the bundled
-	 * goal skill in the IPython kernel, its goal.* host handlers, and /goal.
+	 * goal skill, its goal.* host handlers, and /goal.
 	 * Default: true.
 	 */
 	includeGoals?: boolean;
@@ -438,13 +434,13 @@ export interface AgentSessionConfig {
 	 */
 	includeCompactSkill?: boolean;
 	/**
-	 * Optional host-side controller for the bundled rlm-heartbeat Python skill.
+	 * Optional host-side controller for the bundled rlm-heartbeat skill.
 	 * When omitted, rlm_heartbeat.* host requests are unavailable.
 	 */
 	rlmHeartbeatController?: AgentRlmHeartbeatController;
 	/**
 	 * Optional MCP integration manager. When present, its mcp.* host requests
-	 * (refresh, begin_login) are exposed to the kernel.
+	 * (refresh, begin_login) are exposed to cells over the bridge.
 	 */
 	mcpManager?: McpManager;
 	/**
@@ -462,7 +458,7 @@ export interface AgentSessionConfig {
 	rlmDepth?: number;
 	/** Maximum RLM recursion depth. Defaults to RLM_MAX_DEPTH or 1. */
 	rlmMaxDepth?: number;
-	/** Directory exposed to the kernel as RLM_SESSION_DIR. */
+	/** Host-side scratch directory for RLM child session dirs. */
 	rlmSessionDir?: string;
 	/** Node id for this session when it is itself an RLM child. */
 	rlmParentNodeId?: string;
@@ -473,12 +469,13 @@ export interface AgentSessionConfig {
 	/** Host-side autonomous continuation policy. */
 	autonomous?: AgentAutonomousConfig;
 	/**
-	 * Boot the IPython kernel in the background as soon as the session is created,
-	 * so the first ipython tool call doesn't pay the kernel cold start.
+	 * Ensure the rust workspace in the background as soon as the session is
+	 * created (toolchain checks + template clone), so the first rust cell
+	 * doesn't pay the cold start.
 	 *
-	 * Only applies to main agents (rlmDepth 0); subagent kernels stay lazy. Default: false.
+	 * Only applies to main agents (rlmDepth 0); subagent workspaces stay lazy. Default: false.
 	 */
-	prewarmIpythonKernel?: boolean;
+	prewarmRustWorkspace?: boolean;
 	/** Test/extension hook for automatic refine review decisions. Defaults to the model-backed review gate. */
 	autoRefineReviewer?: AutoRefineReviewer;
 	/**
@@ -791,67 +788,6 @@ function visibleSessionActionProjection(actions: readonly QueuedSessionAction[])
 	);
 }
 
-const IPYTHON_SENT_AGENT_MESSAGE_CUSTOM_ENTRY = "ipython_sent_agent_message";
-
-interface PersistedIpythonSentAgentMessage {
-	toolCallId: string;
-	message: KernelSentAgentMessage;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parsePersistedIpythonSentAgentMessage(value: unknown): PersistedIpythonSentAgentMessage | undefined {
-	if (!isObjectRecord(value) || typeof value.toolCallId !== "string" || !isObjectRecord(value.message)) {
-		return undefined;
-	}
-	const { id, message, deliveryStatus, target } = value.message;
-	if (
-		typeof id !== "string" ||
-		typeof message !== "string" ||
-		(deliveryStatus !== "delivered" && deliveryStatus !== "queued") ||
-		!isObjectRecord(target) ||
-		typeof target.activeSessionId !== "string" ||
-		typeof target.sessionId !== "string"
-	) {
-		return undefined;
-	}
-	return {
-		toolCallId: value.toolCallId,
-		message: {
-			id,
-			message,
-			deliveryStatus,
-			target: {
-				activeSessionId: target.activeSessionId,
-				sessionId: target.sessionId,
-				...(typeof target.sessionName === "string" ? { sessionName: target.sessionName } : {}),
-			},
-		},
-	};
-}
-
-function appendSentAgentMessageToToolResult(
-	message: AgentMessage,
-	toolCallId: string,
-	sentMessage: KernelSentAgentMessage,
-): boolean {
-	if (message.role !== "toolResult" || message.toolName !== "rust" || message.toolCallId !== toolCallId) {
-		return false;
-	}
-	const details = isObjectRecord(message.details) ? message.details : {};
-	const current = Array.isArray(details.sentAgentMessages) ? details.sentAgentMessages : [];
-	if (current.some((entry) => isObjectRecord(entry) && entry.id === sentMessage.id)) {
-		return true;
-	}
-	message.details = {
-		...details,
-		sentAgentMessages: [...current, sentMessage],
-	};
-	return true;
-}
-
 function injectedMessagePreviewLabel(message: CustomMessage): string | undefined {
 	switch (message.customType) {
 		case HEARTBEAT_PROMPT_CUSTOM_TYPE:
@@ -960,7 +896,6 @@ interface RlmSubagentModelSelection {
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** Cap on the post-compaction kernel namespace probe so a wedged kernel can't stall recovery. */
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
 
 function noopRlmChildAbort(): void {}
@@ -1147,7 +1082,6 @@ export class AgentSession {
 	private _retryResolve: (() => void) | undefined = undefined;
 	private _retryAuthFailureSources: AuthSourceToken[] = [];
 	private _agentMessageOutcomes = new Map<string, AgentMessageOutcome>();
-	private _lateIpythonSentAgentMessages = new Map<string, KernelSentAgentMessage[]>();
 	/** Outcome disclosures whose session-file append failed; retained for context rebuilds. */
 	private readonly _unpersistedCompactionOutcomes: CustomMessage[] = [];
 
@@ -1197,7 +1131,7 @@ export class AgentSession {
 	private _rustWorkspaceDir?: string;
 	/** True once the runtime has been built once; later builds are in-process rebuilds (/reload). */
 	private _runtimeBuilt = false;
-	private readonly _prewarmIpythonKernel: boolean;
+	private readonly _prewarmRustWorkspace: boolean;
 	private _rlmDepth: number;
 	private readonly _configuredRlmMaxDepth: number | undefined;
 	private _rlmMaxDepth: number;
@@ -1312,7 +1246,7 @@ export class AgentSession {
 		const resolvedRlmMaxDepth = this._resolveRlmMaxDepth();
 		this._rlmMaxDepth = resolvedRlmMaxDepth.maxDepth;
 		this._rlmMaxDepthSource = resolvedRlmMaxDepth.source;
-		this._prewarmIpythonKernel = (config.prewarmIpythonKernel ?? false) && this._rlmDepth === 0;
+		this._prewarmRustWorkspace = (config.prewarmRustWorkspace ?? false) && this._rlmDepth === 0;
 		this._autoRefineReviewer = config.autoRefineReviewer;
 		this._serializedRefine = config.serializedRefine ?? false;
 		this._rlmSessionDir = config.rlmSessionDir;
@@ -1340,7 +1274,6 @@ export class AgentSession {
 			// admission is unavailable mid-construction, so ride the next turn.
 			this._pendingNextTurnMessages.push(createGoalContextMessage(this._goalState, "continuation"));
 		}
-		this._restoreLateIpythonSentAgentMessages();
 		if (this._goalState.status === "active") {
 			this._goalAccountingStartedAt = Date.now();
 		}
@@ -1497,43 +1430,6 @@ export class AgentSession {
 		if (JSON.stringify(actions) === JSON.stringify(this._lastSessionActionSnapshot)) return;
 		this._lastSessionActionSnapshot = actions;
 		this._emit({ type: "session_action_update", actions });
-	}
-
-	private _restoreLateIpythonSentAgentMessages(): void {
-		this._lateIpythonSentAgentMessages.clear();
-		for (const entry of this.sessionManager.getBranch()) {
-			if (entry.type !== "custom" || entry.customType !== IPYTHON_SENT_AGENT_MESSAGE_CUSTOM_ENTRY) {
-				continue;
-			}
-			const persisted = parsePersistedIpythonSentAgentMessage(entry.data);
-			if (persisted) {
-				this._rememberLateIpythonSentAgentMessage(persisted.toolCallId, persisted.message);
-			}
-		}
-	}
-
-	private _rememberLateIpythonSentAgentMessage(toolCallId: string, message: KernelSentAgentMessage): boolean {
-		const messages = this._lateIpythonSentAgentMessages.get(toolCallId) ?? [];
-		const isNew = !messages.some((entry) => entry.id === message.id);
-		if (isNew) {
-			messages.push(message);
-			this._lateIpythonSentAgentMessages.set(toolCallId, messages);
-		}
-		for (let index = this.agent.state.messages.length - 1; index >= 0; index -= 1) {
-			if (appendSentAgentMessageToToolResult(this.agent.state.messages[index], toolCallId, message)) {
-				break;
-			}
-		}
-		return isNew;
-	}
-
-	private _applyLateIpythonSentAgentMessages(message: AgentMessage): void {
-		if (message.role !== "toolResult" || message.toolName !== "rust") {
-			return;
-		}
-		for (const sentMessage of this._lateIpythonSentAgentMessages.get(message.toolCallId) ?? []) {
-			appendSentAgentMessageToToolResult(message, message.toolCallId, sentMessage);
-		}
 	}
 
 	private _emitGoalUpdate(): void {
@@ -2015,9 +1911,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Goals are pursued through the IPython goal skill, so the only tool the
-	 * model needs is ipython. Force-activate it (including into a live
-	 * continuation context) so the model can always reach `goal.complete()`.
+	 * Goals are pursued through rlm::goal in rust cells, so the only tool the
+	 * model needs is rust. Force-activate it (including into a live
+	 * continuation context) so the model can always reach rlm::goal::complete().
 	 */
 	private _ensureGoalRuntimeActive(context?: AgentContext): void {
 		if (!this._includeGoals) {
@@ -2101,8 +1997,8 @@ export class AgentSession {
 			return false;
 		}
 		// Usage is attributed at the assistant message's message_end, which fires
-		// before that turn's ipython cell runs. goal.complete() only arrives later
-		// over the kernel host bridge, so the completing turn is always accounted
+		// before that turn's rust cell runs. goal.complete only arrives later
+		// over the host bridge, so the completing turn is always accounted
 		// while the goal is still active. Only count turns spent pursuing the goal;
 		// post-completion turns (e.g. a closing summary) must not be attributed.
 		if (this._goalState.status !== "active") {
@@ -2797,9 +2693,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a goal.* request from the IPython kernel host bridge (the bundled
-	 * goal skill). All goal state stays host-side; the kernel only sees the
-	 * serialized snake_case response.
+	 * Handle a goal.* request from the rust-cell host bridge (rlm::goal).
+	 * All goal state stays host-side; the cell only sees the serialized
+	 * snake_case response.
 	 */
 	handleGoalHostRequest(type: string, payload: Record<string, unknown> = {}): GoalHostResponse {
 		if (!this._includeGoals) {
@@ -2825,7 +2721,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a compact.* request from the kernel host bridge. Compaction would
+	 * Handle a compact.* request from the rust-cell host bridge. Compaction would
 	 * abort the run executing the requesting cell, so compact.run only schedules
 	 * it; _checkCompaction consumes the request at the turn boundary.
 	 */
@@ -2878,7 +2774,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a refine.* request from the kernel host bridge. Like compact,
+	 * Handle a refine.* request from the rust-cell host bridge. Like compact,
 	 * refinement waits for the current turn to become idle before applying
 	 * changes, so refine.run only schedules it; _consumePendingRequestedRefine
 	 * fires it at the turn boundary. This prevents a deadlock that would occur
@@ -3132,7 +3028,7 @@ export class AgentSession {
 		}
 		const goal = this._goalWithAccountedWallClock();
 		// A turn can cross the budget and complete the goal at once: accounting
-		// runs at message_end, before the completing ipython cell executes, so a
+		// runs at message_end, before the completing rust cell executes, so a
 		// budget-limit context may already be steered. It is stale now — drop it.
 		this._clearQueuedGoalContexts();
 		this._setGoalState({
@@ -3407,9 +3303,6 @@ export class AgentSession {
 
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
 		let clearedDispatchEnded = false;
-		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "toolResult") {
-			this._applyLateIpythonSentAgentMessages(event.message);
-		}
 		if (event.type === "message_start" || event.type === "message_end") {
 			const cleared = this._capturingCancelledAction(event.message);
 			if (cleared?.payload.kind === "turn" && cleared.payload.captureRunMessages) {
@@ -3749,16 +3642,16 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	/**
-	 * Async teardown for graceful quit/switch: await the IPython kernel's dispose
-	 * (which flushes a final namespace snapshot) before the synchronous dispose, so
-	 * the latest state reaches disk instead of racing process exit.
+	 * Async teardown for graceful quit/switch: drain refinement and child
+	 * sessions before the synchronous dispose, so their state reaches disk
+	 * instead of racing process exit.
 	 */
 	async disposeAsync(): Promise<void> {
 		if (this._disposed) {
 			return;
 		}
 		// Concurrent callers await the same in-flight teardown so none resolves before
-		// the kernel snapshot flush finishes.
+		// the drain finishes.
 		if (this._disposeAsyncPromise) {
 			return this._disposeAsyncPromise;
 		}
@@ -3908,7 +3801,7 @@ export class AgentSession {
 	}
 
 	private async _disposeAsyncOnce(): Promise<void> {
-		// Flush kernels/traces for both still-running and retained children; the sync
+		// Flush child sessions/traces for both still-running and retained children; the sync
 		// dispose() below only tears them down synchronously.
 		for (const run of this._activeRlmChildRuns.values()) {
 			if (run.session) {
@@ -4106,9 +3999,6 @@ export class AgentSession {
 
 	buildSessionContext(): SessionContext {
 		const context = this.sessionManager.buildSessionContext();
-		for (const message of context.messages) {
-			this._applyLateIpythonSentAgentMessages(message);
-		}
 		this._mergeUnpersistedCompactionOutcomes(context.messages);
 		return context;
 	}
@@ -6850,7 +6740,7 @@ export class AgentSession {
 
 	// Added to history (not a nextTurn message) so it also reaches the continue()-driven
 	// auto-compaction resume, which never injects nextTurn messages.
-	private async _notifyKernelStateAfterCompaction(): Promise<void> {
+	private async _notifyWorkspaceStateAfterCompaction(): Promise<void> {
 		const provisioner = this._rustCellProvisioner;
 		// No runtime means no persistent state to remind about.
 		if (!provisioner?.hasRunner) return;
@@ -6901,7 +6791,7 @@ export class AgentSession {
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{
-				customType: "rust_state_restored",
+				customType: RUST_STATE_RESTORED_CUSTOM_TYPE,
 				content: lines.join("\n"),
 				display: true,
 				details: { restored: true },
@@ -7091,7 +6981,6 @@ export class AgentSession {
 		const newEntries = this.sessionManager.getEntries();
 		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
 		this._mergeUnpersistedCompactionOutcomes(this.agent.state.messages);
-		this._restoreLateIpythonSentAgentMessages();
 
 		// Get the saved compaction entry for the extension event
 		const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -7104,7 +6993,7 @@ export class AgentSession {
 				fromExtension,
 			});
 		}
-		await this._notifyKernelStateAfterCompaction();
+		await this._notifyWorkspaceStateAfterCompaction();
 		await this._reapDeletedRlmSubagentRuntimesAfterCompaction();
 
 		return { summary, firstKeptEntryId, tokensBefore, details };
@@ -7763,7 +7652,7 @@ export class AgentSession {
 			if (!targetHarnessStateDir) {
 				throw new Error("Local harness refinement requires a persisted session; use global refinement instead.");
 			}
-			// Re-read the target state immediately before applying so concurrent kernel
+			// Re-read the target state immediately before applying so concurrent cell
 			// (`rlm.harness`) writes during the LLM pass are not clobbered.
 			const state = loadHarnessState(targetHarnessStateDir, targetScope);
 			const proposal = {
@@ -8517,7 +8406,7 @@ export class AgentSession {
 			this._rustCellProvisioner = new RustCellProvisioner({
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
-				hostHandlers: this._createKernelHostHandlers(),
+				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
@@ -8577,7 +8466,7 @@ export class AgentSession {
 
 		// Prewarm when configured so the first cell doesn't pay toolchain checks
 		// and the template clone.
-		if (this._prewarmIpythonKernel && this.getActiveToolNames().includes("rust")) {
+		if (this._prewarmRustWorkspace && this.getActiveToolNames().includes("rust")) {
 			this._rustCellProvisioner?.prewarm();
 		}
 
@@ -8586,7 +8475,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Skills exposed to the model (system prompt + kernel). The bundled goal
+	 * Skills exposed to the model (system prompt + cells). The bundled goal
 	 * and compact skills are withheld when disabled for this session.
 	 */
 	private _modelVisibleSkills(): Skill[] {
@@ -8613,7 +8502,7 @@ export class AgentSession {
 	}
 
 	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */
-	private _createKernelHostHandlers(): HostRequestHandlers {
+	private _createHostRequestHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
 				...(await this.runRlmChild(prompt, kwargs, cellSourceCode)),
@@ -8656,12 +8545,12 @@ export class AgentSession {
 				handlers[type] = async (payload) => this.handleRlmHeartbeatHostRequest(type, payload);
 			}
 		}
-		const visibleKernelSkillNames = new Set(
+		const visibleSkillNames = new Set(
 			this._modelVisibleSkills()
 				.filter((skill) => !skill.disableModelInvocation)
 				.map((skill) => skill.name),
 		);
-		if (this._agentMessageController && visibleKernelSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
+		if (this._agentMessageController && visibleSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
 			Object.assign(
 				handlers,
 				createAgentMessageHostHandlers({
@@ -8765,7 +8654,7 @@ export class AgentSession {
 		};
 	}
 
-	/** Kernel-era _addWebsearchKeyEnv, host-side: the key resolves fresh per
+	/** Host-side websearch key resolution: the key resolves fresh per
 	 * websearch.run call (so /login mid-session works) and never enters the
 	 * sandbox. Env var wins over the stored credential. */
 	private _resolveSerperApiKey(): string | undefined {
@@ -8781,7 +8670,7 @@ export class AgentSession {
 	}
 
 	// Undefined when there's no persistent artifact dir (e.g. the viewer client):
-	// don't mkdtemp here, since this runs on every kernel build but a viewer never
+	// don't mkdtemp here, since this runs on every runtime build but a viewer never
 	// does RLM work. The temp dir is created lazily in _createChildRlmSessionDir.
 	private _ensureRlmSessionDir(): string | undefined {
 		if (this._rlmSessionDir) {
@@ -10782,7 +10671,6 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this._mergeUnpersistedCompactionOutcomes(this.agent.state.messages);
-			this._restoreLateIpythonSentAgentMessages();
 			this._reloadGoalStateFromBranch();
 			this._reloadRlmMaxDepthFromBranch();
 			this._invalidateQueuedPromptPreparation();

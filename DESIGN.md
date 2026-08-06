@@ -536,6 +536,8 @@ Your workspace persisted through compaction. state keys: {keys}. agent_lib API: 
 </rust_state>
 ```
 
+**實作註記（WP5，2026-08-06）**：(1) late-message 機制（`ipython_sent_agent_message` 事件、持久化 entry 重播、TUI 收據補寫）全數刪除——收據於 cell 存活期間由 host 合成進 CellResult（§2.7 註記 3），無晚到路徑。(2) resume 通知 custom type 定名 `rust_state_restored`（WP1 起 AgentSession 已如此發送，本 WP 對齊 renderer 與常數）；compaction 摘要註記改述 rlm::state/blobs/agent_lib 存續。(3) 更名收尾：`Kernel*` 顯示型別→`Cell*`、`_createKernelHostHandlers`→`_createHostRequestHandlers`、`prewarmIpythonKernel`→`prewarmRustWorkspace`（實作自 WP1 即為 toolchain 檢查＋template clone 的 workspace ensure）。(4) goal 續跑/預算/改目標提示、daemon 與更新重啟提示、skills 前言等模型可見字串全面改 rust call form（`rlm::goal::complete()?` 等）。刻意保留：rust-cell/* 與 host-bridge 的世系註解、`includeIpythonExamples` 相容別名、`PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL` 環境變數名（D25 孵化期不動 user-facing env，WP8 一併處理）；`--tools` 對非內建名維持寬容（WP2 定調的 extension allowlist 契約）。
+
 ### 5.3 MCP
 
 `mcp-manager.ts` 沿用；呈現層從「動態生成 Python skill」改為 `rlm::mcp` 模組 + skills XML 列出可用 server（`mcp.list_tools`/`mcp.call_tool` host request 型別不變）。

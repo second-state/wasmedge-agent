@@ -139,7 +139,7 @@ export interface AgentSessionMessageReceipt {
 	target: AgentSessionMessageEndpoint;
 	from?: AgentSessionMessageSender;
 	message: string;
-	// Not named "status": the kernel host bridge envelope reserves that key.
+	// Not named "status": the host bridge envelope reserves that key.
 	deliveryStatus: AgentSessionMessageDeliveryStatus;
 	/** Present when deliveryStatus is "delivered": the message reached the target's context. */
 	deliveredAt?: string;

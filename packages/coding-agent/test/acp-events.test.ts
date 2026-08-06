@@ -69,7 +69,7 @@ describe("ACP session event mapping", () => {
 			result: {
 				output: "done",
 				details: {
-					// KernelAttachment carries base64 `data`, never a `bytes` field.
+					// CellAttachment carries base64 `data`, never a `bytes` field.
 					attachments: [{ mimeType: "image/png", path: "/tmp/plot.png", data: "aGVsbG8=" }],
 					diffs: [{ path: "a.ts" }],
 				},
@@ -212,24 +212,6 @@ describe("ACP session event mapping", () => {
 		} as AgentConnectionSessionEvent);
 		expect(failed[0]?._meta).toMatchObject({
 			[PRIME_AGENT_META_NAMESPACE]: { refinement: { status: "failed", error: "budget exhausted" } },
-		});
-	});
-
-	it("surfaces agent-to-agent messages sent from the kernel", () => {
-		const updates = acpUpdatesForSessionEvent({
-			type: "ipython_sent_agent_message",
-			toolCallId: "cell-9",
-			message: {
-				id: "agentmsg_1",
-				message: "done",
-				deliveryStatus: "queued",
-				target: { activeSessionId: "a1", sessionId: "s1", sessionName: "reviewer" },
-			},
-		} as AgentConnectionSessionEvent);
-		expect(updates[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: {
-				agentMessage: { toolCallId: "cell-9", target: "reviewer", deliveryStatus: "queued" },
-			},
 		});
 	});
 
