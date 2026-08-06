@@ -8,7 +8,7 @@ type SessionInternals = {
 	_serializedPlanInFlight?: Promise<unknown>;
 	_serializedExplicitRefineOptions?: { instructions?: string; global?: boolean };
 	_refineAbortController?: AbortController;
-	_createKernelHostHandlers: () => Record<string, unknown>;
+	_createHostRequestHandlers: () => Record<string, unknown>;
 	refine: (options: { instructions?: string; global?: boolean }) => Promise<unknown>;
 };
 
@@ -246,7 +246,7 @@ describe("AgentSession refine skill host requests", () => {
 		await harness.session.prompt("one");
 
 		const internals = harness.session as unknown as SessionInternals;
-		const handlerKeys = Object.keys(internals._createKernelHostHandlers());
+		const handlerKeys = Object.keys(internals._createHostRequestHandlers());
 		expect(handlerKeys).toEqual(expect.arrayContaining(["refine.run", "refine.status"]));
 	});
 
@@ -256,7 +256,7 @@ describe("AgentSession refine skill host requests", () => {
 		await harness.session.prompt("one");
 
 		const internals = harness.session as unknown as SessionInternals;
-		const handlerKeys = Object.keys(internals._createKernelHostHandlers());
+		const handlerKeys = Object.keys(internals._createHostRequestHandlers());
 		expect(handlerKeys).not.toContain("refine.run");
 		expect(handlerKeys).not.toContain("refine.status");
 	});
@@ -267,7 +267,7 @@ describe("AgentSession refine skill host requests", () => {
 		await harness.session.prompt("one");
 
 		const internals = harness.session as unknown as SessionInternals;
-		const handlerKeys = Object.keys(internals._createKernelHostHandlers());
+		const handlerKeys = Object.keys(internals._createHostRequestHandlers());
 		expect(handlerKeys).not.toContain("refine.run");
 		expect(handlerKeys).not.toContain("refine.status");
 	});

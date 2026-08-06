@@ -9,10 +9,10 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import type {
+	CellAttachment,
+	CellDiffDisplay,
+	CellSentAgentMessage,
 	HostRequestHandlers,
-	KernelAttachment,
-	KernelDiffDisplay,
-	KernelSentAgentMessage,
 } from "../host-bridge/types.js";
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
@@ -28,9 +28,9 @@ const MAX_LINE_BYTES = 32 * 1024 * 1024;
 const MAX_ATTACHMENT_BASE64_CHARS = 10 * 1024 * 1024;
 
 export interface BridgeEmitSinks {
-	onDiff?: (diff: KernelDiffDisplay) => void;
-	onAttachment?: (attachment: KernelAttachment) => void;
-	onSentAgentMessage?: (message: KernelSentAgentMessage) => void;
+	onDiff?: (diff: CellDiffDisplay) => void;
+	onAttachment?: (attachment: CellAttachment) => void;
+	onSentAgentMessage?: (message: CellSentAgentMessage) => void;
 }
 
 export interface BridgeCellScope {
@@ -54,7 +54,7 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function parseSentAgentMessage(payload: unknown): KernelSentAgentMessage | undefined {
+function parseSentAgentMessage(payload: unknown): CellSentAgentMessage | undefined {
 	if (!isRecord(payload) || !isRecord(payload.target)) {
 		return undefined;
 	}
@@ -364,7 +364,7 @@ export class BridgeServer {
 		this.send(socket, { v: BRIDGE_PROTOCOL_VERSION, kind: "ack", id });
 	}
 
-	private parseDiff(payload: Record<string, unknown>): KernelDiffDisplay | undefined {
+	private parseDiff(payload: Record<string, unknown>): CellDiffDisplay | undefined {
 		if (
 			typeof payload.path !== "string" ||
 			typeof payload.oldStr !== "string" ||
@@ -380,7 +380,7 @@ export class BridgeServer {
 		};
 	}
 
-	private parseAttachment(payload: Record<string, unknown>): KernelAttachment | undefined {
+	private parseAttachment(payload: Record<string, unknown>): CellAttachment | undefined {
 		if (typeof payload.mimeType !== "string" || typeof payload.data !== "string") {
 			return undefined;
 		}

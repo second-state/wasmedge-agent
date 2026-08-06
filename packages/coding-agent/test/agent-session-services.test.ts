@@ -104,9 +104,9 @@ describe("createAgentSessionFromServices", () => {
 			expect(
 				(
 					session as unknown as {
-						_createKernelHostHandlers(): Record<string, unknown>;
+						_createHostRequestHandlers(): Record<string, unknown>;
 					}
-				)._createKernelHostHandlers(),
+				)._createHostRequestHandlers(),
 			).not.toHaveProperty("agent_message.send");
 		} finally {
 			session.dispose();
@@ -141,12 +141,12 @@ describe("createAgentSessionFromServices", () => {
 			)
 				._modelVisibleSkills()
 				.map((skill) => skill.name);
-		const kernelHostHandlers = (session: unknown) =>
+		const hostRequestHandlers = (session: unknown) =>
 			(
 				session as {
-					_createKernelHostHandlers(): Record<string, unknown>;
+					_createHostRequestHandlers(): Record<string, unknown>;
 				}
-			)._createKernelHostHandlers();
+			)._createHostRequestHandlers();
 
 		const withoutControllers = await createSession({
 			services,
@@ -212,7 +212,7 @@ describe("createAgentSessionFromServices", () => {
 		});
 		try {
 			expect(visibleSkillNames(withMessageController)).toContain(AGENT_MESSAGE_SKILL_NAME);
-			expect(kernelHostHandlers(withMessageController)).toHaveProperty("agent_message.send");
+			expect(hostRequestHandlers(withMessageController)).toHaveProperty("agent_message.send");
 		} finally {
 			withMessageController.dispose();
 		}

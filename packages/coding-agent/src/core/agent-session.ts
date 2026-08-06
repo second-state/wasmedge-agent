@@ -469,12 +469,13 @@ export interface AgentSessionConfig {
 	/** Host-side autonomous continuation policy. */
 	autonomous?: AgentAutonomousConfig;
 	/**
-	 * Boot the IPython kernel in the background as soon as the session is created,
-	 * so the first ipython tool call doesn't pay the kernel cold start.
+	 * Ensure the rust workspace in the background as soon as the session is
+	 * created (toolchain checks + template clone), so the first rust cell
+	 * doesn't pay the cold start.
 	 *
-	 * Only applies to main agents (rlmDepth 0); subagent kernels stay lazy. Default: false.
+	 * Only applies to main agents (rlmDepth 0); subagent workspaces stay lazy. Default: false.
 	 */
-	prewarmIpythonKernel?: boolean;
+	prewarmRustWorkspace?: boolean;
 	/** Test/extension hook for automatic refine review decisions. Defaults to the model-backed review gate. */
 	autoRefineReviewer?: AutoRefineReviewer;
 	/**
@@ -1131,7 +1132,7 @@ export class AgentSession {
 	private _rustWorkspaceDir?: string;
 	/** True once the runtime has been built once; later builds are in-process rebuilds (/reload). */
 	private _runtimeBuilt = false;
-	private readonly _prewarmIpythonKernel: boolean;
+	private readonly _prewarmRustWorkspace: boolean;
 	private _rlmDepth: number;
 	private readonly _configuredRlmMaxDepth: number | undefined;
 	private _rlmMaxDepth: number;
@@ -1246,7 +1247,7 @@ export class AgentSession {
 		const resolvedRlmMaxDepth = this._resolveRlmMaxDepth();
 		this._rlmMaxDepth = resolvedRlmMaxDepth.maxDepth;
 		this._rlmMaxDepthSource = resolvedRlmMaxDepth.source;
-		this._prewarmIpythonKernel = (config.prewarmIpythonKernel ?? false) && this._rlmDepth === 0;
+		this._prewarmRustWorkspace = (config.prewarmRustWorkspace ?? false) && this._rlmDepth === 0;
 		this._autoRefineReviewer = config.autoRefineReviewer;
 		this._serializedRefine = config.serializedRefine ?? false;
 		this._rlmSessionDir = config.rlmSessionDir;
@@ -8406,7 +8407,7 @@ export class AgentSession {
 			this._rustCellProvisioner = new RustCellProvisioner({
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
-				hostHandlers: this._createKernelHostHandlers(),
+				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
@@ -8466,7 +8467,7 @@ export class AgentSession {
 
 		// Prewarm when configured so the first cell doesn't pay toolchain checks
 		// and the template clone.
-		if (this._prewarmIpythonKernel && this.getActiveToolNames().includes("rust")) {
+		if (this._prewarmRustWorkspace && this.getActiveToolNames().includes("rust")) {
 			this._rustCellProvisioner?.prewarm();
 		}
 
@@ -8502,7 +8503,7 @@ export class AgentSession {
 	}
 
 	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */
-	private _createKernelHostHandlers(): HostRequestHandlers {
+	private _createHostRequestHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
 				...(await this.runRlmChild(prompt, kwargs, cellSourceCode)),

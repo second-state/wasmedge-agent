@@ -23,8 +23,8 @@ describe("ENG-4649 subagent model selection", () => {
 			const prompt = harness.session.agent.state.systemPrompt;
 			expect(prompt).not.toContain(`${provider}/model-319`);
 			const handlers = (
-				harness.session as unknown as { _createKernelHostHandlers(): HostRequestHandlers }
-			)._createKernelHostHandlers();
+				harness.session as unknown as { _createHostRequestHandlers(): HostRequestHandlers }
+			)._createHostRequestHandlers();
 			const findModels = handlers["rlm.find_models"];
 			if (!findModels) throw new Error("Missing rlm.find_models host handler");
 			await expect(findModels({ query: "model 319", limit: 5 })).resolves.toEqual({

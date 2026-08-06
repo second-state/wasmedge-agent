@@ -105,7 +105,7 @@ function rustRichOutput(result: unknown): PrimeAgentRustMeta | undefined {
 	const meta: PrimeAgentRustMeta = {};
 	if (Array.isArray(attachments) && attachments.length > 0) {
 		meta.attachments = attachments.map((attachment) => {
-			// KernelAttachment exposes mimeType, base64 `data`, and an optional path.
+			// CellAttachment exposes mimeType, base64 `data`, and an optional path.
 			// Report the decoded size rather than a `bytes` field the runtime never
 			// sends, and never inline the payload: ACP already carries images as
 			// content blocks, so duplicating them here would bloat every update.

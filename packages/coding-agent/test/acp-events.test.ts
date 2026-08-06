@@ -69,7 +69,7 @@ describe("ACP session event mapping", () => {
 			result: {
 				output: "done",
 				details: {
-					// KernelAttachment carries base64 `data`, never a `bytes` field.
+					// CellAttachment carries base64 `data`, never a `bytes` field.
 					attachments: [{ mimeType: "image/png", path: "/tmp/plot.png", data: "aGVsbG8=" }],
 					diffs: [{ path: "a.ts" }],
 				},

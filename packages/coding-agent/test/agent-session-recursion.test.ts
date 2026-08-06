@@ -112,7 +112,7 @@ interface InspectableRlmSession {
 	_rlmChildCleanupFailures: Map<string, Awaited<ReturnType<AgentSession["listRlmSubagents"]>>["subagents"][number]>;
 	_rlmChildSessions: Map<string, AgentSession>;
 	_rlmChildUnsubscribes: Map<string, () => void>;
-	_createKernelHostHandlers(): HostRequestHandlers;
+	_createHostRequestHandlers(): HostRequestHandlers;
 	_reapDeletedRlmSubagentRuntimesAfterCompaction(): Promise<void>;
 }
 
@@ -664,7 +664,7 @@ describe("AgentSession rlm recursion", () => {
 				sendAgentMessage,
 			},
 		});
-		const handlers = (child as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (child as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -724,7 +724,7 @@ describe("AgentSession rlm recursion", () => {
 			},
 		});
 		const spawned = await root.runRlmChild("pending task", { name: "pending-child" });
-		const handlers = (root as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (root as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -787,7 +787,7 @@ describe("AgentSession rlm recursion", () => {
 		const internals = root as unknown as InspectableRlmSession;
 		await waitFor(() => internals._activeRlmChildRuns.get(spawned.rlm_child_id)?.status === "done");
 		await waitFor(() => promptInjectedMessage.mock.calls.length === 1);
-		const send = internals._createKernelHostHandlers()["agent_message.send"];
+		const send = internals._createHostRequestHandlers()["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
 		await expect(
@@ -823,7 +823,7 @@ describe("AgentSession rlm recursion", () => {
 			},
 		});
 		const spawned = await root.runRlmChild("pending task", { name: "failing-child" });
-		const handlers = (root as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (root as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -878,7 +878,7 @@ describe("AgentSession rlm recursion", () => {
 				(run) => run.status === "error",
 			),
 		);
-		const handlers = (root as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (root as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -921,7 +921,7 @@ describe("AgentSession rlm recursion", () => {
 		await root.runRlmChild("blocked startup", { name: "deleted-child" });
 		await waitFor(() => runtimeCreationStarted);
 		await root.deleteRlmSubagent("deleted-child");
-		const handlers = (root as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (root as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -960,7 +960,7 @@ describe("AgentSession rlm recursion", () => {
 				sendAgentMessage,
 			},
 		});
-		const handlers = (child as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const handlers = (child as unknown as InspectableRlmSession)._createHostRequestHandlers();
 		const send = handlers["agent_message.send"];
 		if (!send) throw new Error("Missing agent_message.send host handler");
 
@@ -1187,7 +1187,7 @@ describe("AgentSession rlm recursion", () => {
 			},
 		});
 		vi.spyOn(child, "promptAndWait").mockImplementation(async () => {
-			const send = (child as unknown as InspectableRlmSession)._createKernelHostHandlers()["agent_message.send"];
+			const send = (child as unknown as InspectableRlmSession)._createHostRequestHandlers()["agent_message.send"];
 			if (!send) throw new Error("Missing agent_message.send host handler");
 			await send({ message: "done", receiver_role: "parent" });
 			const followUp = createAgentSessionMessage({
@@ -1429,7 +1429,7 @@ describe("AgentSession rlm recursion", () => {
 		await expect(root.deleteRlmSubagent(daemonChildId)).rejects.toThrow("is ambiguous");
 		inspectable._deletingRlmChildren.delete("deleting-child");
 
-		const handlers = inspectable._createKernelHostHandlers();
+		const handlers = inspectable._createHostRequestHandlers();
 		const listHandler = handlers["rlm.list_subagents"];
 		const deleteHandler = handlers["rlm.delete_subagent"];
 		if (!listHandler || !deleteHandler) {

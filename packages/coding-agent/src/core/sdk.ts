@@ -394,7 +394,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		rlmParentAgent: options.rlmParentAgent,
 		subagentRuntimeHost: options.subagentRuntimeHost,
 		sessionStartEvent: options.sessionStartEvent,
-		prewarmIpythonKernel: options.prewarmIpythonKernel,
+		prewarmRustWorkspace: options.prewarmRustWorkspace,
 		autonomous: options.autonomous,
 		serializedRefine: options.serializedRefine,
 		initialGoal: options.initialGoal,

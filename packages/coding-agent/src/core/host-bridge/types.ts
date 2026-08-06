@@ -1,9 +1,8 @@
-/** Runtime-neutral host-bridge and rich-output types.
- *
- * These outlive the IPython kernel they were born in (DESIGN.md §2.7/§2.9):
+/** Runtime-neutral host-bridge and rich-output types (DESIGN.md §2.7/§2.9):
  * host request handlers are the authoritative host-side surface the rust-cell
- * bridge dispatches into, and the display types are the wire shapes the TUI
- * and session events already understand. */
+ * bridge dispatches into, and the Cell* display types are the wire shapes the
+ * TUI and session events understand. Born in the kernel era, carried over
+ * unchanged so the rendering pipeline needed no rewrite. */
 
 /**
  * Handles one typed request from guest code (e.g. "rlm.run", "goal.complete").
@@ -15,7 +14,7 @@ export type HostRequestHandler = (payload: Record<string, unknown>) => Promise<R
 export type HostRequestHandlers = Record<string, HostRequestHandler>;
 
 /** One file edit surfaced as rich output. */
-export interface KernelDiffDisplay {
+export interface CellDiffDisplay {
 	path: string;
 	oldStr: string;
 	newStr: string;
@@ -24,7 +23,7 @@ export interface KernelDiffDisplay {
 }
 
 /** One media attachment surfaced as rich output. */
-export interface KernelAttachment {
+export interface CellAttachment {
 	mimeType: string;
 	/** base64-encoded bytes. */
 	data: string;
@@ -32,8 +31,8 @@ export interface KernelAttachment {
 	path?: string;
 }
 
-/** Receipt for an agent message sent from guest code. */
-export interface KernelSentAgentMessage {
+/** Receipt for an agent message sent from a cell. */
+export interface CellSentAgentMessage {
 	id: string;
 	message: string;
 	deliveryStatus: "delivered" | "queued";

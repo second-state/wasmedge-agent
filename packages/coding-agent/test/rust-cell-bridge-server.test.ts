@@ -1,6 +1,6 @@
 import { connect, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import type { KernelAttachment, KernelDiffDisplay, KernelSentAgentMessage } from "../src/core/host-bridge/types.js";
+import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../src/core/host-bridge/types.js";
 import { BridgeServer } from "../src/core/rust-cell/bridge-server.js";
 
 /** Minimal JSON-lines client: buffered reads, promise-based frame consumption. */
@@ -221,8 +221,8 @@ describe("BridgeServer protocol v1", () => {
 	});
 
 	it("acks emits and routes display payloads to the cell sinks", async () => {
-		const diffs: KernelDiffDisplay[] = [];
-		const attachments: KernelAttachment[] = [];
+		const diffs: CellDiffDisplay[] = [];
+		const attachments: CellAttachment[] = [];
 		const server = makeServer({ handlers: {} });
 		await server.start();
 		server.beginCell({
@@ -263,7 +263,7 @@ describe("BridgeServer protocol v1", () => {
 	});
 
 	it("synthesizes sentAgentMessage receipts from agent_message.send results", async () => {
-		const receipts: KernelSentAgentMessage[] = [];
+		const receipts: CellSentAgentMessage[] = [];
 		const server = makeServer({
 			handlers: {
 				"agent_message.send": async (payload) =>
