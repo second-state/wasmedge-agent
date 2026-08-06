@@ -2,6 +2,7 @@
  * -> structured result. DESIGN.md §2.3–§2.5. */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -192,18 +193,8 @@ export class CellRunner {
 
 		await this.probeLibReadonly();
 
-		const runStarted = Date.now();
-		const remaining = Math.max(1_000, this.opts.cellTimeoutMs - (runStarted - started));
-		const exec = await runProcess(this.opts.wasmedgeBin, this.wasmedgeArgs(), {
-			cwd: ws,
-			timeoutMs: remaining,
-			signal: per.signal,
-			onChunk: per.onChunk,
-		});
-		const runMs = Date.now() - runStarted;
-
 		// D14 rich output: synthesize a diff per applied lib file for the TUI.
-		const libDiffs =
+		const diffs: CellResult["diffs"] =
 			applied && input.lib
 				? input.lib.map((file) => {
 						const target = join(ws, "agent_lib", file.path);
@@ -214,6 +205,44 @@ export class CellRunner {
 						};
 					})
 				: [];
+		const attachments: CellResult["attachments"] = [];
+		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
+
+		const bridge = this.opts.bridge;
+		const cellEnv: Record<string, string> = { ...this.opts.cellEnv };
+		if (bridge) {
+			await bridge.start();
+			const cellId = per.cellId ?? `cell-${randomBytes(6).toString("hex")}`;
+			bridge.beginCell({
+				cellId,
+				code: input.code,
+				sinks: {
+					onDiff: (diff) => diffs.push(diff),
+					onAttachment: (attachment) => attachments.push(attachment),
+					onSentAgentMessage: (message) => sentAgentMessages.push(message),
+				},
+			});
+			cellEnv.RLM_BRIDGE_ADDR = bridge.address;
+			cellEnv.RLM_BRIDGE_TOKEN = bridge.token;
+			cellEnv.RLM_CELL_ID = cellId;
+		}
+
+		const runStarted = Date.now();
+		const remaining = Math.max(1_000, this.opts.cellTimeoutMs - (runStarted - started));
+		let exec: ProcOutcome;
+		try {
+			exec = await runProcess(this.opts.wasmedgeBin, this.wasmedgeArgs(cellEnv), {
+				cwd: ws,
+				timeoutMs: remaining,
+				signal: per.signal,
+				onChunk: per.onChunk,
+			});
+		} finally {
+			// Waits briefly for in-flight handlers so their side effects (and
+			// receipts) land in this result, then drops the cell's connections.
+			if (bridge) await bridge.endCell();
+		}
+		const runMs = Date.now() - runStarted;
 
 		const base = {
 			started,
@@ -221,7 +250,9 @@ export class CellRunner {
 			runMs,
 			libApplied,
 			libReverted: false,
-			diffs: libDiffs,
+			diffs,
+			attachments,
+			sentAgentMessages,
 			stdout: truncate(exec.stdout),
 			stderr: truncate(exec.stderr),
 			exitCode: exec.exitCode ?? undefined,
@@ -231,7 +262,7 @@ export class CellRunner {
 		return this.result(exec.exitCode === 0 ? "ok" : "error", base);
 	}
 
-	private wasmedgeArgs(): string[] {
+	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
 		const args: string[] = ["run"];
 		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}`);
@@ -240,6 +271,9 @@ export class CellRunner {
 		}
 		args.push("--dir", `/agent/state:${join(ws, "state")}`);
 		args.push("--dir", `/scratch:${createScratchDir(ws)}`);
+		for (const [name, value] of Object.entries(cellEnv)) {
+			args.push("--env", `${name}=${value}`);
+		}
 		args.push(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"));
 		return args;
 	}
@@ -277,6 +311,8 @@ export class CellRunner {
 			libApplied: boolean;
 			libReverted: boolean;
 			diffs?: CellResult["diffs"];
+			attachments?: CellResult["attachments"];
+			sentAgentMessages?: CellResult["sentAgentMessages"];
 			stdout?: string;
 			stderr?: string;
 			compileDiagnostics?: string;
@@ -296,8 +332,8 @@ export class CellRunner {
 			libReverted: partial.libReverted,
 			libReadonlyFallback: !this.mountLibReadonly,
 			diffs: partial.diffs ?? [],
-			attachments: [],
-			sentAgentMessages: [],
+			attachments: partial.attachments ?? [],
+			sentAgentMessages: partial.sentAgentMessages ?? [],
 		};
 	}
 }
