@@ -516,6 +516,8 @@ emits a diff to the user); write whole files with std::fs when generating them.
 - `REFINEMENT_SYSTEM_PROMPT`：skill/subagent 段的 call form 換為 `agent_lib::skills::<x>` 與 `rlm::spawn("…")`；「Do not invent wrappers」條款保留原文精神。
 - `/refine` 流程、快照/回滾、auto-refine 治理（25 turns / 20min cooldown / compact 觸發）**零修改**。
 
+**實作註記（WP7，2026-08-07）**：(1) `rlm::harness` 直接檔案移植（非 host request）：cells 經 `/agent/harness`（session-local）與 `/agent/harness-global` rw preopens 讀寫 `harness_state.json`，與 host `/refine` 同檔；mtime 再同步防跨進程覆寫（沿 harness.py 語意），存檔 tmp+rename 原子。(2) rust reference 雙點驗證定稿：`{type:"rust", use, callable|call_pattern}`；python reference 讀取相容、拒建（明確 legacy 錯誤，guest 與 refinement.ts 同文）。(3) §3.2 的 `rlm::harness::*` capability 行補進教義（WP4 留白處）；REFINEMENT_SYSTEM_PROMPT skill 段與 JSON 範例改 mounted-crate 契約。(4) wasm 陷阱教訓：`std::process::id()` 在 wasm32-wasip1 直接 trap——原子存檔暫名改以 SystemTime 導出。(5) 時戳無 chrono（固定依賴集），以 civil-from-days 演算法自 SystemTime 導出 ISO-8601。
+
 ---
 
 ## 5. 遞迴 subagent 與長任務功能
