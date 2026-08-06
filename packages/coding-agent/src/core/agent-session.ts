@@ -4161,9 +4161,24 @@ export class AgentSession {
 			allowRecursion: this._rlmDepth < this._rlmMaxDepth,
 			rlmDepth: this._rlmDepth,
 			rlmParentAgent: this._rlmParentAgent,
+			rlmCapabilities: this._rlmCapabilityTokens(),
 			harnessState: this._loadMergedHarnessState(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
+	}
+
+	/**
+	 * Capability tokens for the rlm doctrine (messaging/observation/refine call
+	 * forms). Driven by the wired controllers and session policy, not by skill
+	 * discovery: the guest APIs are rlm crate built-ins, so a capability exists
+	 * exactly when its host side is available.
+	 */
+	private _rlmCapabilityTokens(): string[] {
+		const tokens: string[] = [];
+		if (this._agentMessageController) tokens.push("agent_message");
+		if (this._agentObserveController) tokens.push("agent_observe");
+		if (this._autoRefineAllowedForSession()) tokens.push("refine");
+		return tokens;
 	}
 
 	// =========================================================================
@@ -8545,12 +8560,7 @@ export class AgentSession {
 				handlers[type] = async (payload) => this.handleRlmHeartbeatHostRequest(type, payload);
 			}
 		}
-		const visibleSkillNames = new Set(
-			this._modelVisibleSkills()
-				.filter((skill) => !skill.disableModelInvocation)
-				.map((skill) => skill.name),
-		);
-		if (this._agentMessageController && visibleSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
+		if (this._agentMessageController) {
 			Object.assign(
 				handlers,
 				createAgentMessageHostHandlers({

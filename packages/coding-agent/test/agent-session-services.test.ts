@@ -101,13 +101,16 @@ describe("createAgentSessionFromServices", () => {
 			expect(() => session.handleAgentMessageHostRequest("agent_message.list")).toThrow(
 				"unknown agent message request",
 			);
+			// Capability gating is controller-driven: the rlm::msg guest API is a
+			// crate built-in, so a wired controller registers handlers even when no
+			// model-visible skill mentions messaging.
 			expect(
 				(
 					session as unknown as {
 						_createHostRequestHandlers(): Record<string, unknown>;
 					}
 				)._createHostRequestHandlers(),
-			).not.toHaveProperty("agent_message.send");
+			).toHaveProperty("agent_message.send");
 		} finally {
 			session.dispose();
 		}
