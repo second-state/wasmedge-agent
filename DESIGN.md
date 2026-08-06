@@ -732,6 +732,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | D23 ✅ | 獨立發展，上游協調延後至設計成熟期 | 使用者裁定：保持開發自主與節奏；SYNC 稅由 §7.3 三區策略承擔；成熟後歡迎探討合流 |
 | D24 ✅ | 吸收合併取代 GitHub fork 機制；private repo；README attribution | GitHub fork 強制公開違反 D22 低調意圖且功能受限；prime-agent 對 pi 的先例即獨立 repo + README 鳴謝（§7.1） |
 | D25 ✅ | 孵化期（M2–M4）零改名，完整 rebrand 延至 M5 | piConfig.name 牽動 env prefix/config 目錄，早改名＝bench/文件/SYNC 全面陣痛且 M5 可能重演；根 README 為唯一身分檔案（§7.1） |
+| D26 ✅ | Repo 於 M2 期即轉 **public**（取代 D22 的 private 孵化） | 使用者裁定：public repo 的 GitHub Actions 免費（private 額度制）、低調未產生實質效益；公開前完成內容體檢（provider 參照泛化、D23 措辭中性化）。Actions 於 WP1 分支合綠與 workflow 適配前保持停用；M5 僅餘 org transfer |
 
 **審閱記錄**：
 - 2026-08-06 第 1 輪（§1 總體架構）——D11/D12/D13 確認；分層圖、進程模型、原則 1–5 無異議成立。
@@ -741,6 +742,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 - 2026-08-06 第 5 輪（§6 PoC）——D20/D21 確認；另定案 fixture repos 固定化、baseline 全功能對照；載具、範圍界定、指標集成立。
 - 2026-08-06 第 6 輪（§7–§12）——D22/D23 確認（D23 定調獨立發展、上游協調延後）；WP 分解、SYNC 三區、Phase 2 概要、測試五層、組態、里程碑結構成立。**全文件審閱完成，狀態：已定稿（formalized）。**
 - 2026-08-06 M2 起手審閱——D24/D25 確認（使用者質疑「fork 直接改名」引發；修訂 D22 執行細節與 §7.1 改名時機）。
+- 2026-08-06 M2 中審閱——D26 確認（CI 費用考量轉 public；體檢後 `hydai/wasmedge-agent` 公開，Actions 暫停用）。
 
 ## 12. 里程碑與時程
 
