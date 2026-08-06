@@ -17,6 +17,7 @@ import {
 	MalformedCompactionOutcomeMessageComponent,
 } from "./compaction-outcome-message.js";
 import { InjectedPromptMessageComponent, isInjectedPromptMessage } from "./injected-prompt-message.js";
+import { RustCellComponent } from "./rust-cell.js";
 import { SlashCommandMessageComponent } from "./slash-command-message.js";
 import { SlashCommandResultMessageComponent } from "./slash-command-result-message.js";
 import {
@@ -43,6 +44,7 @@ export function isCompactAgentMessageNeighbor(component: Component | undefined):
 	return (
 		component instanceof AgentMessageComponent ||
 		component instanceof ToolExecutionComponent ||
+		component instanceof RustCellComponent ||
 		component instanceof BashExecutionComponent
 	);
 }
