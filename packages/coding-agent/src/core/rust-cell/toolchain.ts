@@ -2,7 +2,7 @@
  * build. Mirrors ensureKernelPython's role at PoC scale (DESIGN.md §2.2). */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { resolveTemplateDir } from "./workspace.js";
@@ -43,8 +43,7 @@ export function resolveToolchain(): ToolchainInfo {
 	return { cargoBin, wasmedgeBin, wasmedgeVersion };
 }
 
-/** Build the template once so cloned workspaces start with a warm target/.
- * The only step that may touch the network (first crates.io fetch). */
+/** Build the template once so cloned workspaces start with a warm target/. */
 export function warmTemplate(cargoBin: string): void {
 	execFileSync(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
@@ -59,5 +58,45 @@ export function isTemplateWarm(): boolean {
 		return existsSync(join(template, "target", "wasm32-wasip1", "release", "cell.wasm"));
 	} catch {
 		return false;
+	}
+}
+
+/** Vendor the locked dependency set into the template so every clone builds
+ * hermetically (DESIGN.md §10). The template's committed .cargo/config.toml
+ * already redirects crates-io at vendor/, so this only materializes the
+ * sources — into a tmp dir first, renamed so a crash never leaves a
+ * half-vendored dir that isTemplateVendored would trust. The only step that
+ * may touch the network. */
+export function vendorTemplate(cargoBin: string): void {
+	const template = resolveTemplateDir();
+	const tmp = join(template, "vendor.tmp");
+	rmSync(tmp, { recursive: true, force: true });
+	execFileSync(cargoBin, ["vendor", "--locked", tmp], {
+		cwd: template,
+		stdio: "pipe",
+	});
+	rmSync(join(template, "vendor"), { recursive: true, force: true });
+	renameSync(tmp, join(template, "vendor"));
+}
+
+/** True when the template carries vendored sources. */
+export function isTemplateVendored(): boolean {
+	try {
+		return existsSync(join(resolveTemplateDir(), "vendor"));
+	} catch {
+		return false;
+	}
+}
+
+/** One-time template preparation: vendor the dependency set, then compile.
+ * Idempotent; both postinstall and lazy first use funnel through here. */
+export function ensureTemplateReady(cargoBin: string, onProgress?: (message: string) => void): void {
+	if (!isTemplateVendored()) {
+		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
+		vendorTemplate(cargoBin);
+	}
+	if (!isTemplateWarm()) {
+		onProgress?.("Warming the cell workspace template (one-time)...");
+		warmTemplate(cargoBin);
 	}
 }
