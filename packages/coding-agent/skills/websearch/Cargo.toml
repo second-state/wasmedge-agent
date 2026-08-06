@@ -1,0 +1,11 @@
+[package]
+name = "websearch"
+version = "0.1.0"
+edition = "2021"
+
+# Built only as a workspace member: syncRustSkills mounts this crate into the
+# session workspace, which supplies the rlm/anyhow/serde_json workspace deps.
+[dependencies]
+rlm = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }

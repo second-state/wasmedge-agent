@@ -198,3 +198,29 @@ fn deps_add_is_locked() {
     assert_eq!(typed.kind, rlm::ErrorKind::Host);
     assert!(typed.message.contains("locked"), "{}", typed.message);
 }
+
+#[test]
+fn ack_errors_surface_as_host_errors_and_keep_the_connection() {
+    let mut host = mock_host(|frame| match frame["kind"].as_str().unwrap() {
+        "emit" if frame["id"] == 1 => Some(json!({
+            "v":1,"kind":"ack","id":frame["id"],
+            "error":"attachment could not be processed: bad image"
+        })),
+        "emit" => Some(json!({"v":1,"kind":"ack","id":frame["id"]})),
+        other => panic!("unexpected kind {other}"),
+    });
+    with_bridge_env(host.port, "tok-ok", || {
+        let err = rlm::display::diff("a.rs", "old", "new").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("bad image"), "unexpected error: {message}");
+        // Host-reported errors keep the connection: the next emit succeeds on
+        // the same socket.
+        rlm::display::diff("b.rs", "x", "y").unwrap();
+    });
+    let frames = host.handle.take().unwrap().join().unwrap();
+    // hello + two emits on ONE connection.
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0]["kind"], "hello");
+    assert_eq!(frames[1]["payload"]["path"], "a.rs");
+    assert_eq!(frames[2]["payload"]["path"], "b.rs");
+}

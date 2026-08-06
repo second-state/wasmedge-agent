@@ -1,7 +1,9 @@
 import { connect, type Socket } from "node:net";
+import zlib from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../src/core/host-bridge/types.js";
 import { BridgeServer } from "../src/core/rust-cell/bridge-server.js";
+import { loadPhoton } from "../src/utils/photon.js";
 
 /** Minimal JSON-lines client: buffered reads, promise-based frame consumption. */
 class LineClient {
@@ -380,5 +382,136 @@ describe("BridgeServer protocol v1", () => {
 		await server.start();
 		server.beginCell({ cellId: "cell-1", code: "" });
 		expect(() => server.beginCell({ cellId: "cell-2", code: "" })).toThrow(/already active/);
+	});
+});
+
+/** Minimal PNG writer (RGBA8, no interlace) so the thumbnail test has a real
+ * decodable image without fixture files. */
+function crc32(bytes: Uint8Array): number {
+	let crc = 0xffffffff;
+	for (const byte of bytes) {
+		crc ^= byte;
+		for (let bit = 0; bit < 8; bit++) {
+			crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+		}
+	}
+	return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+	const chunk = new Uint8Array(12 + data.length);
+	const view = new DataView(chunk.buffer);
+	view.setUint32(0, data.length);
+	chunk.set(new TextEncoder().encode(type), 4);
+	chunk.set(data, 8);
+	view.setUint32(8 + data.length, crc32(chunk.subarray(4, 8 + data.length)));
+	return chunk;
+}
+
+function makeNoisePng(width: number, height: number): Buffer {
+	const raw = new Uint8Array(height * (1 + width * 4));
+	let seed = 0x12345678;
+	const nextByte = () => {
+		// xorshift32: the low byte of a plain LCG cycles fast enough for zlib
+		// to flatten the "noise", defeating the size assertions.
+		seed ^= seed << 13;
+		seed >>>= 0;
+		seed ^= seed >>> 17;
+		seed ^= seed << 5;
+		seed >>>= 0;
+		return (seed >>> 24) & 0xff;
+	};
+	for (let y = 0; y < height; y++) {
+		const row = y * (1 + width * 4);
+		raw[row] = 0; // filter: none
+		for (let i = 1; i < 1 + width * 4; i++) {
+			raw[row + i] = nextByte();
+		}
+	}
+	const header = new Uint8Array(13);
+	const view = new DataView(header.buffer);
+	view.setUint32(0, width);
+	view.setUint32(4, height);
+	header[8] = 8; // bit depth
+	header[9] = 6; // RGBA
+	const idat = new Uint8Array(zlib.deflateSync(raw));
+	return Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		pngChunk("IHDR", header),
+		pngChunk("IDAT", idat),
+		pngChunk("IEND", new Uint8Array(0)),
+	]);
+}
+
+describe("attachment thumbnailing (host-side, DESIGN §2.9)", () => {
+	const servers: BridgeServer[] = [];
+	afterEach(async () => {
+		while (servers.length > 0) await servers.pop()?.dispose();
+	});
+
+	function makeServer(): { server: BridgeServer; attachments: CellAttachment[] } {
+		const attachments: CellAttachment[] = [];
+		const server = new BridgeServer({ handlers: {} });
+		servers.push(server);
+		return { server, attachments };
+	}
+
+	it("thumbnails oversized images down to the context budget before sinking", async () => {
+		const photon = await loadPhoton();
+		if (!photon) return; // photon unavailable in this environment; covered in CI images that ship it
+
+		const { server, attachments } = makeServer();
+		await server.start();
+		server.beginCell({ cellId: "cell-1", code: "", sinks: { onAttachment: (a) => attachments.push(a) } });
+		const client = await handshake(server);
+
+		const bigPng = makeNoisePng(2000, 1400).toString("base64");
+		expect(bigPng.length).toBeGreaterThan(350_000);
+		client.sendFrame({
+			v: 1,
+			kind: "emit",
+			id: 2,
+			type: "display.attachment",
+			payload: { mimeType: "image/png", data: bigPng, path: "big.png" },
+		});
+		expect(await client.nextFrame(15_000)).toEqual({ v: 1, kind: "ack", id: 2 });
+
+		expect(attachments).toHaveLength(1);
+		expect(attachments[0]?.path).toBe("big.png");
+		expect(attachments[0]?.data.length).toBeLessThanOrEqual(350_000);
+		client.destroy();
+	});
+
+	it("acks with an error when an oversized attachment cannot be processed", async () => {
+		const { server, attachments } = makeServer();
+		await server.start();
+		server.beginCell({ cellId: "cell-1", code: "", sinks: { onAttachment: (a) => attachments.push(a) } });
+		const client = await handshake(server);
+
+		const garbage = Buffer.alloc(400_000, 7).toString("base64");
+		client.sendFrame({
+			v: 1,
+			kind: "emit",
+			id: 2,
+			type: "display.attachment",
+			payload: { mimeType: "image/png", data: garbage, path: "junk.png" },
+		});
+		const ack = (await client.nextFrame(15_000)) as Record<string, unknown>;
+		expect(ack.kind).toBe("ack");
+		expect(ack.id).toBe(2);
+		expect(String(ack.error)).toContain("downscale");
+		expect(attachments).toHaveLength(0);
+
+		// The connection survives a rejected attachment (host-reported error).
+		client.sendFrame({
+			v: 1,
+			kind: "emit",
+			id: 3,
+			type: "display.attachment",
+			payload: { mimeType: "image/png", data: "aGk=", path: "ok.png" },
+		});
+		expect(await client.nextFrame(15_000)).toEqual({ v: 1, kind: "ack", id: 3 });
+		expect(attachments).toHaveLength(1);
+		client.destroy();
 	});
 });

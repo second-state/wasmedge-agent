@@ -177,7 +177,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			cwd,
 			agentDir,
 			settingsManager,
-			extraBuiltinSkillOverrides: () => mcpManager.getDisabledBuiltinSkillOverrides(),
 		});
 		await resourceLoader.reload();
 		time("resourceLoader.reload");

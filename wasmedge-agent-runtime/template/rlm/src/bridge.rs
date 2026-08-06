@@ -204,6 +204,16 @@ pub(crate) fn emit(emit_type: &str, payload: Value) -> Result<()> {
             if frame.get("kind").and_then(Value::as_str) == Some("ack")
                 && frame.get("id").and_then(Value::as_u64) == Some(id)
             {
+                // Protocol v1 extension: an ack may carry an error (e.g. the host
+                // could not decode/resize an attachment). Host-reported, so the
+                // connection stays usable.
+                if let Some(message) = frame.get("error").and_then(Value::as_str) {
+                    return Err(crate::error::Error::new(
+                        crate::error::ErrorKind::Host,
+                        message.to_string(),
+                    )
+                    .into());
+                }
                 return Ok(());
             }
         }

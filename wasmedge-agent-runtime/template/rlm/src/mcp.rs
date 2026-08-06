@@ -1,7 +1,7 @@
 //! MCP access, host-mediated (DESIGN.md §2.6, D12): the guest never talks to
-//! MCP servers directly — requests go through the host's MCP manager. The
-//! `mcp.list_tools` / `mcp.call_tool` host handlers land with the skills
-//! migration (WP6); until then these return "not available in this session".
+//! MCP servers directly — the host's MCP manager runs the client (streamable
+//! HTTP) with its own credentials and serves `mcp.list_tools` /
+//! `mcp.call_tool`. Servers must be logged in host-side (/mcp login).
 
 use anyhow::Result;
 use serde_json::{json, Value};

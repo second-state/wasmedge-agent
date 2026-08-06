@@ -42,6 +42,7 @@ import type {
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
+	getLogger,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	modelsAreEqual,
@@ -54,7 +55,6 @@ import { sleep } from "../utils/sleep.js";
 import {
 	AGENT_MESSAGE_CUSTOM_TYPE,
 	AGENT_MESSAGE_RECEIVED_PREVIEW_LABEL,
-	AGENT_MESSAGE_SKILL_NAME,
 	type AgentFamilyCatalogEntry,
 	type AgentFamilyRosterResult,
 	type AgentSessionMessage,
@@ -71,7 +71,6 @@ import {
 	parseAgentSessionMessagePromptId,
 } from "./agent-messages.js";
 import {
-	AGENT_OBSERVE_SKILL_NAME,
 	type AgentObserveAgentSnapshot,
 	type AgentObserveController,
 	type AgentObserveListResult,
@@ -79,7 +78,6 @@ import {
 	createAgentObserveHostHandlers,
 	normalizeObserveLimit,
 	normalizeObserveMaxChars,
-	ORCHESTRATION_HEARTBEAT_SKILL_NAME,
 } from "./agent-observe.js";
 import { flushAgentTraceUpload } from "./agent-traces.js";
 import {
@@ -104,7 +102,6 @@ import {
 } from "./autonomous.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import {
-	COMPACT_SKILL_NAME,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
@@ -157,7 +154,6 @@ import {
 	emptyGoalState,
 	GOAL_CONTEXT_CUSTOM_TYPE,
 	GOAL_CONTEXT_PREVIEW_LABEL,
-	GOAL_SKILL_NAME,
 	GOAL_STATE_CUSTOM_TYPE,
 	type GoalHostResponse,
 	type GoalState,
@@ -205,7 +201,6 @@ import {
 	mergeHarnessStates,
 	mergeRefinementHistory,
 	planRefinement,
-	REFINE_SKILL_NAME,
 	type RefinementPlan,
 	type RefinementResult,
 	reviewAutoRefine,
@@ -255,7 +250,7 @@ import {
 } from "./session-manager.js";
 import type { SessionStats } from "./session-stats.js";
 import type { SettingsManager } from "./settings-manager.js";
-import type { Skill } from "./skills.js";
+import { getRustSkillRuntimeInfo, type Skill } from "./skills.js";
 import {
 	parseRefineCommandOptions,
 	parseSessionSlashCommand,
@@ -4161,9 +4156,28 @@ export class AgentSession {
 			allowRecursion: this._rlmDepth < this._rlmMaxDepth,
 			rlmDepth: this._rlmDepth,
 			rlmParentAgent: this._rlmParentAgent,
+			rlmCapabilities: this._rlmCapabilityTokens(),
+			mcpServers: this._mcpManager
+				?.listStatus()
+				.filter((status) => status.enabled)
+				.map((status) => ({ server: status.server, label: status.label })),
 			harnessState: this._loadMergedHarnessState(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
+	}
+
+	/**
+	 * Capability tokens for the rlm doctrine (messaging/observation/refine call
+	 * forms). Driven by the wired controllers and session policy, not by skill
+	 * discovery: the guest APIs are rlm crate built-ins, so a capability exists
+	 * exactly when its host side is available.
+	 */
+	private _rlmCapabilityTokens(): string[] {
+		const tokens: string[] = [];
+		if (this._agentMessageController) tokens.push("agent_message");
+		if (this._agentObserveController) tokens.push("agent_observe");
+		if (this._autoRefineAllowedForSession()) tokens.push("refine");
+		return tokens;
 	}
 
 	// =========================================================================
@@ -8408,6 +8422,10 @@ export class AgentSession {
 				workspaceDir: this._rustWorkspaceDir,
 				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
+				// Mount ALL discovered rust skills (visibility only gates the prompt),
+				// mirroring the kernel-era install-everything venv.
+				rustSkills: getRustSkillRuntimeInfo(this._resourceLoader.getSkills().skills),
+				onDiagnostic: (message) => getLogger("coding-agent.rust-cell").warn(message),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
 				rust: {
@@ -8479,26 +8497,10 @@ export class AgentSession {
 	 * and compact skills are withheld when disabled for this session.
 	 */
 	private _modelVisibleSkills(): Skill[] {
-		let skills = this._resourceLoader.getSkills().skills;
-		if (!this._includeGoals) {
-			skills = skills.filter((skill) => skill.name !== GOAL_SKILL_NAME);
-		}
-		if (!this._includeCompactSkill) {
-			skills = skills.filter((skill) => skill.name !== COMPACT_SKILL_NAME);
-		}
-		if (!this._autoRefineAllowedForSession()) {
-			skills = skills.filter((skill) => skill.name !== REFINE_SKILL_NAME);
-		}
-		if (!this._agentMessageController) {
-			skills = skills.filter((skill) => skill.name !== AGENT_MESSAGE_SKILL_NAME);
-		}
-		if (!this._agentObserveController) {
-			skills = skills.filter((skill) => skill.name !== AGENT_OBSERVE_SKILL_NAME);
-		}
-		if (!this._agentObserveController || !this._rlmHeartbeatController) {
-			skills = skills.filter((skill) => skill.name !== ORCHESTRATION_HEARTBEAT_SKILL_NAME);
-		}
-		return skills;
+		// Orchestration capabilities (goal/compact/refine/msg/observe/heartbeat)
+		// are rlm crate built-ins gated by _rlmCapabilityTokens and the host
+		// handler registry, not by discovered skills — nothing to filter here.
+		return this._resourceLoader.getSkills().skills;
 	}
 
 	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */
@@ -8545,12 +8547,7 @@ export class AgentSession {
 				handlers[type] = async (payload) => this.handleRlmHeartbeatHostRequest(type, payload);
 			}
 		}
-		const visibleSkillNames = new Set(
-			this._modelVisibleSkills()
-				.filter((skill) => !skill.disableModelInvocation)
-				.map((skill) => skill.name),
-		);
-		if (this._agentMessageController && visibleSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
+		if (this._agentMessageController) {
 			Object.assign(
 				handlers,
 				createAgentMessageHostHandlers({

@@ -351,6 +351,8 @@ Emit 事件 → `CellEmitEvent` → 直接餵進現有管線的三個型別（`K
 | `rlm::display::attach_image(path)` | `display.attachment` | `…attachment+json` | base64 ≤ 350K（guest 端縮圖至 1200px，移植 attach-image skill 邏輯）；host 硬上限 10M |
 | `rlm::msg::send*` | （走 `req` 路徑 `agent_message.send`） | `…agent-message+json` | — |
 
+**實作註記（WP6，2026-08-06）**：縮圖**改在 host 端**（偏離上表「guest 端縮圖」）——host 既有 photon（Rust/WASM）管線含 EXIF 校正與 PNG/JPEG 品質階梯，整組重用；免把影像解碼器連進每個 cell、模板編譯不膨脹。Guest 上限改為原始 20MB（wire 上限 28MB base64，在 32MiB 行守衛內），host 縮至 ≤1200px/≤350K base64 再入 sink。協議 v1 向後相容擴充：`ack` 可帶 `error` 欄（如附件不可解碼/縮不下去），guest 端 emit 回傳 Host 類錯誤且連線保留（與 res error 同語意）。SVG 直通不縮圖。
+
 TUI 渲染：`rust-cell.ts` 元件（§7 WP4）顯示 code（syntax highlight）、串流輸出、diff 卡片、耗時（`compile 0.3s · run 0.01s`）。
 
 ### 2.10 `bash` 工具與信任邊界
@@ -497,6 +499,8 @@ emits a diff to the user); write whole files with std::fs when generating them.
 | linear / notion（MCP-backed） | `rlm::mcp::call_tool`（host MCP manager 沿用） |
 | prime-intellect / skill-creator（markdown） | skill-creator 全文改寫為 Rust skill 授權指南（§4.3）；prime-intellect 移除 |
 
+**實作註記（WP6，2026-08-06）**：(1) 掛載機制——cargo 要求 members 在 workspace root 之下（站外絕對路徑會被拒），故以 `<workspace>/skills/<crate>` symlink 指向 skill 原地實現「不複製、可編輯」，members/agent_lib deps/`skills/mod.rs` 三面由 host 管理區塊再生；skill crate 以 `[workspace.dependencies]`（rlm＋prelude 五件）宣告 `{ workspace = true }`。(2) 變更偵測以 manifest 內容指紋（`.skills-hash`）；變更時逐 skill probe build，編譯失敗者卸載＋診斷（單一壞 skill 不得癱瘓全部 cell），健康集合重掛。(3) **偏離：bundled skills 不預編譯進模板**——warm 會改寫模板 Cargo.toml，污染 source/dist 的不可變模板；改為 session 首掛時編譯（warm target cache 下實測 ~1–2s，一次性）。(4) 六個 orchestration 薄殼（goal/compact/refine/agent-message/agent-observe/rlm-heartbeat）與 edit/attach-image/linear/notion/prime-intellect 全數刪除；能力閘控改為 controller-driven（`rlmCapabilities` tokens 進 prompt、handler 註冊不再看 skill 可見性）。(5) Python skills 偵測留存：pyproject.toml 無 Cargo.toml → 降級 markdown＋明確診斷。(6) `skills.package` scaffold host request 未實作（§4.2 品質閘 Phase 2 一併）。
+
 ### 4.2 agent_lib 自我擴充迴路
 
 模型把重複邏輯升格為函式的完整循環（這是「自我改進」在語言層的形態；D14 宣告式）：
@@ -541,6 +545,8 @@ Your workspace persisted through compaction. state keys: {keys}. agent_lib API: 
 ### 5.3 MCP
 
 `mcp-manager.ts` 沿用；呈現層從「動態生成 Python skill」改為 `rlm::mcp` 模組 + skills XML 列出可用 server（`mcp.list_tools`/`mcp.call_tool` host request 型別不變）。
+
+**實作註記（WP6，2026-08-06）**：host 端 MCP client 以官方 `@modelcontextprotocol/sdk`（streamable HTTP）實作，每 server 連線快取、auth 由 host 解析（bearer env var／靜態 headers／OAuth `getApiKey` 自動 refresh）；`mcp.refresh` 與 manager `refresh()` 會作廢快取連線。stdio server 不支援（明確錯誤）；未登入回 cell 可讀錯誤（提示 /mcp login）。呈現改為 prompt 段落列出已啟用 server 與 `rlm::mcp` call forms（非 skills XML 條目——linear/notion skill 目錄已刪，unauthed 覆蓋機制隨之移除）。
 
 ---
 

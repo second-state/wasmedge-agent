@@ -2,6 +2,16 @@
 members = ["agent_lib", "cell", "rlm"]
 resolver = "2"
 
+# Skill crates declare these with `{ workspace = true }` (DESIGN.md §4.1);
+# the set mirrors the fixed cell prelude plus the rlm host-bridge crate.
+[workspace.dependencies]
+rlm = { path = "rlm" }
+anyhow = "1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
 [profile.release]
 incremental = true
 

@@ -1,6 +1,6 @@
-// Host side of MCP integrations. The host registers OAuth providers, gates
-// integration skills by auth, and serves mcp.* host-requests; cells reach the
-// protocol through rlm::mcp (host-side client handlers land with WP6).
+// Host side of MCP integrations. The host registers OAuth providers and
+// serves mcp.* host-requests; cells reach the protocol through rlm::mcp and
+// the host runs the actual MCP client (streamable HTTP) with its credentials.
 
 import {
 	BUILTIN_MCP_CATALOG,
@@ -11,6 +11,7 @@ import {
 import { registerOAuthProvider, unregisterOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import type { AuthStorage } from "../auth-storage.js";
 import type { McpServerConfig } from "../settings-manager.js";
+import { defaultMcpConnector, type McpConnection, type McpConnector } from "./mcp-client.js";
 
 export interface McpManagerOptions {
 	authStorage: AuthStorage;
@@ -18,6 +19,8 @@ export interface McpManagerOptions {
 	getUserServers?: () => Record<string, McpServerConfig> | undefined;
 	/** Start an interactive host-side login for a server. Provided by the UI mode. */
 	beginLogin?: (server: string) => Promise<void>;
+	/** MCP connection factory; tests inject a fake. Default: streamable HTTP SDK client. */
+	connector?: McpConnector;
 }
 
 /** A resolved integration: a catalog/user entry plus its provider id. */
@@ -38,14 +41,18 @@ export class McpManager {
 	private readonly authStorage: AuthStorage;
 	private readonly getUserServers: () => Record<string, McpServerConfig> | undefined;
 	private readonly beginLogin?: (server: string) => Promise<void>;
+	private readonly connector: McpConnector;
 	private integrations = new Map<string, ResolvedIntegration>();
 	/** Provider ids we registered for user servers, so refresh can drop removed ones. */
 	private registeredUserProviderIds = new Set<string>();
+	/** Live MCP connections per server; entries drop on failure/refresh/dispose. */
+	private connections = new Map<string, Promise<McpConnection>>();
 
 	constructor(options: McpManagerOptions) {
 		this.authStorage = options.authStorage;
 		this.getUserServers = options.getUserServers ?? (() => undefined);
 		this.beginLogin = options.beginLogin;
+		this.connector = options.connector ?? defaultMcpConnector;
 		this.resolveIntegrations();
 		this.registerProviders();
 	}
@@ -54,6 +61,22 @@ export class McpManager {
 	refresh(): void {
 		this.resolveIntegrations();
 		this.registerProviders();
+		this.invalidateConnections();
+	}
+
+	private invalidateConnections(server?: string): void {
+		const targets = server ? [server] : [...this.connections.keys()];
+		for (const name of targets) {
+			const pending = this.connections.get(name);
+			this.connections.delete(name);
+			void pending?.then((connection) => connection.close()).catch(() => {});
+		}
+	}
+
+	async dispose(): Promise<void> {
+		const pending = [...this.connections.values()];
+		this.connections.clear();
+		await Promise.allSettled(pending.map(async (entry) => (await entry).close()));
 	}
 
 	private providerId(server: string): string {
@@ -71,7 +94,7 @@ export class McpManager {
 			});
 		}
 		for (const [server, config] of Object.entries(this.getUserServers() ?? {})) {
-			if (config.type !== "http") continue; // stdio servers self-manage in Python
+			if (config.type !== "http") continue; // stdio servers are unsupported by the host client
 			integrations.set(server, {
 				server,
 				label: server,
@@ -141,21 +164,66 @@ export class McpManager {
 		return cred !== undefined;
 	}
 
-	/** `-<server>/SKILL.md` overrides for every built-in integration the user isn't logged into. */
-	getDisabledBuiltinSkillOverrides(): string[] {
-		const overrides: string[] = [];
-		for (const entry of BUILTIN_MCP_CATALOG) {
-			const integration = this.integrations.get(entry.server);
-			if (integration && !this.isAuthed(integration)) {
-				overrides.push(`-${entry.server}/SKILL.md`);
-			}
+	/** Bearer/static headers for a server, refreshing OAuth creds as needed. */
+	private async authHeaders(integration: ResolvedIntegration): Promise<Record<string, string>> {
+		const headers: Record<string, string> = { ...integration.headers };
+		if (integration.bearerTokenEnvVar) {
+			const token = process.env[integration.bearerTokenEnvVar]?.trim();
+			if (token) headers.Authorization = `Bearer ${token}`;
+			return headers;
 		}
-		return overrides;
+		if (integration.userDeclared && getCatalogEntry(integration.server)) {
+			// Never send built-in creds to an override URL (see isAuthed).
+			return headers;
+		}
+		const key = await this.authStorage.getApiKey(this.providerId(integration.server));
+		if (key) headers.Authorization = `Bearer ${key}`;
+		return headers;
+	}
+
+	/** Live connection for a server; throws a cell-readable error when the
+	 * server is unknown, disabled, or not logged in. */
+	private connection(server: string): Promise<McpConnection> {
+		const existing = this.connections.get(server);
+		if (existing) return existing;
+		const integration = this.integrations.get(server);
+		if (!integration) {
+			throw new Error(
+				`unknown MCP server "${server}" (stdio servers are unsupported; declare an http server in settings)`,
+			);
+		}
+		if (!this.isAuthed(integration)) {
+			throw new Error(`MCP server "${server}" is not enabled; log in with /mcp login ${server}`);
+		}
+		const pending = (async () => {
+			const headers = await this.authHeaders(integration);
+			return this.connector({ url: integration.url, headers });
+		})();
+		this.connections.set(server, pending);
+		pending.catch(() => this.connections.delete(server));
+		return pending;
 	}
 
 	/** Host-request handlers exposed to cells. */
 	hostHandlers(): Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> {
 		const handlers: Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> = {
+			"mcp.list_tools": async (payload) => {
+				const server = String(payload.server ?? "");
+				if (!server) throw new Error("mcp.list_tools requires a server");
+				const connection = await this.connection(server);
+				return { tools: await connection.listTools() };
+			},
+			"mcp.call_tool": async (payload) => {
+				const server = String(payload.server ?? "");
+				const tool = String(payload.tool ?? "");
+				if (!server || !tool) throw new Error("mcp.call_tool requires a server and a tool");
+				const args =
+					typeof payload.arguments === "object" && payload.arguments !== null
+						? (payload.arguments as Record<string, unknown>)
+						: {};
+				const connection = await this.connection(server);
+				return await connection.callTool(tool, args);
+			},
 			"mcp.refresh": async (payload) => {
 				const server = String(payload.server ?? "");
 				if (!server) throw new Error("mcp.refresh requires a server");
@@ -164,6 +232,7 @@ export class McpManager {
 				// report a refresh error rather than a misleading "not enabled".
 				const key = await this.authStorage.getApiKey(this.providerId(server));
 				if (!key) throw new Error(`Could not refresh credentials for ${server}`);
+				this.invalidateConnections(server);
 				return {};
 			},
 			// Resolved config so the guest connects to the same URL the host

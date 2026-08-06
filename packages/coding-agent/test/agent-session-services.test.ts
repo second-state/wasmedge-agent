@@ -3,12 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerFauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGENT_MESSAGE_SKILL_NAME, type AgentSessionMessageController } from "../src/core/agent-messages.js";
-import { AGENT_OBSERVE_SKILL_NAME, type AgentObserveController } from "../src/core/agent-observe.js";
+import type { AgentSessionMessageController } from "../src/core/agent-messages.js";
+import type { AgentObserveController } from "../src/core/agent-observe.js";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { SessionManager } from "../src/core/session-manager.js";
-import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
 describe("createAgentSessionFromServices", () => {
 	const cleanupPaths: string[] = [];
@@ -43,25 +42,9 @@ describe("createAgentSessionFromServices", () => {
 			resourceLoaderOptions: {
 				noPromptTemplates: true,
 				noThemes: true,
-				skillsOverride: () => ({
-					skills: [
-						{
-							name: AGENT_MESSAGE_SKILL_NAME,
-							description: "hidden agent message skill",
-							filePath: "<test:agent-message>",
-							baseDir: tempDir,
-							sourceInfo: createSyntheticSourceInfo("<test:agent-message>", { source: "test" }),
-							disableModelInvocation: true,
-							kind: "python" as const,
-							python: {
-								importName: "agent_message",
-								packagePath: tempDir,
-								pyprojectPath: join(tempDir, "pyproject.toml"),
-							},
-						},
-					],
-					diagnostics: [],
-				}),
+				// No skills at all: capability gating is controller-driven, so the
+				// messaging handlers must register without any discovered skill.
+				skillsOverride: () => ({ skills: [], diagnostics: [] }),
 			},
 		});
 		services.modelRegistry.registerProvider(faux.getModel().provider, {
@@ -101,19 +84,22 @@ describe("createAgentSessionFromServices", () => {
 			expect(() => session.handleAgentMessageHostRequest("agent_message.list")).toThrow(
 				"unknown agent message request",
 			);
+			// Capability gating is controller-driven: the rlm::msg guest API is a
+			// crate built-in, so a wired controller registers handlers even when no
+			// model-visible skill mentions messaging.
 			expect(
 				(
 					session as unknown as {
 						_createHostRequestHandlers(): Record<string, unknown>;
 					}
 				)._createHostRequestHandlers(),
-			).not.toHaveProperty("agent_message.send");
+			).toHaveProperty("agent_message.send");
 		} finally {
 			session.dispose();
 		}
 	});
 
-	it("hides daemon-backed orchestration skills unless their host bridges are available", async () => {
+	it("registers orchestration host handlers only when their controllers are wired", async () => {
 		const tempDir = join(tmpdir(), `pi-session-skills-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		cleanupPaths.push(tempDir);
@@ -133,14 +119,6 @@ describe("createAgentSessionFromServices", () => {
 			const { session } = await createAgentSessionFromServices(options);
 			return session;
 		};
-		const visibleSkillNames = (session: unknown) =>
-			(
-				session as {
-					_modelVisibleSkills(): Array<{ name: string }>;
-				}
-			)
-				._modelVisibleSkills()
-				.map((skill) => skill.name);
 		const hostRequestHandlers = (session: unknown) =>
 			(
 				session as {
@@ -153,8 +131,8 @@ describe("createAgentSessionFromServices", () => {
 			sessionManager: SessionManager.create(tempDir, join(tempDir, "sessions-without")),
 		});
 		try {
-			expect(visibleSkillNames(withoutControllers)).not.toContain(AGENT_MESSAGE_SKILL_NAME);
-			expect(visibleSkillNames(withoutControllers)).not.toContain(AGENT_OBSERVE_SKILL_NAME);
+			expect(hostRequestHandlers(withoutControllers)).not.toHaveProperty("agent_message.send");
+			expect(hostRequestHandlers(withoutControllers)).not.toHaveProperty("agent_observe.list");
 		} finally {
 			withoutControllers.dispose();
 		}
@@ -190,8 +168,8 @@ describe("createAgentSessionFromServices", () => {
 			agentObserveController,
 		});
 		try {
-			expect(visibleSkillNames(withControllers)).toContain(AGENT_OBSERVE_SKILL_NAME);
-			expect(visibleSkillNames(withControllers)).not.toContain(AGENT_MESSAGE_SKILL_NAME);
+			expect(hostRequestHandlers(withControllers)).toHaveProperty("agent_observe.list");
+			expect(hostRequestHandlers(withControllers)).not.toHaveProperty("agent_message.send");
 		} finally {
 			withControllers.dispose();
 		}
@@ -211,7 +189,6 @@ describe("createAgentSessionFromServices", () => {
 			agentMessageController,
 		});
 		try {
-			expect(visibleSkillNames(withMessageController)).toContain(AGENT_MESSAGE_SKILL_NAME);
 			expect(hostRequestHandlers(withMessageController)).toHaveProperty("agent_message.send");
 		} finally {
 			withMessageController.dispose();

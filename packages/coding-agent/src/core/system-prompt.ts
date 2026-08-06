@@ -3,8 +3,8 @@
  */
 
 import { buildChildAgentDoctrine, buildRlmPrompt, buildSubagentGuidance } from "./prompts/index.js";
-import { formatHarnessStateForPrompt, type HarnessState, REFINE_SKILL_NAME } from "./refinement/index.js";
-import { formatSkillsForPrompt, getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
+import { formatHarnessStateForPrompt, type HarnessState } from "./refinement/index.js";
+import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -31,6 +31,15 @@ export interface BuildSystemPromptOptions {
 	rlmDepth?: number;
 	/** Human-readable parent name or id for child communication doctrine. */
 	rlmParentAgent?: string;
+	/**
+	 * Capability tokens gating optional rlm doctrine sections
+	 * ("agent_message", "agent_observe", "refine"). Sessions derive these from
+	 * their wired host controllers; the guest APIs themselves are rlm crate
+	 * built-ins independent of skill discovery.
+	 */
+	rlmCapabilities?: string[];
+	/** Authed MCP servers reachable from cells via rlm::mcp (DESIGN.md §5.3). */
+	mcpServers?: Array<{ server: string; label: string }>;
 	/** Global harness state to inject as compact persistent context. */
 	harnessState?: HarnessState;
 }
@@ -65,9 +74,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const tools = selectedTools ?? ["rust", "bash"];
 	const hasRust = tools.includes("rust");
 	const hasBash = tools.includes("bash");
-	const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
-	const visiblePythonSkillImportNames = getPythonSkillRuntimeInfo(visibleSkills).map((skill) => skill.importName);
-	const hasRefineSkill = visibleSkills.some((skill) => skill.name === REFINE_SKILL_NAME);
+	const rlmCapabilities = options.rlmCapabilities ?? [];
+	const hasRefineCapability = hasRust && rlmCapabilities.includes("refine");
 
 	if (customPrompt) {
 		let prompt = customPrompt;
@@ -87,6 +95,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		if (customPromptHasFileAccess && skills.length > 0) {
 			prompt += formatSkillsForPrompt(skills);
 		}
+		if (hasRust) {
+			prompt += formatMcpServersForPrompt(options.mcpServers);
+		}
 
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
@@ -95,7 +106,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		const childDoctrine = buildChildAgentDoctrine({
 			depth: options.rlmDepth,
 			parentAgent: options.rlmParentAgent,
-			installedSkills: visiblePythonSkillImportNames,
+			installedSkills: rlmCapabilities,
 			activeTools: tools,
 		});
 		if (childDoctrine) {
@@ -103,7 +114,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		}
 
 		if (harnessState) {
-			prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRust && hasRefineSkill })}`;
+			prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRefineCapability })}`;
 		}
 
 		if (appendSection) {
@@ -116,7 +127,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	let prompt = buildRlmPrompt({
 		cwd: promptCwd,
 		messagesPath: promptMessagesPath,
-		installedSkills: visiblePythonSkillImportNames,
+		installedSkills: rlmCapabilities,
 		activeTools: tools.filter((name) => name === "rust" || name === "bash" || name === "edit"),
 		allowRecursion,
 		depth: options.rlmDepth,
@@ -127,18 +138,15 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// menu, so the model reads when/why to delegate and then sees the concrete subagent
 	// specs it can match against — the same ordering as Claude Code's Agent tool.
 	if ((allowRecursion ?? true) && hasRust) {
-		const visiblePythonSkillNames = new Set(
-			getPythonSkillRuntimeInfo(visibleSkills).map((skill) => skill.importName),
-		);
 		prompt += `\n\n${buildSubagentGuidance({
-			includeRefineExamples: hasRefineSkill,
-			hasAgentMessage: visiblePythonSkillNames.has("agent_message"),
-			hasAgentObserve: visiblePythonSkillNames.has("agent_observe"),
+			includeRefineExamples: hasRefineCapability,
+			hasAgentMessage: rlmCapabilities.includes("agent_message"),
+			hasAgentObserve: rlmCapabilities.includes("agent_observe"),
 		})}`;
 	}
 
 	if (harnessState) {
-		prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRust && hasRefineSkill })}`;
+		prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRefineCapability })}`;
 	}
 
 	const guidelines = formatPromptGuidelines(promptGuidelines);
@@ -161,11 +169,27 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		prompt += formatSkillsForPrompt(skills);
 	}
 
+	if (hasRust) {
+		prompt += formatMcpServersForPrompt(options.mcpServers);
+	}
+
 	if (appendSection) {
 		prompt += appendSection;
 	}
 
 	return prompt;
+}
+
+function formatMcpServersForPrompt(servers: Array<{ server: string; label: string }> | undefined): string {
+	if (!servers || servers.length === 0) return "";
+	const listing = servers
+		.map((entry) => (entry.label && entry.label !== entry.server ? `${entry.server} (${entry.label})` : entry.server))
+		.join(", ");
+	return (
+		"\n\nMCP servers available from rust cells (host-mediated): " +
+		`${listing}. Discover tools with rlm::mcp::list_tools("<server>")? ` +
+		'and invoke them with rlm::mcp::call_tool("<server>", "<tool>", args)?.'
+	);
 }
 
 function formatPromptGuidelines(promptGuidelines: string[] | undefined): string {

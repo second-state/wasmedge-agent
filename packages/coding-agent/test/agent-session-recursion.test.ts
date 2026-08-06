@@ -209,26 +209,10 @@ describe("AgentSession rlm recursion", () => {
 			settingsManager,
 			cwd: tempDir,
 			modelRegistry: ModelRegistry.create(authStorage, join(tempDir, "models.json")),
+			// Capability gating is controller-driven; no synthetic skill needed for
+			// messaging doctrine/handlers to activate.
 			resourceLoader: createTestResourceLoader({
 				extensionsResult: options.extensionsResult,
-				skills: options.agentMessageController
-					? [
-							{
-								name: "agent-message",
-								description: "test",
-								filePath: join(tempDir, "SKILL.md"),
-								baseDir: tempDir,
-								sourceInfo: createSyntheticSourceInfo(join(tempDir, "SKILL.md"), { source: "test" }),
-								disableModelInvocation: false,
-								kind: "python",
-								python: {
-									importName: "agent_message",
-									packagePath: tempDir,
-									pyprojectPath: join(tempDir, "pyproject.toml"),
-								},
-							},
-						]
-					: undefined,
 			}),
 			agentMessageController: options.agentMessageController,
 			subagentRuntimeHost: options.subagentRuntimeHost,
