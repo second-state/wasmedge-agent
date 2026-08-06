@@ -71,8 +71,8 @@ export const FEATURE_HINTS: readonly FeatureHintDefinition[] = [
 		getText: () => "Use /refine to turn useful lessons into reusable skills, memory, and prompts.",
 	},
 	{
-		id: "persistent-ipython",
-		getText: () => "Prime Agent keeps IPython variables and helpers between turns and compactions.",
+		id: "persistent-workspace",
+		getText: () => "Prime Agent keeps rlm::state and agent_lib helpers across turns and compactions.",
 	},
 	{
 		id: "context-usage",

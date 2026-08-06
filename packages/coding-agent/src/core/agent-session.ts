@@ -404,7 +404,7 @@ export interface AgentSessionConfig {
 	settingsManager: SettingsManager;
 	serviceTierPreference?: ServiceTier;
 	cwd: string;
-	/** Config dir backing credentials (auth.json); exported to the kernel for skills. */
+	/** Config dir backing credentials (auth.json) and host-side skill lookups. */
 	agentDir?: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
@@ -414,13 +414,13 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
-	/** Initial active built-in tool names. Default: [ipython] */
+	/** Initial active built-in tool names. Default: [rust, bash] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];
 	/**
 	 * Whether the built-in long-running goals feature is available: the bundled
-	 * goal skill in the IPython kernel, its goal.* host handlers, and /goal.
+	 * goal skill, its goal.* host handlers, and /goal.
 	 * Default: true.
 	 */
 	includeGoals?: boolean;
@@ -434,13 +434,13 @@ export interface AgentSessionConfig {
 	 */
 	includeCompactSkill?: boolean;
 	/**
-	 * Optional host-side controller for the bundled rlm-heartbeat Python skill.
+	 * Optional host-side controller for the bundled rlm-heartbeat skill.
 	 * When omitted, rlm_heartbeat.* host requests are unavailable.
 	 */
 	rlmHeartbeatController?: AgentRlmHeartbeatController;
 	/**
 	 * Optional MCP integration manager. When present, its mcp.* host requests
-	 * (refresh, begin_login) are exposed to the kernel.
+	 * (refresh, begin_login) are exposed to cells over the bridge.
 	 */
 	mcpManager?: McpManager;
 	/**
@@ -458,7 +458,7 @@ export interface AgentSessionConfig {
 	rlmDepth?: number;
 	/** Maximum RLM recursion depth. Defaults to RLM_MAX_DEPTH or 1. */
 	rlmMaxDepth?: number;
-	/** Directory exposed to the kernel as RLM_SESSION_DIR. */
+	/** Host-side scratch directory for RLM child session dirs. */
 	rlmSessionDir?: string;
 	/** Node id for this session when it is itself an RLM child. */
 	rlmParentNodeId?: string;
@@ -896,7 +896,6 @@ interface RlmSubagentModelSelection {
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** Cap on the post-compaction kernel namespace probe so a wedged kernel can't stall recovery. */
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
 
 function noopRlmChildAbort(): void {}
@@ -1912,9 +1911,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Goals are pursued through the IPython goal skill, so the only tool the
-	 * model needs is ipython. Force-activate it (including into a live
-	 * continuation context) so the model can always reach `goal.complete()`.
+	 * Goals are pursued through rlm::goal in rust cells, so the only tool the
+	 * model needs is rust. Force-activate it (including into a live
+	 * continuation context) so the model can always reach rlm::goal::complete().
 	 */
 	private _ensureGoalRuntimeActive(context?: AgentContext): void {
 		if (!this._includeGoals) {
@@ -1998,8 +1997,8 @@ export class AgentSession {
 			return false;
 		}
 		// Usage is attributed at the assistant message's message_end, which fires
-		// before that turn's ipython cell runs. goal.complete() only arrives later
-		// over the kernel host bridge, so the completing turn is always accounted
+		// before that turn's rust cell runs. goal.complete only arrives later
+		// over the host bridge, so the completing turn is always accounted
 		// while the goal is still active. Only count turns spent pursuing the goal;
 		// post-completion turns (e.g. a closing summary) must not be attributed.
 		if (this._goalState.status !== "active") {
@@ -2694,9 +2693,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a goal.* request from the IPython kernel host bridge (the bundled
-	 * goal skill). All goal state stays host-side; the kernel only sees the
-	 * serialized snake_case response.
+	 * Handle a goal.* request from the rust-cell host bridge (rlm::goal).
+	 * All goal state stays host-side; the cell only sees the serialized
+	 * snake_case response.
 	 */
 	handleGoalHostRequest(type: string, payload: Record<string, unknown> = {}): GoalHostResponse {
 		if (!this._includeGoals) {
@@ -2722,7 +2721,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a compact.* request from the kernel host bridge. Compaction would
+	 * Handle a compact.* request from the rust-cell host bridge. Compaction would
 	 * abort the run executing the requesting cell, so compact.run only schedules
 	 * it; _checkCompaction consumes the request at the turn boundary.
 	 */
@@ -2775,7 +2774,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a refine.* request from the kernel host bridge. Like compact,
+	 * Handle a refine.* request from the rust-cell host bridge. Like compact,
 	 * refinement waits for the current turn to become idle before applying
 	 * changes, so refine.run only schedules it; _consumePendingRequestedRefine
 	 * fires it at the turn boundary. This prevents a deadlock that would occur
@@ -3029,7 +3028,7 @@ export class AgentSession {
 		}
 		const goal = this._goalWithAccountedWallClock();
 		// A turn can cross the budget and complete the goal at once: accounting
-		// runs at message_end, before the completing ipython cell executes, so a
+		// runs at message_end, before the completing rust cell executes, so a
 		// budget-limit context may already be steered. It is stale now — drop it.
 		this._clearQueuedGoalContexts();
 		this._setGoalState({
@@ -3643,16 +3642,16 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	/**
-	 * Async teardown for graceful quit/switch: await the IPython kernel's dispose
-	 * (which flushes a final namespace snapshot) before the synchronous dispose, so
-	 * the latest state reaches disk instead of racing process exit.
+	 * Async teardown for graceful quit/switch: drain refinement and child
+	 * sessions before the synchronous dispose, so their state reaches disk
+	 * instead of racing process exit.
 	 */
 	async disposeAsync(): Promise<void> {
 		if (this._disposed) {
 			return;
 		}
 		// Concurrent callers await the same in-flight teardown so none resolves before
-		// the kernel snapshot flush finishes.
+		// the drain finishes.
 		if (this._disposeAsyncPromise) {
 			return this._disposeAsyncPromise;
 		}
@@ -3802,7 +3801,7 @@ export class AgentSession {
 	}
 
 	private async _disposeAsyncOnce(): Promise<void> {
-		// Flush kernels/traces for both still-running and retained children; the sync
+		// Flush child sessions/traces for both still-running and retained children; the sync
 		// dispose() below only tears them down synchronously.
 		for (const run of this._activeRlmChildRuns.values()) {
 			if (run.session) {
@@ -7653,7 +7652,7 @@ export class AgentSession {
 			if (!targetHarnessStateDir) {
 				throw new Error("Local harness refinement requires a persisted session; use global refinement instead.");
 			}
-			// Re-read the target state immediately before applying so concurrent kernel
+			// Re-read the target state immediately before applying so concurrent cell
 			// (`rlm.harness`) writes during the LLM pass are not clobbered.
 			const state = loadHarnessState(targetHarnessStateDir, targetScope);
 			const proposal = {
@@ -8476,7 +8475,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Skills exposed to the model (system prompt + kernel). The bundled goal
+	 * Skills exposed to the model (system prompt + cells). The bundled goal
 	 * and compact skills are withheld when disabled for this session.
 	 */
 	private _modelVisibleSkills(): Skill[] {
@@ -8546,12 +8545,12 @@ export class AgentSession {
 				handlers[type] = async (payload) => this.handleRlmHeartbeatHostRequest(type, payload);
 			}
 		}
-		const visibleKernelSkillNames = new Set(
+		const visibleSkillNames = new Set(
 			this._modelVisibleSkills()
 				.filter((skill) => !skill.disableModelInvocation)
 				.map((skill) => skill.name),
 		);
-		if (this._agentMessageController && visibleKernelSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
+		if (this._agentMessageController && visibleSkillNames.has(AGENT_MESSAGE_SKILL_NAME)) {
 			Object.assign(
 				handlers,
 				createAgentMessageHostHandlers({
@@ -8655,7 +8654,7 @@ export class AgentSession {
 		};
 	}
 
-	/** Kernel-era _addWebsearchKeyEnv, host-side: the key resolves fresh per
+	/** Host-side websearch key resolution: the key resolves fresh per
 	 * websearch.run call (so /login mid-session works) and never enters the
 	 * sandbox. Env var wins over the stored credential. */
 	private _resolveSerperApiKey(): string | undefined {
@@ -8671,7 +8670,7 @@ export class AgentSession {
 	}
 
 	// Undefined when there's no persistent artifact dir (e.g. the viewer client):
-	// don't mkdtemp here, since this runs on every kernel build but a viewer never
+	// don't mkdtemp here, since this runs on every runtime build but a viewer never
 	// does RLM work. The temp dir is created lazily in _createChildRlmSessionDir.
 	private _ensureRlmSessionDir(): string | undefined {
 		if (this._rlmSessionDir) {

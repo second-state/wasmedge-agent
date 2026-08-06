@@ -494,9 +494,9 @@ describe("parseArgs", () => {
 		});
 
 		test("parses --no-builtin-tools with explicit --tools flags", () => {
-			const result = parseArgs(["--no-builtin-tools", "--tools", "ipython,dynamic_tool"]);
+			const result = parseArgs(["--no-builtin-tools", "--tools", "rust,dynamic_tool"]);
 			expect(result.noBuiltinTools).toBe(true);
-			expect(result.tools).toEqual(["ipython", "dynamic_tool"]);
+			expect(result.tools).toEqual(["rust", "dynamic_tool"]);
 		});
 
 		test("rejects removed built-in tools", () => {
@@ -504,7 +504,7 @@ describe("parseArgs", () => {
 			expect(result.tools).toEqual(["read", "bash", "edit"]);
 			expect(result.diagnostics).toContainEqual({
 				type: "error",
-				message: "Unknown built-in tool(s): read. Available built-in tools: ipython",
+				message: "Unknown built-in tool(s): read. Available built-in tools: rust, bash",
 			});
 		});
 	});
