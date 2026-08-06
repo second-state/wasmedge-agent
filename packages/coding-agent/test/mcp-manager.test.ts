@@ -73,9 +73,9 @@ describe("McpManager", () => {
 	it("exposes only mcp.refresh when no interactive login is wired", async () => {
 		const manager = new McpManager({ authStorage });
 		const handlers = manager.hostHandlers();
-		expect(Object.keys(handlers).sort()).toEqual(["mcp.config", "mcp.refresh"]);
+		expect(Object.keys(handlers).sort()).toEqual(["mcp.call_tool", "mcp.config", "mcp.list_tools", "mcp.refresh"]);
 
-		// refresh with no credentials fails (so the kernel reports a refresh error,
+		// refresh with no credentials fails (so the cell reports a refresh error,
 		// not a false success), and a missing server arg is rejected.
 		await expect(handlers["mcp.refresh"]({ server: "linear" })).rejects.toThrow("Could not refresh");
 		await expect(handlers["mcp.refresh"]({})).rejects.toThrow("requires a server");
@@ -90,7 +90,13 @@ describe("McpManager", () => {
 			},
 		});
 		const handlers = manager.hostHandlers();
-		expect(Object.keys(handlers).sort()).toEqual(["mcp.begin_login", "mcp.config", "mcp.refresh"]);
+		expect(Object.keys(handlers).sort()).toEqual([
+			"mcp.begin_login",
+			"mcp.call_tool",
+			"mcp.config",
+			"mcp.list_tools",
+			"mcp.refresh",
+		]);
 		await handlers["mcp.begin_login"]({ server: "linear" });
 		expect(called).toBe("linear");
 	});
@@ -173,5 +179,105 @@ describe("McpManager", () => {
 		servers = {};
 		manager.refresh();
 		expect(getOAuthProvider("mcp:acme")).toBeUndefined();
+	});
+});
+
+describe("McpManager host-side client (mcp.list_tools / mcp.call_tool)", () => {
+	let tempDir: string;
+	let authStorage: AuthStorage;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "mcp-client-"));
+		authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		resetOAuthProviders();
+	});
+
+	afterEach(() => {
+		resetOAuthProviders();
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	function fakeConnector() {
+		const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+		const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		let closed = 0;
+		const connector = async (options: { url: string; headers: Record<string, string> }) => {
+			calls.push(options);
+			return {
+				listTools: async () => [{ name: "search_issues", description: "Search", inputSchema: { type: "object" } }],
+				callTool: async (name: string, args: Record<string, unknown>) => {
+					toolCalls.push({ name, args });
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+				close: async () => {
+					closed += 1;
+				},
+			};
+		};
+		return { connector, calls, toolCalls, closedCount: () => closed };
+	}
+
+	it("serves list_tools and call_tool over one cached connection with bearer auth", async () => {
+		authStorage.set("mcp:linear", {
+			type: "oauth",
+			access: "tok-123",
+			refresh: "r",
+			expires: Date.now() + 3600_000,
+		});
+		const fake = fakeConnector();
+		const manager = new McpManager({ authStorage, connector: fake.connector });
+		const handlers = manager.hostHandlers();
+
+		const listed = await handlers["mcp.list_tools"]({ server: "linear" });
+		expect(listed.tools).toEqual([{ name: "search_issues", description: "Search", inputSchema: { type: "object" } }]);
+
+		const result = await handlers["mcp.call_tool"]({
+			server: "linear",
+			tool: "search_issues",
+			arguments: { query: "bug" },
+		});
+		expect(result).toEqual({ content: [{ type: "text", text: "ok" }] });
+		expect(fake.toolCalls).toEqual([{ name: "search_issues", args: { query: "bug" } }]);
+
+		// One connection for both requests, with the OAuth bearer attached.
+		expect(fake.calls).toHaveLength(1);
+		expect(fake.calls[0]?.headers.Authorization).toBe("Bearer tok-123");
+	});
+
+	it("rejects unknown servers and servers without credentials", async () => {
+		const fake = fakeConnector();
+		const manager = new McpManager({ authStorage, connector: fake.connector });
+		const handlers = manager.hostHandlers();
+
+		await expect(handlers["mcp.list_tools"]({ server: "linear" })).rejects.toThrow("not enabled");
+		await expect(handlers["mcp.list_tools"]({ server: "nope" })).rejects.toThrow("unknown MCP server");
+		expect(fake.calls).toHaveLength(0);
+	});
+
+	it("drops the cached connection on refresh so new credentials apply", async () => {
+		authStorage.set("mcp:linear", {
+			type: "oauth",
+			access: "tok-1",
+			refresh: "r",
+			expires: Date.now() + 3600_000,
+		});
+		const fake = fakeConnector();
+		const manager = new McpManager({ authStorage, connector: fake.connector });
+		const handlers = manager.hostHandlers();
+
+		await handlers["mcp.list_tools"]({ server: "linear" });
+		authStorage.set("mcp:linear", {
+			type: "oauth",
+			access: "tok-2",
+			refresh: "r",
+			expires: Date.now() + 3600_000,
+		});
+		manager.refresh();
+		await handlers["mcp.list_tools"]({ server: "linear" });
+
+		expect(fake.calls).toHaveLength(2);
+		expect(fake.calls[1]?.headers.Authorization).toBe("Bearer tok-2");
+		expect(fake.closedCount()).toBe(1);
+		await manager.dispose();
 	});
 });

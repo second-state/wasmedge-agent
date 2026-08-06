@@ -38,6 +38,8 @@ export interface BuildSystemPromptOptions {
 	 * built-ins independent of skill discovery.
 	 */
 	rlmCapabilities?: string[];
+	/** Authed MCP servers reachable from cells via rlm::mcp (DESIGN.md §5.3). */
+	mcpServers?: Array<{ server: string; label: string }>;
 	/** Global harness state to inject as compact persistent context. */
 	harnessState?: HarnessState;
 }
@@ -92,6 +94,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			!selectedTools || selectedTools.includes("rust") || selectedTools.includes("bash");
 		if (customPromptHasFileAccess && skills.length > 0) {
 			prompt += formatSkillsForPrompt(skills);
+		}
+		if (hasRust) {
+			prompt += formatMcpServersForPrompt(options.mcpServers);
 		}
 
 		// Add date and working directory last
@@ -164,11 +169,27 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		prompt += formatSkillsForPrompt(skills);
 	}
 
+	if (hasRust) {
+		prompt += formatMcpServersForPrompt(options.mcpServers);
+	}
+
 	if (appendSection) {
 		prompt += appendSection;
 	}
 
 	return prompt;
+}
+
+function formatMcpServersForPrompt(servers: Array<{ server: string; label: string }> | undefined): string {
+	if (!servers || servers.length === 0) return "";
+	const listing = servers
+		.map((entry) => (entry.label && entry.label !== entry.server ? `${entry.server} (${entry.label})` : entry.server))
+		.join(", ");
+	return (
+		"\n\nMCP servers available from rust cells (host-mediated): " +
+		`${listing}. Discover tools with rlm::mcp::list_tools("<server>")? ` +
+		'and invoke them with rlm::mcp::call_tool("<server>", "<tool>", args)?.'
+	);
 }
 
 function formatPromptGuidelines(promptGuidelines: string[] | undefined): string {

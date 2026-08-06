@@ -234,3 +234,30 @@ describe("formatHarnessStateForPrompt call-contract variants", () => {
 		expect(hints).not.toContain("spawning with");
 	});
 });
+
+describe("mcp server listing", () => {
+	it("lists authed MCP servers with rlm::mcp call forms only in rust sessions", () => {
+		const withServers = buildSystemPrompt({
+			cwd: "/tmp/proj",
+			selectedTools: ["rust", "bash"],
+			mcpServers: [
+				{ server: "linear", label: "Linear" },
+				{ server: "custom", label: "custom" },
+			],
+		});
+		expect(withServers).toContain("MCP servers available from rust cells");
+		expect(withServers).toContain("linear (Linear), custom");
+		expect(withServers).toContain('rlm::mcp::list_tools("<server>")?');
+		expect(withServers).toContain('rlm::mcp::call_tool("<server>", "<tool>", args)?');
+
+		const noServers = buildSystemPrompt({ cwd: "/tmp/proj", selectedTools: ["rust"] });
+		expect(noServers).not.toContain("MCP servers available");
+
+		const noRust = buildSystemPrompt({
+			cwd: "/tmp/proj",
+			selectedTools: ["bash"],
+			mcpServers: [{ server: "linear", label: "Linear" }],
+		});
+		expect(noRust).not.toContain("MCP servers available");
+	});
+});

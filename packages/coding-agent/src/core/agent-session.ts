@@ -4157,6 +4157,10 @@ export class AgentSession {
 			rlmDepth: this._rlmDepth,
 			rlmParentAgent: this._rlmParentAgent,
 			rlmCapabilities: this._rlmCapabilityTokens(),
+			mcpServers: this._mcpManager
+				?.listStatus()
+				.filter((status) => status.enabled)
+				.map((status) => ({ server: status.server, label: status.label })),
 			harnessState: this._loadMergedHarnessState(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
