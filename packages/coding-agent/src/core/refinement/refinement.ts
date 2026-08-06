@@ -134,7 +134,7 @@ runtime, rust-cell sandbox, and native call interface that executes those artifa
 Continual harness components:
 - prompt: supplemental prompt notes only. The base system prompt is immutable and MUST NOT be rewritten.
 - memory: durable facts, decisions, failures, preferences, and outcomes.
-- skill: installed Python REPL skill. Skill create/update edits MUST include a \`reference\` object with \`{"type":"python"}\`, a Python import, and a callable or call pattern; they also MUST include an \`arguments\` object describing accepted inputs, required fields, defaults, and constraints. Use \`{}\` for \`arguments\` only when the Python callable truly needs no external inputs. Include the RLM-native call form \`await <skill_import>(...)\`.
+- skill: mounted Rust crate skill. Skill create/update edits MUST include a \`reference\` object with \`{"type":"rust"}\`, a \`use\` path (e.g. \`agent_lib::skills::my_skill\`), and a callable or call pattern; they also MUST include an \`arguments\` object describing accepted inputs, required fields, defaults, and constraints. Use \`{}\` for \`arguments\` only when the Rust callable truly needs no external inputs. Include the RLM-native call form \`agent_lib::skills::<crate>::run(...)?\`.
 - subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn from a rust cell with \`let handle = rlm::spawn("sub-task")?;\`; admission returns immediately with \`rlm_child_id\`, \`name\`, \`session_dir\`, and \`model\`, never the child's answer. Results arrive only through explicit agent-message replies or files; children reply with \`rlm::msg::send_to_parent(message)?\`. Use \`rlm::list_subagents()?\` to recover direct child handles and \`rlm::msg::send_to_child(name, message)?\` for follow-ups. Do not invent wrappers like \`run_subagent(...)\`.
 
 Scope and persistence policy:
@@ -143,7 +143,7 @@ Scope and persistence policy:
 - Entry ids in the harness overview may carry a display-only \`local:\` or \`global:\` prefix. Always use the bare id (no prefix) in edits.
 - All edits in one refinement apply only to the requested scope's store. During a local refinement, global entries are read-only context: never propose update or delete edits for them; create a local entry instead when a session-specific override is genuinely needed.
 - Project/workspace-specific lessons may be persisted globally only when the title, path, or content explicitly names the project/workspace and the lesson is likely to be reused in future sessions for that project. Prefer local edits when the lesson only belongs in the current conversation.
-- Use memory for declarative facts and preferences, skill for repeatable procedures exposed as Python calls, prompt for narrow behavioral policy addendums, and subagent for reusable delegation roles.
+- Use memory for declarative facts and preferences, skill for repeatable procedures exposed as Rust calls, prompt for narrow behavioral policy addendums, and subagent for reusable delegation roles.
 - Create or update the smallest relevant component: repeated delegation roles should become subagent specs, repeated procedures should become skills, durable facts/preferences should become memories, and narrow behavioral policies should become prompt addendums.
 - When an edit is persisted, include metadata such as \`{"scope":"local"}\` or \`{"scope":"global"}\` when that helps future review understand the intended blast radius.
 
@@ -164,7 +164,7 @@ JSON only with this exact shape:
       "title": "required for create/update except delete",
       "content": "required for create/update except delete",
       "path": "optional grouping path",
-      "reference": {"type": "python", "import": "package.module", "callable": "function_name", "call_pattern": "await function_name(...)"},
+      "reference": {"type": "rust", "use": "agent_lib::skills::my_skill", "callable": "run", "call_pattern": "agent_lib::skills::my_skill::run(...)?"},
       "arguments": {"name": {"type": "string", "required": true, "description": "accepted input"}},
       "metadata": {},
       "reason": "why this edit is useful"
@@ -688,19 +688,22 @@ function validateEdit(edit: RefinementEdit, computedId?: string): string | undef
 	if (edit.action !== "delete" && edit.kind === "skill") {
 		const reference = edit.reference;
 		if (!reference) {
-			return `${edit.action} skill requires python reference`;
+			return `${edit.action} skill requires rust reference`;
 		}
-		if (reference.type !== "python") {
-			return `${edit.action} skill reference.type must be python`;
+		// Kernel-era python references load fine but cannot be (re)created —
+		// kept in sync with the guest validator in rlm::harness (DESIGN §4.3).
+		if (reference.type === "python") {
+			return `${edit.action} skill reference.type "python" is legacy (read-only); create rust skills with type "rust"`;
 		}
-		const hasImport =
-			(typeof reference.import === "string" && reference.import.length > 0) ||
-			(typeof reference.python_import === "string" && reference.python_import.length > 0);
+		if (reference.type !== "rust") {
+			return `${edit.action} skill reference.type must be rust`;
+		}
+		const hasUse = typeof reference.use === "string" && reference.use.length > 0;
 		const hasCallable =
 			(typeof reference.callable === "string" && reference.callable.length > 0) ||
 			(typeof reference.call_pattern === "string" && reference.call_pattern.length > 0);
-		if (!hasImport) {
-			return `${edit.action} skill requires python import`;
+		if (!hasUse) {
+			return `${edit.action} skill requires a rust use path (e.g. agent_lib::skills::my_skill)`;
 		}
 		if (!hasCallable) {
 			return `${edit.action} skill requires callable or call_pattern`;
