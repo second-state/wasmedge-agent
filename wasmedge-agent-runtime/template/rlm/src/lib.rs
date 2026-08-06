@@ -12,6 +12,7 @@ pub mod deps;
 pub mod display;
 pub mod error;
 pub mod goal;
+pub mod harness;
 pub mod heartbeat;
 pub mod mcp;
 pub mod msg;
