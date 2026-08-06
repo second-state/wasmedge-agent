@@ -11,9 +11,10 @@ use serde_json::json;
 use crate::bridge;
 use crate::error::Error;
 
-/// Soft cap for attachment payloads (base64 chars), DESIGN.md §2.9. The
-/// thumbnailing port (WP6) will shrink larger images guest-side.
-const MAX_ATTACHMENT_BASE64_CHARS: usize = 350_000;
+/// Source-image cap (raw bytes). The host thumbnails oversized images down to
+/// the context budget (≤1200px / ≤350K base64, DESIGN.md §2.9); this cap only
+/// bounds what travels over the bridge.
+const MAX_SOURCE_IMAGE_BYTES: usize = 20_000_000;
 
 /// Show a change made to a file as a diff card.
 pub fn diff(path: &str, old: &str, new: &str) -> Result<()> {
@@ -60,19 +61,18 @@ pub fn attach_image(path: impl AsRef<Path>) -> Result<()> {
         println!("[attachment: {} ({} bytes, {mime})]", path.display(), bytes.len());
         return Ok(());
     }
-    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    if data.len() > MAX_ATTACHMENT_BASE64_CHARS {
+    if bytes.len() > MAX_SOURCE_IMAGE_BYTES {
         return Err(Error::new(
             crate::error::ErrorKind::Io,
             format!(
-                "attachment {} is {} base64 chars (limit {MAX_ATTACHMENT_BASE64_CHARS}); \
-                 downscale the image first",
+                "attachment {} is {} bytes (limit {MAX_SOURCE_IMAGE_BYTES}); resize it first",
                 path.display(),
-                data.len()
+                bytes.len()
             ),
         )
         .into());
     }
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     bridge::emit(
         "display.attachment",
         json!({"mimeType": mime, "data": data, "path": path.to_string_lossy()}),

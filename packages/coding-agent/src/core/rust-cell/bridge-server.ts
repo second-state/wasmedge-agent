@@ -21,11 +21,16 @@ export const BRIDGE_PROTOCOL_VERSION = 1;
  * HOST_REQUEST_DISPOSE_TIMEOUT_MS). */
 const IN_FLIGHT_SETTLE_TIMEOUT_MS = 5000;
 
-/** Frame guard: attachments are base64 ≤ 10 MiB, so any well-formed line fits. */
+/** Frame guard: attachments are base64 ≤ 28 MiB on the wire, so any
+ * well-formed line fits. */
 const MAX_LINE_BYTES = 32 * 1024 * 1024;
 
 /** Hard cap on attachment payloads (base64 chars), per DESIGN.md §2.9. */
-const MAX_ATTACHMENT_BASE64_CHARS = 10 * 1024 * 1024;
+/** Wire cap for attachment payloads; the host thumbnails before sinking. */
+const MAX_ATTACHMENT_WIRE_CHARS = 28 * 1024 * 1024;
+/** Context budget for a sunk attachment (base64 chars), DESIGN.md §2.9. */
+const MAX_ATTACHMENT_SINK_CHARS = 350_000;
+const MAX_ATTACHMENT_DIMENSION = 1200;
 
 export interface BridgeEmitSinks {
 	onDiff?: (diff: CellDiffDisplay) => void;
@@ -349,19 +354,73 @@ export class BridgeServer {
 				break;
 			}
 			case "display.attachment": {
-				const attachment = this.parseAttachment(payload);
-				if (attachment) {
-					this.scope?.sinks?.onAttachment?.(attachment);
-				} else {
-					this.diagnostic("bridge emit display.attachment ignored: invalid or oversized payload");
-				}
-				break;
+				// Async: thumbnail before sinking; the ack (with an optional error)
+				// goes out only after processing, which also keeps backpressure.
+				void this.processAttachment(socket, id, payload);
+				return;
 			}
 			default:
 				// Unknown emit types are acked and skipped so newer guests degrade softly.
 				this.diagnostic(`bridge emit ignored: unknown type "${String(message.type)}"`);
 		}
 		this.send(socket, { v: BRIDGE_PROTOCOL_VERSION, kind: "ack", id });
+	}
+
+	/** Validate, thumbnail (≤1200px / ≤350K base64 via the host photon
+	 * pipeline), sink, then ack — with an error field when the attachment
+	 * cannot enter context, so the cell sees the failure. */
+	private async processAttachment(socket: Socket, id: number, payload: Record<string, unknown>): Promise<void> {
+		const ack = (error?: string) => {
+			if (error) this.diagnostic(`bridge emit display.attachment rejected: ${error}`);
+			this.send(socket, {
+				v: BRIDGE_PROTOCOL_VERSION,
+				kind: "ack",
+				id,
+				...(error ? { error } : {}),
+			});
+		};
+		if (typeof payload.mimeType !== "string" || typeof payload.data !== "string") {
+			ack("invalid attachment payload (mimeType/data)");
+			return;
+		}
+		if (payload.data.length > MAX_ATTACHMENT_WIRE_CHARS) {
+			ack(`attachment is ${payload.data.length} base64 chars (wire limit ${MAX_ATTACHMENT_WIRE_CHARS})`);
+			return;
+		}
+		const path = typeof payload.path === "string" ? payload.path : undefined;
+		let data = payload.data;
+		let mimeType = payload.mimeType;
+		try {
+			// SVG passes through untouched (vector, no photon decode); everything
+			// else goes through the resize pipeline for dimension/size budgeting.
+			if (mimeType !== "image/svg+xml") {
+				const { resizeImage } = await import("../../utils/image-resize.js");
+				const resized = await resizeImage(
+					{ type: "image", data, mimeType },
+					{
+						maxWidth: MAX_ATTACHMENT_DIMENSION,
+						maxHeight: MAX_ATTACHMENT_DIMENSION,
+						maxBytes: MAX_ATTACHMENT_SINK_CHARS,
+					},
+				);
+				if (resized) {
+					data = resized.data;
+					mimeType = resized.mimeType;
+				}
+			}
+		} catch (error) {
+			ack(`attachment could not be processed: ${errorMessage(error)}`);
+			return;
+		}
+		if (data.length > MAX_ATTACHMENT_SINK_CHARS) {
+			ack(
+				`attachment is ${data.length} base64 chars after processing (limit ${MAX_ATTACHMENT_SINK_CHARS}); ` +
+					"the image could not be thumbnailed on this host — downscale it first",
+			);
+			return;
+		}
+		this.scope?.sinks?.onAttachment?.({ mimeType, data, ...(path ? { path } : {}) });
+		ack();
 	}
 
 	private parseDiff(payload: Record<string, unknown>): CellDiffDisplay | undefined {
@@ -377,20 +436,6 @@ export class BridgeServer {
 			oldStr: payload.oldStr,
 			newStr: payload.newStr,
 			...(typeof payload.startLine === "number" ? { startLine: payload.startLine } : {}),
-		};
-	}
-
-	private parseAttachment(payload: Record<string, unknown>): CellAttachment | undefined {
-		if (typeof payload.mimeType !== "string" || typeof payload.data !== "string") {
-			return undefined;
-		}
-		if (payload.data.length > MAX_ATTACHMENT_BASE64_CHARS) {
-			return undefined;
-		}
-		return {
-			mimeType: payload.mimeType,
-			data: payload.data,
-			...(typeof payload.path === "string" ? { path: payload.path } : {}),
 		};
 	}
 
