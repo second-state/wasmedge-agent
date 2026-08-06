@@ -1,6 +1,6 @@
 /**
  * Namespaced `_meta` payloads for prime-agent capabilities that ACP has no
- * native concept for (IPython cell semantics, RLM subagents, autonomous gates,
+ * native concept for (rust cell semantics, RLM subagents, autonomous gates,
  * goals, heartbeats, continual harness state).
  *
  * ACP reserves `_meta` on capability objects, notifications, tool calls, and
@@ -32,15 +32,15 @@ export interface PrimeAgentAutonomousMeta {
 	limitReason?: string;
 }
 
-export interface PrimeAgentIpythonAttachmentMeta {
+export interface PrimeAgentRustAttachmentMeta {
 	mimeType?: string;
 	path?: string;
 	bytes?: number;
 }
 
-export interface PrimeAgentIpythonMeta {
-	/** Media the cell loaded into context, as reported by the ipython tool. */
-	attachments?: PrimeAgentIpythonAttachmentMeta[];
+export interface PrimeAgentRustMeta {
+	/** Media the cell loaded into context, as reported by the rust tool. */
+	attachments?: PrimeAgentRustAttachmentMeta[];
 	/** Number of diffs the cell displayed. */
 	diffCount?: number;
 }
@@ -86,7 +86,7 @@ export interface PrimeAgentSessionMeta {
 	compaction?: { tokensBefore?: number; summary?: string };
 	subagents?: PrimeAgentSubagentMeta[];
 	autonomous?: PrimeAgentAutonomousMeta;
-	ipython?: PrimeAgentIpythonMeta;
+	rust?: PrimeAgentRustMeta;
 }
 
 /** Wrap a prime-agent payload in its reverse-domain `_meta` envelope. */

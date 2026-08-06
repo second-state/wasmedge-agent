@@ -40,18 +40,18 @@ describe("ACP session event mapping", () => {
 	});
 
 	it("treats IPython as an execute tool call carrying its cell source", () => {
-		expect(acpToolKind("ipython")).toBe("execute");
+		expect(acpToolKind("rust")).toBe("execute");
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_start",
 			toolCallId: "call-1",
-			toolName: "ipython",
+			toolName: "rust",
 			args: { code: "print(1)" },
 		} as AgentConnectionSessionEvent);
 		expect(updates).toEqual([
 			{
 				sessionUpdate: "tool_call",
 				toolCallId: "call-1",
-				title: "IPython cell",
+				title: "Rust cell",
 				kind: "execute",
 				status: "in_progress",
 				rawInput: { code: "print(1)" },
@@ -60,12 +60,12 @@ describe("ACP session event mapping", () => {
 	});
 
 	it("carries rich IPython output from the fields the tool actually reports", () => {
-		// The ipython tool reports media/diffs under `details`, so the mapping must
+		// The rust tool reports media/diffs under `details`, so the mapping must
 		// read those exact fields rather than an invented MIME bundle.
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_end",
 			toolCallId: "call-1",
-			toolName: "ipython",
+			toolName: "rust",
 			result: {
 				output: "done",
 				details: {
@@ -84,7 +84,7 @@ describe("ACP session event mapping", () => {
 		});
 		expect(updates[0]?._meta).toEqual({
 			[PRIME_AGENT_META_NAMESPACE]: {
-				ipython: {
+				rust: {
 					attachments: [{ mimeType: "image/png", path: "/tmp/plot.png", bytes: 5 }],
 					diffCount: 1,
 				},
@@ -96,7 +96,7 @@ describe("ACP session event mapping", () => {
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_end",
 			toolCallId: "call-3",
-			toolName: "ipython",
+			toolName: "rust",
 			result: { output: "plain", details: { stdout: "plain" } },
 			isError: false,
 		} as AgentConnectionSessionEvent);
@@ -107,7 +107,7 @@ describe("ACP session event mapping", () => {
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_end",
 			toolCallId: "call-2",
-			toolName: "ipython",
+			toolName: "rust",
 			result: "boom",
 			isError: true,
 		} as AgentConnectionSessionEvent);
