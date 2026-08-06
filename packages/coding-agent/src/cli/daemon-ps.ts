@@ -1075,7 +1075,36 @@ async function stopTrackedProcess(
 	return !isProcessAlive(pid);
 }
 
+export interface ReapReport {
+	reaped: Array<{ socketPath: string; action: string }>;
+	skipped: Array<{ socketPath: string; reason: string }>;
+}
+
 export async function runReap(json: boolean, force: boolean): Promise<void> {
+	const report = await performReap(force);
+	if (json) {
+		console.log(JSON.stringify(report, null, 2));
+		return;
+	}
+	printReapReport(report);
+}
+
+/** Human rendering of a reap outcome; shared by runReap and doctor. */
+export function printReapReport({ reaped, skipped }: ReapReport): void {
+	if (reaped.length === 0 && skipped.length === 0) {
+		console.log("No background services found.");
+		return;
+	}
+	for (const entry of reaped) {
+		console.log(chalk.green(`reaped ${entry.socketPath}: ${entry.action}`));
+	}
+	for (const entry of skipped) {
+		console.log(chalk.dim(`kept   ${entry.socketPath}: ${entry.reason}`));
+	}
+}
+
+/** The reap itself, returning what happened instead of printing it. */
+export async function performReap(force: boolean): Promise<ReapReport> {
 	const daemons = await discoverDaemons();
 	const reaped: Array<{ socketPath: string; action: string }> = [];
 	const skipped: Array<{ socketPath: string; reason: string }> = [];
@@ -1120,20 +1149,7 @@ export async function runReap(json: boolean, force: boolean): Promise<void> {
 		}
 	}
 
-	if (json) {
-		console.log(JSON.stringify({ reaped, skipped }, null, 2));
-		return;
-	}
-	if (reaped.length === 0 && skipped.length === 0) {
-		console.log("No background services found.");
-		return;
-	}
-	for (const entry of reaped) {
-		console.log(chalk.green(`reaped ${entry.socketPath}: ${entry.action}`));
-	}
-	for (const entry of skipped) {
-		console.log(chalk.dim(`kept   ${entry.socketPath}: ${entry.reason}`));
-	}
+	return { reaped, skipped };
 }
 
 type ReapOutcome = { reaped: string } | { skipped: string };

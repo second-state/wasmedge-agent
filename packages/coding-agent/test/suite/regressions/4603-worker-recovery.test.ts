@@ -1014,10 +1014,16 @@ describe("ENG-4603 worker recovery convergence", () => {
 		writeFileSync(lsofPath, '#!/bin/sh\nexec "$ENG_4603_SYSTEM_LSOF" -nP -F pn -U -a -p "$ENG_4603_LSOF_PIDS"\n', {
 			mode: 0o700,
 		});
+		// doctor's runtime checks/fixes must stay hermetic: point them at a tiny
+		// fake template so --fix never vendors or builds the real one mid-test.
+		const fakeTemplateDir = join(paths.agentDir, "fake-template");
+		mkdirSync(fakeTemplateDir, { recursive: true });
+		writeFileSync(join(fakeTemplateDir, "Cargo.toml"), '[workspace]\nmembers = []\nresolver = "2"\n');
 		const lsofEnvironment = {
 			ENG_4603_LSOF_PIDS: `${predecessor.child.pid},${successor.child.pid},${workerPid}`,
 			ENG_4603_SYSTEM_LSOF: systemLsofPath,
 			PATH: `${paths.agentDir}:${process.env.PATH ?? ""}`,
+			WASMEDGE_AGENT_TEMPLATE_DIR: fakeTemplateDir,
 		};
 		const listenersBeforeShutdown = spawnSync(lsofPath, [], {
 			encoding: "utf8",
@@ -1048,7 +1054,6 @@ describe("ENG-4603 worker recovery convergence", () => {
 
 		const contracts = [
 			{ args: ["status", "--json"], json: [] },
-			{ args: ["doctor", "--fix", "--json"], json: { reaped: [], skipped: [] } },
 			{ args: ["shutdown", "--force", "--json"], json: { stopped: [], failed: [] } },
 		];
 		for (const contract of contracts) {
@@ -1058,10 +1063,26 @@ describe("ENG-4603 worker recovery convergence", () => {
 			}
 			expect(JSON.parse(result.stdout)).toEqual(contract.json);
 		}
-		for (const args of [["status"], ["doctor", "--fix"], ["shutdown", "--force"]]) {
+		// doctor --fix --json is one document: runtime checks (machine-dependent)
+		// plus the reap outcome, which must be empty after the shutdown above.
+		const doctorJson = await runCli(paths, ["doctor", "--fix", "--json"], 60_000, lsofEnvironment);
+		if (doctorJson.code !== 0) {
+			throw new Error(`doctor --fix --json exited ${doctorJson.code}: ${doctorJson.stderr}`);
+		}
+		expect(JSON.parse(doctorJson.stdout)).toMatchObject({
+			runtime: expect.any(Array),
+			fixes: expect.any(Array),
+			reaped: [],
+			skipped: [],
+		});
+		for (const args of [["status"], ["shutdown", "--force"]]) {
 			const result = await runCli(paths, args, 60_000, lsofEnvironment);
 			expect(result.code).toBe(0);
 			expect(result.stdout).toBe("No background services found.\n");
 		}
+		const doctorHuman = await runCli(paths, ["doctor", "--fix"], 60_000, lsofEnvironment);
+		expect(doctorHuman.code).toBe(0);
+		expect(doctorHuman.stdout).toContain("Runtime:");
+		expect(doctorHuman.stdout.endsWith("Background services:\nNo background services found.\n")).toBe(true);
 	}, 150_000);
 });

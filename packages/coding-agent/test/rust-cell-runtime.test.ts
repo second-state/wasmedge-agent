@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConcurrency } from "../src/core/rust-cell/build-gate.js";
+import { collectRuntimeChecks } from "../src/core/rust-cell/doctor.js";
 import { resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
 
 describe("resolveTemplateDir", () => {
@@ -55,5 +56,38 @@ describe("resolveBuildConcurrency", () => {
 		expect(resolveBuildConcurrency()).toBe(12);
 		process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS = "500";
 		expect(resolveBuildConcurrency()).toBe(32);
+	});
+});
+
+describe("collectRuntimeChecks", () => {
+	const tempDirs: string[] = [];
+	afterEach(() => {
+		delete process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
+		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("reports an unvendored cold template without throwing", () => {
+		const dir = mkdtempSync(join(tmpdir(), "doctor-template-"));
+		tempDirs.push(dir);
+		writeFileSync(join(dir, "Cargo.toml"), "[workspace]\n");
+		process.env.WASMEDGE_AGENT_TEMPLATE_DIR = dir;
+
+		const checks = collectRuntimeChecks();
+		const byName = new Map(checks.map((check) => [check.name, check]));
+		expect(byName.get("workspace template")).toMatchObject({ ok: true, detail: dir });
+		expect(byName.get("template vendor")).toMatchObject({ ok: false });
+		expect(byName.get("template build")).toMatchObject({ ok: false, detail: "cold" });
+		// Toolchain checks exist regardless of what this machine has installed.
+		expect(byName.has("cargo")).toBe(true);
+		expect(byName.has("wasm32-wasip1 target")).toBe(true);
+		expect(byName.has("wasmedge")).toBe(true);
+	});
+
+	it("degrades a broken template override to a failed check", () => {
+		process.env.WASMEDGE_AGENT_TEMPLATE_DIR = join(tmpdir(), "doctor-missing-template");
+		const checks = collectRuntimeChecks();
+		const template = checks.find((check) => check.name === "workspace template");
+		expect(template).toMatchObject({ ok: false });
+		expect(checks.some((check) => check.name === "template vendor")).toBe(false);
 	});
 });

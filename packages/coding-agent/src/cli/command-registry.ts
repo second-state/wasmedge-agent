@@ -82,8 +82,13 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 	{
 		path: ["doctor"],
 		usage: "doctor [--fix] [--json]",
-		summary: "Inspect and safely clean up background services",
-		options: ["--fix   Remove stale sockets and stop idle orphaned services", "--json  Print JSON"],
+		summary: "Check the Rust cell runtime and background services",
+		description:
+			"Reports toolchain (cargo, wasm32-wasip1, wasmedge), template vendor/build state, and daemon health.",
+		options: [
+			"--fix   Add the wasm target, vendor + prebuild the template, and clean up stale services",
+			"--json  Print JSON",
+		],
 	},
 	{
 		path: ["shutdown"],

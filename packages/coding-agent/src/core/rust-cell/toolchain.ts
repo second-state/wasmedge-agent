@@ -21,27 +21,45 @@ function findOnPath(bin: string): string | undefined {
 	return undefined;
 }
 
+/** Best-guess cargo location; existence is the caller's concern (doctor
+ * reports it, resolveToolchain throws). */
+export function findCargoBin(): string {
+	return process.env.WASMEDGE_AGENT_CARGO ?? findOnPath("cargo") ?? join(homedir(), ".cargo", "bin", "cargo");
+}
+
+export function findRustupBin(): string {
+	return findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
+}
+
+export function findWasmedgeBin(): string {
+	return (
+		process.env.WASMEDGE_AGENT_WASMEDGE ?? findOnPath("wasmedge") ?? join(homedir(), ".wasmedge", "bin", "wasmedge")
+	);
+}
+
+/** True when rustup exists but the wasm target is missing (fixable). False
+ * also without rustup (e.g. distro/homebrew Rust): the precheck is skipped
+ * and a genuinely missing target surfaces as the cargo build error. */
+export function wasmTargetMissing(): boolean {
+	const rustupBin = findRustupBin();
+	if (!existsSync(rustupBin)) return false;
+	const targets = execFileSync(rustupBin, ["target", "list", "--installed"], { encoding: "utf-8" });
+	return !targets.includes("wasm32-wasip1");
+}
+
 export function resolveToolchain(): ToolchainInfo {
-	const cargoBin =
-		process.env.WASMEDGE_AGENT_CARGO ?? findOnPath("cargo") ?? join(homedir(), ".cargo", "bin", "cargo");
+	const cargoBin = findCargoBin();
 	if (!existsSync(cargoBin)) {
 		throw new Error(`cargo not found (checked WASMEDGE_AGENT_CARGO, PATH, ~/.cargo/bin)`);
 	}
 
-	const wasmedgeBin =
-		process.env.WASMEDGE_AGENT_WASMEDGE ?? findOnPath("wasmedge") ?? join(homedir(), ".wasmedge", "bin", "wasmedge");
+	const wasmedgeBin = findWasmedgeBin();
 	if (!existsSync(wasmedgeBin)) {
 		throw new Error(`wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path`);
 	}
 
-	// Without rustup (e.g. distro/homebrew Rust) skip the target precheck; a
-	// missing target then surfaces as the cargo build error instead.
-	const rustupBin = findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
-	if (existsSync(rustupBin)) {
-		const targets = execFileSync(rustupBin, ["target", "list", "--installed"], { encoding: "utf-8" });
-		if (!targets.includes("wasm32-wasip1")) {
-			throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
-		}
+	if (wasmTargetMissing()) {
+		throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
 	}
 
 	const wasmedgeVersion = execFileSync(wasmedgeBin, ["--version"], { encoding: "utf-8" }).trim();
