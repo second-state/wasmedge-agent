@@ -261,3 +261,11 @@ describe("mcp server listing", () => {
 		expect(noRust).not.toContain("MCP servers available");
 	});
 });
+
+describe("harness doctrine", () => {
+	it("teaches rlm::harness stores in the core capabilities", () => {
+		const prompt = buildRlmPrompt({ ...BASE, activeTools: ["rust"] });
+		expect(prompt).toContain("rlm::harness::local()?");
+		expect(prompt).toContain("rlm::harness::global()?");
+	});
+});

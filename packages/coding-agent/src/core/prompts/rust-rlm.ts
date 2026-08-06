@@ -51,6 +51,9 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
   rich output to the user.
 - \`rlm::host_request(type, payload)?\` is the generic gate for host capabilities
   (e.g. \`rlm::host_request("websearch.run", json!({"query": q}))?\`).
+- Continual harness state: \`rlm::harness::local()?\` / \`rlm::harness::global()?\`
+  (memories, skills, prompt notes, subagent specs — create/update/delete/list/
+  overview). Keep entries small and evidence-backed.
 
 Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
 dependencies yourself. If a task genuinely needs another crate, tell the user (they

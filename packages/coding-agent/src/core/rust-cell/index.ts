@@ -59,6 +59,10 @@ export interface RustCellProvisionerOptions {
 	cellEnv?: Record<string, string>;
 	/** Rust skill crates to mount as agent_lib::skills::* (DESIGN.md §4.1). */
 	rustSkills?: RustSkillMount[];
+	/** Session-local harness state dir (rlm::harness::local, DESIGN.md §4.3). */
+	harnessDir?: string;
+	/** Global harness state dir (rlm::harness::global). */
+	globalHarnessDir?: string;
 	/** Sink for bridge protocol diagnostics. */
 	onDiagnostic?: (message: string) => void;
 }
@@ -147,6 +151,8 @@ export class RustCellProvisioner {
 			cellTimeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
 			bridge: this.bridgeServer,
 			cellEnv: this.options.cellEnv,
+			harnessDir: this.options.harnessDir,
+			globalHarnessDir: this.options.globalHarnessDir,
 		});
 	}
 

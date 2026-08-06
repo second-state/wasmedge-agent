@@ -3,7 +3,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	type CellInput,
@@ -270,6 +270,16 @@ export class CellRunner {
 			args.push("--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`);
 		}
 		args.push("--dir", `/agent/state:${join(ws, "state")}`);
+		// Harness stores are shared with the host /refine flow; rlm::harness
+		// handles concurrent writers via its mtime re-sync (DESIGN §4.3).
+		if (this.opts.harnessDir) {
+			mkdirSync(this.opts.harnessDir, { recursive: true });
+			args.push("--dir", `/agent/harness:${this.opts.harnessDir}`);
+		}
+		if (this.opts.globalHarnessDir) {
+			mkdirSync(this.opts.globalHarnessDir, { recursive: true });
+			args.push("--dir", `/agent/harness-global:${this.opts.globalHarnessDir}`);
+		}
 		args.push("--dir", `/scratch:${createScratchDir(ws)}`);
 		for (const [name, value] of Object.entries(cellEnv)) {
 			args.push("--env", `${name}=${value}`);
