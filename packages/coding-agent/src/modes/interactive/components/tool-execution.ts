@@ -10,6 +10,7 @@ import type { AgentConnectionToolDefinition } from "../../agent-connection/index
 import { type Theme, theme } from "../theme/theme.js";
 import { getWorkingPulseFrame, workingIconFrame } from "../theme/working-icon.js";
 import { FileChangeSummaryComponent, getToolFileChanges } from "./edit-summary.js";
+import { getRustCodeFromArgs, RustCellComponent } from "./rust-cell.js";
 import { ToolPanel } from "./tool-panel.js";
 
 export interface ToolExecutionOptions {
@@ -69,6 +70,7 @@ function createReplayBuiltInToolDefinition(
 export class ToolExecutionComponent extends Container {
 	private contentPanel: ToolPanel;
 	private selfRenderContainer: Container;
+	private rustCellComponent?: RustCellComponent;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
 	private rendererState: any = {};
@@ -156,6 +158,9 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getRenderShell(): "default" | "self" {
+		if (this.shouldUseRustCellRenderer()) {
+			return "self";
+		}
 		if (!this.builtInToolDefinition) {
 			return this.toolDefinition?.renderShell ?? "default";
 		}
@@ -163,6 +168,10 @@ export class ToolExecutionComponent extends Container {
 			return this.builtInToolDefinition.renderShell ?? "default";
 		}
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
+	}
+
+	private shouldUseRustCellRenderer(): boolean {
+		return this.toolName === "rust" && !this.toolDefinition?.renderCall && !this.toolDefinition?.renderResult;
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
@@ -313,7 +322,31 @@ export class ToolExecutionComponent extends Container {
 		this.hideComponent = false;
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
 			this.selfRenderContainer.clear();
-			hasContent = this.mountRenderers(this.selfRenderContainer, true);
+
+			if (this.shouldUseRustCellRenderer()) {
+				const state = {
+					code: getRustCodeFromArgs(this.args),
+					content: this.result?.content,
+					details: this.result?.details,
+					isPartial: this.isPartial,
+					isError: this.result?.isError ?? false,
+					expanded: this.expanded,
+					executionStarted: this.executionStarted,
+					argsComplete: this.argsComplete,
+					showExpandHint: this.showExpandHint,
+					showImages: this.showImages,
+					cwd: this.cwd,
+				};
+				if (!this.rustCellComponent) {
+					this.rustCellComponent = new RustCellComponent(state);
+				} else {
+					this.rustCellComponent.update(state);
+				}
+				this.selfRenderContainer.addChild(this.rustCellComponent);
+				hasContent = true;
+			} else {
+				hasContent = this.mountRenderers(this.selfRenderContainer, true);
+			}
 		} else {
 			// Default shell: tool panel with a `label · status` header so the block
 			// is self-identifying. The header replaces the bold-tool-name fallback.
@@ -358,7 +391,7 @@ export class ToolExecutionComponent extends Container {
 		const isBuiltInEdit =
 			this.toolName === "edit" &&
 			(this.toolDefinition === undefined || this.toolDefinition.replayBuiltInToolName === "edit");
-		if (!this.expanded && this.result && isBuiltInEdit) {
+		if (!this.expanded && this.result && (isBuiltInEdit || this.shouldUseRustCellRenderer())) {
 			const changes = getToolFileChanges(this.toolName, this.args, this.result, this.cwd);
 			if (changes.length > 0) {
 				const container = this.usesSelfRenderShell() ? this.selfRenderContainer : this.contentPanel;

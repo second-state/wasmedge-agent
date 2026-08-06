@@ -63,7 +63,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const contextFiles = providedContextFiles ?? [];
 	const skills = providedSkills ?? [];
 	const tools = selectedTools ?? ["rust", "bash"];
-	const hasIpython = tools.includes("rust");
+	const hasRust = tools.includes("rust");
 	const hasBash = tools.includes("bash");
 	const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
 	const visiblePythonSkillImportNames = getPythonSkillRuntimeInfo(visibleSkills).map((skill) => skill.importName);
@@ -103,7 +103,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		}
 
 		if (harnessState) {
-			prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeIpythonExamples: hasIpython, includeShellExamples: hasBash, includeRefineExamples: hasIpython && hasRefineSkill })}`;
+			prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRust && hasRefineSkill })}`;
 		}
 
 		if (appendSection) {
@@ -126,7 +126,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// Appended AFTER the trained buildRlmPrompt prefix, and before the harness-state
 	// menu, so the model reads when/why to delegate and then sees the concrete subagent
 	// specs it can match against — the same ordering as Claude Code's Agent tool.
-	if ((allowRecursion ?? true) && hasIpython) {
+	if ((allowRecursion ?? true) && hasRust) {
 		const visiblePythonSkillNames = new Set(
 			getPythonSkillRuntimeInfo(visibleSkills).map((skill) => skill.importName),
 		);
@@ -138,7 +138,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	}
 
 	if (harnessState) {
-		prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeIpythonExamples: hasIpython, includeShellExamples: hasBash, includeRefineExamples: hasIpython && hasRefineSkill })}`;
+		prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRust && hasRefineSkill })}`;
 	}
 
 	const guidelines = formatPromptGuidelines(promptGuidelines);

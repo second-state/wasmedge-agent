@@ -22,7 +22,7 @@ const HEREDOC_PATTERN = /<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
 const PATH_ASSIGN_PATTERN = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:Path|pathlib\.Path)\(["']([^"']+)["']\)/;
 const STRING_ASSIGN_PATTERN = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']([^"']+)["']/;
 
-export type CodePreviewLanguage = "bash" | "python";
+export type CodePreviewLanguage = "bash" | "python" | "rust";
 
 export interface CodePreview {
 	language: CodePreviewLanguage;
@@ -429,4 +429,65 @@ export function previewPythonCode(code: string): CodePreview {
 		};
 	}
 	return { language: "python", text: "" };
+}
+
+// Rust cell previews: pick the most informative statement for the collapsed
+// header line. Scaffolding (use/fn main/braces/attributes/comments) scores at
+// the bottom; rlm and prelude calls tell the most about what the cell does.
+const RUST_SCAFFOLD_PATTERN = /^\s*(?:use\s|fn\s+main\b|#\[|#!\[|\}|\{|\/\/|$)/;
+const RUST_RLM_CALL_PATTERN = /\brlm::[A-Za-z_][A-Za-z0-9_:]*\s*\(/;
+const RUST_PRELUDE_CALL_PATTERN =
+	/\b(?:edit_exact|write_file|read_lines|read_to_string|grep|walk|helpers::[A-Za-z_][A-Za-z0-9_:]*)\s*\(/;
+const RUST_PRINT_PATTERN = /^\s*(?:println!|eprintln!|print!|eprint!)\s*\(/;
+const RUST_LET_CALL_PATTERN =
+	/^\s*let\s+(?:mut\s+)?[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=\s*.*[A-Za-z_][A-Za-z0-9_:]*\s*[(!]/;
+const RUST_CALL_PATTERN = /[A-Za-z_][A-Za-z0-9_:]*\s*\(/;
+const RUST_CONTROL_PATTERN = /^\s*(?:for\b|while\b|if\b|match\b|loop\b|else\b)/;
+
+function rustLineScore(line: string): number {
+	if (!line.trim()) {
+		return -1;
+	}
+	if (RUST_SCAFFOLD_PATTERN.test(line)) {
+		return 5;
+	}
+	if (RUST_RLM_CALL_PATTERN.test(line)) {
+		return 70;
+	}
+	if (RUST_PRELUDE_CALL_PATTERN.test(line)) {
+		return 65;
+	}
+	if (RUST_LET_CALL_PATTERN.test(line)) {
+		return 60;
+	}
+	if (RUST_PRINT_PATTERN.test(line)) {
+		return RUST_CALL_PATTERN.test(line.replace(RUST_PRINT_PATTERN, "")) ? 50 : 35;
+	}
+	if (RUST_CONTROL_PATTERN.test(line)) {
+		return 20;
+	}
+	if (RUST_CALL_PATTERN.test(line)) {
+		return 55;
+	}
+	return 25;
+}
+
+export function previewRustCode(code: string): CodePreview {
+	const lines = code.split("\n");
+	let bestIndex: number | undefined;
+	// Scaffolding scores 5; previews only render for real statements above it.
+	let bestScore = 5;
+
+	for (let i = 0; i < lines.length; i++) {
+		const score = rustLineScore(lines[i] ?? "");
+		if (score > bestScore) {
+			bestIndex = i;
+			bestScore = score;
+		}
+	}
+
+	if (bestIndex !== undefined) {
+		return { language: "rust", text: descriptor(lines[bestIndex] ?? "") };
+	}
+	return { language: "rust", text: "" };
 }

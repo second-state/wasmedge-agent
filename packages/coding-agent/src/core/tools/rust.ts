@@ -104,8 +104,17 @@ export function createRustToolDefinition(
 					},
 				});
 				const text = composeToolText(result);
+				// Attachments become image content blocks so the TUI renders them
+				// and ACP forwards them; details keeps the structured copy.
+				const images = result.attachments
+					.filter((attachment) => attachment.mimeType.startsWith("image/"))
+					.map((attachment) => ({
+						type: "image" as const,
+						data: attachment.data,
+						mimeType: attachment.mimeType,
+					}));
 				return {
-					content: [{ type: "text", text: text || "(no output)" }],
+					content: [{ type: "text", text: text || "(no output)" }, ...images],
 					details: result,
 					isError: result.status !== "ok",
 				};

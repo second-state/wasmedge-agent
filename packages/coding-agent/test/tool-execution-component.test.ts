@@ -1,7 +1,8 @@
-import { resetCapabilitiesCache, setCapabilities, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@earendil-works/pi-tui";
 import stripAnsi from "strip-ansi";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal.js";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashTool, createBashToolDefinition } from "../src/core/tools/bash.js";
 import { createEditToolDefinition } from "../src/core/tools/edit.js";
@@ -565,5 +566,143 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom_tool");
 		expect(rendered).toContain("done");
+	});
+
+	test.each(["kitty", "iterm2", null] as const)(
+		"keeps one visible rust-cell image row without emitting terminal graphics for %s capability",
+		(protocol) => {
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			try {
+				const component = new ToolExecutionComponent(
+					"rust",
+					`tool-rust-image-${protocol}`,
+					{ code: 'fn main() -> Result<()> { rlm::display::attach_image("plot.png") }' },
+					{ showImages: true, includeImageDimensions: false },
+					undefined,
+					createFakeTui(),
+					process.cwd(),
+				);
+				component.setExpanded(true);
+				component.updateResult(
+					{
+						content: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+						isError: false,
+					},
+					false,
+				);
+
+				const rendered = component.render(120).join("\n");
+				expect(rendered).not.toContain("\x1b_G");
+				expect(rendered).not.toContain("\x1b]1337;File=");
+				const lines = stripAnsi(rendered).split("\n");
+				expect(lines.filter((line) => line.includes("╰─ [image/png")).length).toBe(1);
+			} finally {
+				resetCapabilitiesCache();
+			}
+		},
+	);
+
+	test("uses the compact fallback for a live rust-cell image in fullscreen", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const terminal = new VirtualTerminal(120, 12);
+		const tui = new TUI(terminal);
+		try {
+			const transcript = new Container();
+			const dock = new Text("> prompt", 0, 0);
+			const component = new ToolExecutionComponent(
+				"rust",
+				"tool-rust-image-fullscreen",
+				{ code: 'fn main() -> Result<()> { rlm::display::attach_image("plot.png") }' },
+				{ showImages: true },
+				undefined,
+				tui,
+				process.cwd(),
+			);
+			component.setExpanded(true);
+			component.updateResult(
+				{ content: [{ type: "image", data: "AAAA", mimeType: "image/png" }], isError: false },
+				false,
+			);
+			transcript.addChild(component);
+			tui.addChild(transcript);
+			tui.addChild(dock);
+			tui.start();
+			tui.enterFullscreen({ scroll: [transcript], dock });
+			await terminal.waitForRender();
+
+			const viewport = terminal.getViewport();
+			expect(viewport.filter((line) => line.includes("    ╰─ [image/png · 800×600]")).length).toBe(1);
+			expect(viewport.join("\n")).not.toContain("\x1b_G");
+		} finally {
+			tui.stop();
+			resetCapabilitiesCache();
+		}
+	});
+
+	test("does not add built-in edit stats to custom rust renderers", () => {
+		const component = new ToolExecutionComponent(
+			"rust",
+			"custom-rust",
+			{},
+			{},
+			{
+				...createBaseToolDefinition("rust"),
+				renderCall: () => new Text("custom rust", 0, 0),
+			},
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({
+			content: [],
+			details: { diffs: [{ path: "README.md", oldStr: "before", newStr: "after" }] },
+			isError: false,
+		});
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("custom rust");
+		expect(rendered).not.toContain("README.md +1 -1");
+	});
+
+	test("globally expands built-in rust-cell source associated with diffs", () => {
+		const component = new ToolExecutionComponent(
+			"rust",
+			"tool-rust-edit",
+			{
+				code: 'use agent_lib::prelude::*;\nfn main() -> Result<()> {\n    let hidden_side_effect = "only in full source";\n    edit_exact("/workspace/README.md", "before", "after")?;\n    Ok(())\n}',
+			},
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.setArgsComplete();
+		component.updateResult(
+			{
+				content: [],
+				details: {
+					status: "ok",
+					diffs: [{ path: "README.md", oldStr: "before", newStr: "after", startLine: 1 }],
+				},
+				isError: false,
+			},
+			false,
+		);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).not.toContain("hidden_side_effect");
+		expect(collapsed).toContain("╰─ README.md +1 -1");
+		expect(collapsed).not.toMatch(/1 - before/);
+		expect(collapsed).not.toMatch(/1 \+ after/);
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain('hidden_side_effect = "only in full source"');
+		expect(expanded).toContain("before");
+		expect(expanded).toContain("after");
+		const expandedLines = expanded.split("\n");
+		expect(expandedLines.findIndex((line) => line.includes("hidden_side_effect ="))).toBeLessThan(
+			expandedLines.findIndex((line) => /✓ README\.md\s+\+1 -1/.test(line)),
+		);
 	});
 });

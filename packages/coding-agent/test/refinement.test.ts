@@ -1351,13 +1351,13 @@ describe("global refinement history", () => {
 		const userPrompt = request.messages[0].content[0].text;
 		expect(userPrompt).toContain("Requested refinement scope: local");
 		expect(userPrompt).toContain("Global entries in the overview are read-only context");
-		expect(request.systemPrompt).toContain('handle = await rlm("sub-task")');
+		expect(request.systemPrompt).toContain('let handle = rlm::spawn("sub-task")?;');
 		expect(request.systemPrompt).toContain("never the child's answer");
-		expect(request.systemPrompt).toContain('receiver_role="parent"');
-		expect(request.systemPrompt).toContain("await rlm.list_subagents()");
-		expect(request.systemPrompt).toContain('receiver_role="child"');
-		expect(request.systemPrompt).not.toContain("asyncio.create_task(rlm");
-		expect(request.systemPrompt).not.toContain("asyncio.gather(rlm");
+		expect(request.systemPrompt).toContain("rlm::msg::send_to_parent(message)?");
+		expect(request.systemPrompt).toContain("rlm::list_subagents()?");
+		expect(request.systemPrompt).toContain("rlm::msg::send_to_child(name, message)?");
+		expect(request.systemPrompt).not.toContain("await rlm(");
+		expect(request.systemPrompt).not.toContain("asyncio");
 		expect(state.entries.memory.planned_memory).toBeUndefined();
 		expect(state.refinements).toHaveLength(0);
 

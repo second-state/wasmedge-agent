@@ -1843,7 +1843,7 @@ describe("AgentSession rlm recursion", () => {
 
 		const promptPromise = root.prompt("start");
 		await waitFor(() => seenSystemPrompts.length === 1);
-		expect(seenSystemPrompts[0]!).toContain("A callable `rlm`");
+		expect(seenSystemPrompts[0]!).toContain("Recursive subagents are ordinary rust-cell calls");
 
 		await root.setRlmMaxDepth(0);
 		await root.steer("continue after max-depth update");
@@ -1851,7 +1851,7 @@ describe("AgentSession rlm recursion", () => {
 		await promptPromise;
 
 		expect(seenSystemPrompts).toHaveLength(2);
-		expect(seenSystemPrompts[1]!).not.toContain("A callable `rlm`");
+		expect(seenSystemPrompts[1]!).not.toContain("Recursive subagents are ordinary rust-cell calls");
 	});
 
 	it("rehydrates chat max depth ahead of reconstruction config", async () => {
@@ -1876,10 +1876,10 @@ describe("AgentSession rlm recursion", () => {
 			if (!baselineLeafId) throw new Error("Missing baseline branch leaf");
 
 			await root.setRlmMaxDepth(2);
-			expect(root.systemPrompt).toContain("A callable `rlm`");
+			expect(root.systemPrompt).toContain("Recursive subagents are ordinary rust-cell calls");
 			await root.navigateTree(baselineLeafId, { summarize: false });
 			expect(root.getRlmMaxDepthStatus()).toEqual({ maxDepth: 0, source: "env" });
-			expect(root.systemPrompt).not.toContain("A callable `rlm`");
+			expect(root.systemPrompt).not.toContain("Recursive subagents are ordinary rust-cell calls");
 		} finally {
 			vi.unstubAllEnvs();
 		}
@@ -2009,7 +2009,7 @@ describe("AgentSession rlm recursion", () => {
 			});
 			expect(resumed.sessionManager.getLeafId()).toBe(baselineLeafId);
 			expect(resumed.rlmMaxDepth).toBe(0);
-			expect(resumed.systemPrompt).not.toContain("A callable `rlm`");
+			expect(resumed.systemPrompt).not.toContain("Recursive subagents are ordinary rust-cell calls");
 		} finally {
 			vi.unstubAllEnvs();
 		}
@@ -2055,7 +2055,7 @@ describe("AgentSession rlm recursion", () => {
 		expect(grandchild?.rlmMaxDepth).toBe(3);
 
 		await root.setRlmMaxDepth(0);
-		expect(root.systemPrompt).not.toContain("A callable `rlm`");
+		expect(root.systemPrompt).not.toContain("Recursive subagents are ordinary rust-cell calls");
 		await expect(root.runRlmChild("blocked at root")).rejects.toThrow(
 			"RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0)",
 		);

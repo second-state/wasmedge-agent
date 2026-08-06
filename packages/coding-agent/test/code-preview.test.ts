@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewBashCommand, previewPythonCode } from "../src/core/tools/code-preview.js";
+import { previewBashCommand, previewPythonCode, previewRustCode } from "../src/core/tools/code-preview.js";
 
 describe("code preview", () => {
 	it("skips bash setup and previews the real command", () => {
@@ -135,5 +135,35 @@ p = Path("packages/foo.ts")
 p.write_text("hello")
 PY`;
 		expect(previewBashCommand(command)).toEqual({ language: "python", text: "write packages/foo.ts" });
+	});
+});
+
+describe("previewRustCode", () => {
+	it("prefers rlm calls over scaffolding and plain statements", () => {
+		const code = `use agent_lib::prelude::*;
+fn main() -> Result<()> {
+    let total = 41;
+    rlm::state::set("total", &total)?;
+    Ok(())
+}`;
+		expect(previewRustCode(code)).toEqual({ language: "rust", text: 'rlm::state::set("total", &total)?;' });
+	});
+
+	it("prefers prelude helpers over let bindings and Ok(())", () => {
+		const code = `use agent_lib::prelude::*;
+fn main() -> Result<()> {
+    let path = "/workspace/app.log";
+    let lines = read_lines(path)?;
+    println!("{}", lines.len());
+    Ok(())
+}`;
+		expect(previewRustCode(code)).toEqual({ language: "rust", text: "let lines = read_lines(path)?;" });
+	});
+
+	it("falls back to an empty preview for scaffolding-only cells", () => {
+		expect(previewRustCode("use agent_lib::prelude::*;\nfn main() -> Result<()> {\n}\n")).toEqual({
+			language: "rust",
+			text: "",
+		});
 	});
 });
