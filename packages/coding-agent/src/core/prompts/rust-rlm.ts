@@ -1,17 +1,11 @@
-/** RUST_CONTROL_PROMPT (DESIGN.md §3.2): the model-facing doctrine for the
- * rust-cell runtime. WP1 ships the PoC-validated v0 text as a full replacement
- * for the Python RLM prompt; WP4 integrates the harness/skills/subagent
- * sections. The few-shot example ships by default per D17 (M1: inconclusive
- * but cheaper on the primary tier; re-tested with balanced reps later). */
+/** RUST_CONTROL_PROMPT (DESIGN.md §3.2 final): the model-facing doctrine for
+ * the rust-cell runtime. The core section replaces the kernel-era
+ * IPYTHON_CONTROL_PROMPT inside buildRlmPrompt; the few-shot example ships by
+ * default per D17 (M1: inconclusive but cheaper on the primary tier). */
 
 export const RUST_PRELUDE_LABELS = "serde, serde_json, anyhow, regex, walkdir";
 
-const RUST_CONTROL_PROMPT = `You are a general purpose agent that uses code to solve tasks. You solve tasks by
-breaking down problems into sub-tasks, writing and executing code, observing results,
-and iterating one step at a time. When you are done, stop calling tools and state your
-final answer.
-
-The rust tool is your control environment: each call submits one complete Rust program
+const RUST_CONTROL_PROMPT = `The rust tool is your control environment: each call submits one complete Rust program
 (a "cell"). It is compiled to wasm32-wasip1 and runs in a WasmEdge sandbox that can see
 /workspace (the project), /agent (your persistent library and state), and /scratch.
 
@@ -23,12 +17,12 @@ Variables do NOT persist between cells. Persistence has three explicit layers in
    \`rlm::state::set("key", &value)?\` and \`let v: Option<T> = rlm::state::get("key")?\`.
    State survives cells, turns, compaction, and session restarts. Before re-deriving
    anything, check \`rlm::state::keys()?\`.
-2. Reusable logic: extend your persistent library (crate \`agent_lib\`) by passing
-   \`lib\` files alongside your cell code — they compile together with the cell and the
-   same call can already use them. Prefer growing the library over re-writing helpers
-   inside cells: cells should read as glue over agent_lib calls. If a lib edit fails to
-   build, the files are reverted and the cell does not run — extend the library in
-   small, compiling steps.
+2. Reusable logic: extend your persistent library (crate \`agent_lib\`, read-only
+   mounted at /agent/lib) by passing \`lib\` files alongside your cell code — they
+   compile together with the cell and the same call can already use them. Prefer
+   growing the library over re-writing helpers inside cells: cells should read as glue
+   over agent_lib calls. If a lib edit fails to build, the files are reverted and the
+   cell does not run — extend the library in small, compiling steps.
 3. Large data: files under /agent/state (yours) or /workspace (the project's).
 
 Compile errors are normal feedback, not failures. The tool returns rustc diagnostics;
@@ -47,6 +41,17 @@ read_lines, grep, walk, and edit_exact, and results persisted into rlm::state ca
 revisited without re-reading. Reserve bash for the project's own commands, not for
 file exploration. Use rust cells to decide what to run and to analyze what comes back.
 
+Capabilities are ordinary Rust calls returning Result, composable into program logic:
+- \`rlm::msg::send_to_parent("…")?\` replies to your parent when a task calls for an
+  answer; \`rlm::msg::list_agents()?\` discovers family. Send messages before the cell
+  ends — a cell's side effects end with the cell.
+- \`rlm::goal::*\`, \`rlm::compact::*\`, \`rlm::refine::*\`, \`rlm::heartbeat::*\` manage
+  long-running work (same contracts as the harness documents them).
+- \`rlm::display::diff(path, old, new)?\` and \`rlm::display::attach_image(path)?\` show
+  rich output to the user.
+- \`rlm::host_request(type, payload)?\` is the generic gate for host capabilities
+  (e.g. \`rlm::host_request("websearch.run", json!({"query": q}))?\`).
+
 Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
 dependencies yourself. If a task genuinely needs another crate, tell the user (they
 can extend the prelude in settings). Do not work around this by making the sandbox
@@ -56,9 +61,7 @@ Editing project files: for targeted edits prefer
 \`edit_exact("/workspace/src/a.rs", old, new)?\` from the prelude (exact-match replace,
 shows a diff to the user); write whole files with \`write_file\` when generating them.`;
 
-const RUST_EXAMPLE = `
-
-Example — one call that grows the library and uses it immediately:
+const RUST_EXAMPLE = `Example — one call that grows the library and uses it immediately:
   lib: src/helpers/logs.rs
       use crate::prelude::*;
       #[derive(Serialize, Deserialize)]
@@ -73,16 +76,12 @@ Example — one call that grows the library and uses it immediately:
           Ok(())
       }`;
 
-export interface BuildRustRlmPromptOptions {
-	cwd: string;
+export interface RustControlPromptOptions {
 	includeExample?: boolean;
 }
 
-export function buildRustRlmPrompt(options: BuildRustRlmPromptOptions): string {
+/** The §3.2 doctrine body, ready to append inside buildRlmPrompt. */
+export function rustControlPromptSection(options: RustControlPromptOptions = {}): string {
 	const core = RUST_CONTROL_PROMPT.replace("{PRELUDE_LABELS}", RUST_PRELUDE_LABELS);
-	const example = (options.includeExample ?? true) ? RUST_EXAMPLE : "";
-	return `${core}${example}
-
-Working directory (mounted at /workspace): ${options.cwd}
-`;
+	return (options.includeExample ?? true) ? `${core}\n\n${RUST_EXAMPLE}` : core;
 }
