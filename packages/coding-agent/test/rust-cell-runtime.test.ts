@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveBuildConcurrency } from "../src/core/rust-cell/build-gate.js";
 import { resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
 
 describe("resolveTemplateDir", () => {
@@ -29,5 +30,30 @@ describe("resolveTemplateDir", () => {
 		mkdirSync(join(dir, "empty"), { recursive: true });
 		process.env.WASMEDGE_AGENT_TEMPLATE_DIR = join(dir, "empty");
 		expect(() => resolveTemplateDir()).toThrow(/WASMEDGE_AGENT_TEMPLATE_DIR/);
+	});
+});
+
+describe("resolveBuildConcurrency", () => {
+	afterEach(() => {
+		delete process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS;
+	});
+
+	it("defaults to a small bound and ignores malformed overrides", () => {
+		const fallback = resolveBuildConcurrency();
+		expect(fallback).toBeGreaterThanOrEqual(2);
+		expect(fallback).toBeLessThanOrEqual(8);
+		for (const raw of ["", "abc", "-2", "0", "00", "1.5"]) {
+			process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS = raw;
+			expect(resolveBuildConcurrency()).toBe(fallback);
+		}
+	});
+
+	it("honors explicit overrides but clamps the ceiling", () => {
+		process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS = "1";
+		expect(resolveBuildConcurrency()).toBe(1);
+		process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS = "12";
+		expect(resolveBuildConcurrency()).toBe(12);
+		process.env.WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS = "500";
+		expect(resolveBuildConcurrency()).toBe(32);
 	});
 });
