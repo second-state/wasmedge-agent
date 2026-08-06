@@ -9,14 +9,16 @@ import { ToolExecutionComponent } from "../../../src/modes/interactive/component
 import { initTheme } from "../../../src/modes/interactive/theme/theme.js";
 import { createHarness, type Harness } from "../harness.js";
 
-const ipythonTool: AgentTool = {
-	name: "ipython",
-	label: "ipython",
-	description: "Execute a test IPython cell",
-	parameters: Type.Object({ code: Type.String() }),
+const LONG_OUTPUT = Array.from({ length: 60 }, (_, i) => `line-${i + 1}`).join("\n");
+
+const bashTool: AgentTool = {
+	name: "bash",
+	label: "bash",
+	description: "Execute a test bash command",
+	parameters: Type.Object({ command: Type.String() }),
 	execute: async () => ({
-		content: [{ type: "text", text: "ok" }],
-		details: { status: "ok", durationMs: 1 },
+		content: [{ type: "text", text: LONG_OUTPUT }],
+		details: {},
 	}),
 };
 
@@ -33,16 +35,16 @@ describe("ENG-4583 latest tool expand hint", () => {
 	});
 
 	it("shows the expand or collapse hint only on the latest tool row", async () => {
-		harness = await createHarness({ tools: [ipythonTool] });
+		harness = await createHarness({ tools: [bashTool] });
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("ipython", { code: "1 + 1" }, { id: "tool-4583-a" }),
-					fauxToolCall("ipython", { code: "2 + 2" }, { id: "tool-4583-b" }),
+					fauxToolCall("bash", { command: "seq a" }, { id: "tool-4583-a" }),
+					fauxToolCall("bash", { command: "seq b" }, { id: "tool-4583-b" }),
 				],
 				{ stopReason: "toolUse" },
 			),
-			fauxAssistantMessage(fauxToolCall("ipython", { code: "3 + 3" }, { id: "tool-4583-c" }), {
+			fauxAssistantMessage(fauxToolCall("bash", { command: "seq c" }, { id: "tool-4583-c" }), {
 				stopReason: "toolUse",
 			}),
 			fauxAssistantMessage("done"),
@@ -70,11 +72,12 @@ describe("ENG-4583 latest tool expand hint", () => {
 		expect(render([latest])).toContain("to expand");
 		expect(render(tools).match(/to expand/g)).toHaveLength(1);
 
+		// The rust runtime's tool rows render via the default/bash renderers,
+		// which only hint while collapsed; expanding must clear the hint.
 		for (const tool of tools) {
 			tool.setExpanded(true);
 		}
-		expect(render(tools.slice(0, -1))).not.toContain("to collapse");
-		expect(render(tools).match(/to collapse/g)).toHaveLength(1);
+		expect(render(tools)).not.toContain("to expand");
 	});
 });
 
