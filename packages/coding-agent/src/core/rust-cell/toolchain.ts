@@ -2,7 +2,7 @@
  * build. Mirrors ensureKernelPython's role at PoC scale (DESIGN.md §2.2). */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { resolveTemplateDir } from "./workspace.js";
@@ -21,21 +21,44 @@ function findOnPath(bin: string): string | undefined {
 	return undefined;
 }
 
+/** Best-guess cargo location; existence is the caller's concern (doctor
+ * reports it, resolveToolchain throws). */
+export function findCargoBin(): string {
+	return process.env.WASMEDGE_AGENT_CARGO ?? findOnPath("cargo") ?? join(homedir(), ".cargo", "bin", "cargo");
+}
+
+export function findRustupBin(): string {
+	return findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
+}
+
+export function findWasmedgeBin(): string {
+	return (
+		process.env.WASMEDGE_AGENT_WASMEDGE ?? findOnPath("wasmedge") ?? join(homedir(), ".wasmedge", "bin", "wasmedge")
+	);
+}
+
+/** True when rustup exists but the wasm target is missing (fixable). False
+ * also without rustup (e.g. distro/homebrew Rust): the precheck is skipped
+ * and a genuinely missing target surfaces as the cargo build error. */
+export function wasmTargetMissing(): boolean {
+	const rustupBin = findRustupBin();
+	if (!existsSync(rustupBin)) return false;
+	const targets = execFileSync(rustupBin, ["target", "list", "--installed"], { encoding: "utf-8" });
+	return !targets.includes("wasm32-wasip1");
+}
+
 export function resolveToolchain(): ToolchainInfo {
-	const cargoBin =
-		process.env.WASMEDGE_AGENT_CARGO ?? findOnPath("cargo") ?? join(homedir(), ".cargo", "bin", "cargo");
+	const cargoBin = findCargoBin();
 	if (!existsSync(cargoBin)) {
 		throw new Error(`cargo not found (checked WASMEDGE_AGENT_CARGO, PATH, ~/.cargo/bin)`);
 	}
 
-	const wasmedgeBin =
-		process.env.WASMEDGE_AGENT_WASMEDGE ?? findOnPath("wasmedge") ?? join(homedir(), ".wasmedge", "bin", "wasmedge");
+	const wasmedgeBin = findWasmedgeBin();
 	if (!existsSync(wasmedgeBin)) {
 		throw new Error(`wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path`);
 	}
 
-	const targets = execFileSync("rustup", ["target", "list", "--installed"], { encoding: "utf-8" });
-	if (!targets.includes("wasm32-wasip1")) {
+	if (wasmTargetMissing()) {
 		throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
 	}
 
@@ -43,8 +66,7 @@ export function resolveToolchain(): ToolchainInfo {
 	return { cargoBin, wasmedgeBin, wasmedgeVersion };
 }
 
-/** Build the template once so cloned workspaces start with a warm target/.
- * The only step that may touch the network (first crates.io fetch). */
+/** Build the template once so cloned workspaces start with a warm target/. */
 export function warmTemplate(cargoBin: string): void {
 	execFileSync(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
@@ -59,5 +81,45 @@ export function isTemplateWarm(): boolean {
 		return existsSync(join(template, "target", "wasm32-wasip1", "release", "cell.wasm"));
 	} catch {
 		return false;
+	}
+}
+
+/** Vendor the locked dependency set into the template so every clone builds
+ * hermetically (DESIGN.md §10). The template's committed .cargo/config.toml
+ * already redirects crates-io at vendor/, so this only materializes the
+ * sources — into a tmp dir first, renamed so a crash never leaves a
+ * half-vendored dir that isTemplateVendored would trust. The only step that
+ * may touch the network. */
+export function vendorTemplate(cargoBin: string): void {
+	const template = resolveTemplateDir();
+	const tmp = join(template, "vendor.tmp");
+	rmSync(tmp, { recursive: true, force: true });
+	execFileSync(cargoBin, ["vendor", "--locked", tmp], {
+		cwd: template,
+		stdio: "pipe",
+	});
+	rmSync(join(template, "vendor"), { recursive: true, force: true });
+	renameSync(tmp, join(template, "vendor"));
+}
+
+/** True when the template carries vendored sources. */
+export function isTemplateVendored(): boolean {
+	try {
+		return existsSync(join(resolveTemplateDir(), "vendor"));
+	} catch {
+		return false;
+	}
+}
+
+/** One-time template preparation: vendor the dependency set, then compile.
+ * Idempotent; both postinstall and lazy first use funnel through here. */
+export function ensureTemplateReady(cargoBin: string, onProgress?: (message: string) => void): void {
+	if (!isTemplateVendored()) {
+		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
+		vendorTemplate(cargoBin);
+	}
+	if (!isTemplateWarm()) {
+		onProgress?.("Warming the cell workspace template (one-time)...");
+		warmTemplate(cargoBin);
 	}
 }

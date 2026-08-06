@@ -71,13 +71,13 @@ Once Prime Agent starts, type a request and press Enter:
 Summarize this repository and tell me how to run its checks.
 ```
 
-Prime Agent gives the model one built-in tool, `ipython`. The long-lived kernel is a control environment for reading and editing files, running project commands, inspecting data, retaining Python state, and invoking installed skills. The kernel runtime is bootstrapped automatically on first use; set `PRIME_AGENT_KERNEL_PYTHON` to use an existing Python environment with `ipykernel`.
+Prime Agent gives the model two built-in tools: `rust` and `bash`. The `rust` tool compiles each cell to WebAssembly and runs it in a WasmEdge sandbox — that is where the model reads and edits files, inspects data, persists state between cells, and invokes installed skills; `bash` runs a project's own commands. The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` binary: the installer offers to set both up, the workspace template is prebuilt automatically on first use, and `doctor` / `doctor --fix` report and repair the toolchain. Set `WASMEDGE_AGENT_CARGO` or `WASMEDGE_AGENT_WASMEDGE` to use specific binaries.
 
 Prime Agent runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
 
 ## Recursive Subagents
 
-Recursive subagents are a built-in Prime Agent capability. The model spawns independent work from IPython with `await rlm("subtask")`; each call returns at admission with a child handle and never returns the answer. Children send requested results as explicit `agent_message` replies to the parent or write them to files. Child agents use the same TypeScript agent runtime, providers, tools, skills, and session machinery as the parent.
+Recursive subagents are a built-in Prime Agent capability. The model spawns independent work from a rust cell with `rlm::spawn("subtask")?`; each call returns at admission with a child handle and never returns the answer. Children send requested results as explicit agent-message replies to the parent (`rlm::msg::send_to_parent`) or write them to files. Child agents use the same TypeScript agent runtime, providers, tools, skills, and session machinery as the parent.
 
 You can prompt the model to use that capability directly:
 
@@ -127,7 +127,7 @@ In interactive mode:
 !npm run lint
 ```
 
-The command output is sent to the model. Use `!!command` to run a command without adding its output to model context. During agent work, the model normally runs project commands from the IPython control environment with a `%%bash` cell.
+The command output is sent to the model. Use `!!command` to run a command without adding its output to model context. During agent work, the model runs project commands through its `bash` tool, while file work and data transformation happen in rust cells.
 
 ### Switch Models
 

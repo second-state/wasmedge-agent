@@ -68,6 +68,10 @@ export interface BundledSkillsSettings {
 	websearch?: boolean; // default: true
 }
 
+export interface RustCellSettings {
+	cellTimeoutMs?: number; // per-cell budget (compile + run); default: 120000
+}
+
 export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
@@ -154,6 +158,7 @@ export interface Settings {
 	enableBuiltinSkills?: boolean; // default: true - load built-in skills shipped with prime-agent
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
+	rustCell?: RustCellSettings; // Rust cell runtime knobs (DESIGN.md §10)
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default: "user-only"
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
@@ -917,6 +922,14 @@ export class SettingsManager {
 		this.globalSettings.quietStartup = quiet;
 		this.markModified("quietStartup");
 		this.save();
+	}
+
+	/** Per-cell budget override; undefined (and junk values) fall through to
+	 * the engine default. */
+	getRustCellTimeoutMs(): number | undefined {
+		const raw = this.settings.rustCell?.cellTimeoutMs;
+		if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 1_000) return undefined;
+		return Math.floor(raw);
 	}
 
 	getShellCommandPrefix(): string | undefined {

@@ -51,7 +51,7 @@ prime_agent_screen_layout_lab_width=0
 prime_agent_screen_render_lab_width=0
 prime_agent_screen_compact=0
 prime_agent_download_dir=
-prime_agent_bootstrap_kernel_on_install=0
+prime_agent_bootstrap_runtime_on_install=0
 prime_agent_screen_title=
 prime_agent_screen_status=
 prime_agent_screen_detail=
@@ -103,7 +103,8 @@ main() {
 	tarball_url="$prime_agent_base_url/releases/v$version/$tarball_name"
 
 	confirm_install "$version" "$tarball_url"
-	confirm_kernel_runtime_setup
+	confirm_cell_runtime_setup
+	prepare_rust_toolchain
 
 	download_dir=$(create_temp_dir)
 	prime_agent_download_dir="$download_dir"
@@ -1552,57 +1553,168 @@ confirm_install() {
 	exit 0
 }
 
-confirm_kernel_runtime_setup() {
-	case "${PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL:-}" in
+confirm_cell_runtime_setup() {
+	case "${WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL:-}" in
 		1)
-			prime_agent_bootstrap_kernel_on_install=1
+			prime_agent_bootstrap_runtime_on_install=1
 			return
 			;;
 		0)
-			prime_agent_bootstrap_kernel_on_install=0
+			prime_agent_bootstrap_runtime_on_install=0
 			return
 			;;
 	esac
 
 	if prime_agent_prompt_yes_no \
-		"Prepare IPython runtime now?" \
-		"Installs uv, Python 3.11, ipykernel, and Prime Agent runtime." \
+		"Prepare the Rust cell runtime now?" \
+		"Checks rustup + wasm32-wasip1 and WasmEdge, then prebuilds the cell workspace." \
 		"Prepare? [Y/n]"; then
-		prime_agent_bootstrap_kernel_on_install=1
+		prime_agent_bootstrap_runtime_on_install=1
 		return
 	else
 		prompt_status=$?
 	fi
 
 	if [ "$prompt_status" -eq 2 ]; then
-		printf 'No terminal detected; preparing the IPython runtime during install.\n'
-		prime_agent_bootstrap_kernel_on_install=1
+		printf 'No terminal detected; preparing the Rust cell runtime during install.\n'
+		prime_agent_bootstrap_runtime_on_install=1
 		return
 	fi
 
-	prime_agent_bootstrap_kernel_on_install=0
+	prime_agent_bootstrap_runtime_on_install=0
 	if [ "$prime_agent_screen_enabled" = 1 ]; then
-		prime_agent_screen "IPython setup skipped" "" "The runtime can be prepared on first ipython use." ""
+		prime_agent_screen "Cell runtime setup skipped" "" "The runtime can be prepared on first rust cell use." ""
 		sleep 0.4
 	else
-		printf '\nSkipping IPython runtime setup.\n'
+		printf '\nSkipping Rust cell runtime setup.\n'
 	fi
+}
+
+skip_cell_runtime_setup() {
+	prime_agent_bootstrap_runtime_on_install=0
+	if [ "$prime_agent_screen_enabled" = 1 ]; then
+		prime_agent_screen "Cell runtime setup skipped" "" "$1" ""
+		sleep 0.4
+	else
+		printf '\n%s\n' "$1"
+	fi
+}
+
+# DESIGN.md section 10: the installer checks/guides rustup + the
+# wasm32-wasip1 target and WasmEdge before npm install, so postinstall's
+# template prebuild (vendor + warm) can succeed.
+prepare_rust_toolchain() {
+	[ "$prime_agent_bootstrap_runtime_on_install" = 1 ] || return 0
+	ensure_rustup_and_target || return 0
+	ensure_wasmedge || return 0
+}
+
+ensure_rustup_and_target() {
+	if [ -x "$HOME/.cargo/bin/rustup" ] || command -v rustup >/dev/null 2>&1; then
+		PATH="$HOME/.cargo/bin:$PATH"
+		export PATH
+		if rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$'; then
+			return 0
+		fi
+		if [ "$prime_agent_screen_enabled" = 1 ]; then
+			prime_agent_run_quiet_with_animation_steps \
+				"Adding the wasm32-wasip1 target" \
+				"Adding the wasm32-wasip1 target" \
+				"Running rustup target add wasm32-wasip1." \
+				rustup target add wasm32-wasip1
+		else
+			printf '\nAdding the wasm32-wasip1 target...\n'
+			rustup target add wasm32-wasip1
+		fi
+		return 0
+	fi
+
+	if prime_agent_prompt_yes_no \
+		"Install Rust with rustup?" \
+		"Runs the official rustup installer (stable toolchain + wasm32-wasip1)." \
+		"Install? [Y/n]"; then
+		:
+	else
+		prompt_status=$?
+		if [ "$prompt_status" -ne 2 ]; then
+			skip_cell_runtime_setup "Install rustup (rustup.rs), then run: rustup target add wasm32-wasip1"
+			return 1
+		fi
+		printf 'No terminal detected; installing Rust with rustup.\n'
+	fi
+
+	if [ "$prime_agent_screen_enabled" = 1 ]; then
+		prime_agent_run_quiet_with_animation_steps \
+			"Installing Rust" \
+			"Installing Rust" \
+			"Downloading rustup.
+Installing the stable toolchain.
+Adding the wasm32-wasip1 target." \
+			run_rustup_install
+	else
+		printf '\nInstalling Rust with rustup...\n\n'
+		run_rustup_install
+	fi
+	PATH="$HOME/.cargo/bin:$PATH"
+	export PATH
+	hash -r
+}
+
+run_rustup_install() {
+	curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
+		sh -s -- -y --no-modify-path --default-toolchain stable --target wasm32-wasip1
+}
+
+ensure_wasmedge() {
+	if command -v wasmedge >/dev/null 2>&1 || [ -x "$HOME/.wasmedge/bin/wasmedge" ]; then
+		return 0
+	fi
+
+	if prime_agent_prompt_yes_no \
+		"Install WasmEdge?" \
+		"Runs the official WasmEdge install script (installs to ~/.wasmedge)." \
+		"Install? [Y/n]"; then
+		:
+	else
+		prompt_status=$?
+		if [ "$prompt_status" -ne 2 ]; then
+			skip_cell_runtime_setup "Install WasmEdge (wasmedge.org), then run any rust cell to finish setup."
+			return 1
+		fi
+		printf 'No terminal detected; installing WasmEdge.\n'
+	fi
+
+	if [ "$prime_agent_screen_enabled" = 1 ]; then
+		prime_agent_run_quiet_with_animation_steps \
+			"Installing WasmEdge" \
+			"Installing WasmEdge" \
+			"Downloading the WasmEdge install script.
+Installing to ~/.wasmedge." \
+			run_wasmedge_install
+	else
+		printf '\nInstalling WasmEdge...\n\n'
+		run_wasmedge_install
+	fi
+}
+
+run_wasmedge_install() {
+	curl -fsSL https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash
 }
 
 install_prime_agent_package() {
 	tarball_path="$1"
-	if [ "$prime_agent_bootstrap_kernel_on_install" = 1 ]; then
+	if [ "$prime_agent_bootstrap_runtime_on_install" = 1 ]; then
 		npm_install_details="Preparing global install.
 Linking command binaries.
 Installing runtime packages.
 Preloading search tools.
-Preparing IPython kernel.
+Prebuilding the cell workspace template.
 Finalizing npm install."
 		prime_agent_run_quiet_with_animation_steps \
 			"Installing Prime Agent" \
 			"Installing Prime Agent" \
 			"$npm_install_details" \
-			env PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=1 PRIME_AGENT_INSTALL_UV=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$tarball_path"
+			env PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL=1 WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$tarball_path"
 	else
 		npm_install_details="Preparing global install.
 Linking command binaries.

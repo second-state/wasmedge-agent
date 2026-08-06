@@ -1,7 +1,7 @@
-import { resolveToolchain, warmTemplate } from "./core/rust-cell/index.js";
+import { ensureTemplateReady, resolveToolchain } from "./core/rust-cell/index.js";
 import { ensureTool } from "./utils/tools-manager.js";
 
-const bootstrapRuntime = process.env.PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL === "1";
+const bootstrapRuntime = process.env.WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL === "1";
 const bootstrapTools = process.env.PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL === "1";
 
 if (!bootstrapRuntime && !bootstrapTools) {
@@ -22,8 +22,7 @@ try {
 	}
 	if (bootstrapRuntime) {
 		const toolchain = resolveToolchain();
-		console.log("prime-agent: warming the cell workspace template (one-time)...");
-		warmTemplate(toolchain.cargoBin);
+		ensureTemplateReady(toolchain.cargoBin, (message) => console.log(`prime-agent: ${message}`));
 	}
 } catch (error) {
 	console.error(`prime-agent: postinstall setup skipped: ${oneLine(errorMessage(error))}`);

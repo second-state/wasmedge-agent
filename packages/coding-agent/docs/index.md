@@ -1,6 +1,6 @@
 # Prime Agent Documentation
 
-Prime Agent is an RLM-native coding and research harness built around a persistent IPython kernel, recursive subagents, durable sessions, and a multi-process local runtime. It began as a hard fork of pi-mono, but Prime Agent is now the product, CLI, install source, and development repository.
+Prime Agent is an RLM-native coding and research harness built around sandboxed Rust cells (WebAssembly on WasmEdge), recursive subagents, durable sessions, and a multi-process local runtime. It began as a hard fork of pi-mono, but Prime Agent is now the product, CLI, install source, and development repository.
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ Public releases are currently installed from versioned release artifacts. The in
 
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
 - [Using Prime Agent](usage.md) - interactive mode, RLM subagents, slash commands, context files, and CLI reference.
-- [Architecture overview](architecture.md) - client, daemon, worker, session, kernel, provider, and storage boundaries.
+- [Architecture overview](architecture.md) - client, daemon, worker, session, cell engine, provider, and storage boundaries.
 - [RLM programming model](rlm.md) - programmatic execution, native subagents, Python skills, and durable state.
 - [Long-running and background agents](long-running-agents.md) - daemon workers, messaging, heartbeats, goals, schedules, and autonomous mode.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
@@ -72,4 +72,4 @@ Public releases are currently installed from versioned release artifacts. The in
 - [Architecture overview](architecture.md) - system topology and end-to-end prompt flow.
 - [Daemon Architecture](daemon.md) - supervisor, catalog, worker, lifecycle, and recovery details.
 - [Agent Connection Architecture](agent-connection.md) - client/runtime connection boundary.
-- [RLM Runtime Architecture](rlm-runtime.md) - ZeroMQ kernel transport and recursive subagent execution.
+- [RLM Runtime Architecture](rlm-runtime.md) - the cell engine, bridge transport, and recursive subagent execution.

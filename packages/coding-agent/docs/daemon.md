@@ -9,9 +9,9 @@ flowchart TD
     clients["Interactive · print · JSON · RPC clients"]
     supervisor["Detached supervisor"]
     catalog["Catalog subprocess<br/>saved-session scans"]
-    residentA["Resident worker<br/>root A · RLM descendants · kernels"]
-    residentB["Resident worker<br/>root B · RLM descendants · kernels"]
-    owned["Client-owned worker<br/>hidden root · RLM descendants · kernels"]
+    residentA["Resident worker<br/>root A · RLM descendants · cell workspaces"]
+    residentB["Resident worker<br/>root B · RLM descendants · cell workspaces"]
+    owned["Client-owned worker<br/>hidden root · RLM descendants · cell workspaces"]
 
     clients <-->|"public local protocol"| supervisor
     supervisor --> catalog
@@ -20,11 +20,11 @@ flowchart TD
     supervisor --> owned
 ```
 
-The supervisor owns public sockets, client attachments, routing, global agent-message delivery, worker health, command journals, and coordinated updates. It does not execute providers, tools, compaction, bash, kernels, schedules, or transcript scans.
+The supervisor owns public sockets, client attachments, routing, global agent-message delivery, worker health, command journals, and coordinated updates. It does not execute providers, tools, compaction, bash, cells, schedules, or transcript scans.
 
 The catalog subprocess owns saved-session scans and inactive-session file operations. A catalog failure can fail a catalog request without interrupting active workers.
 
-Each worker owns one root `AgentSessionRuntime`, its root `AgentSession`, scheduler, kernels, and every RLM descendant below that root. New, switch, fork, and import operations replace the root runtime inside the worker while preserving the public active-session ID.
+Each worker owns one root `AgentSessionRuntime`, its root `AgentSession`, scheduler, cell workspaces, and every RLM descendant below that root. New, switch, fork, and import operations replace the root runtime inside the worker while preserving the public active-session ID.
 
 ## Resident Workers
 

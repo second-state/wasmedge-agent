@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 	packageCommands: [] as string[][],
 	psCalls: [] as boolean[],
 	reapCalls: [] as Array<[boolean, boolean]>,
+	performReapCalls: [] as boolean[],
 	shutdownCalls: [] as Array<[boolean, boolean]>,
 }));
 
@@ -24,6 +25,12 @@ vi.mock("../src/package-manager-cli.js", () => ({
 	isSelfUpdateSource: (source: string) => source === "self" || source === "pi" || source === "prime-agent",
 }));
 
+// Routing tests must not probe the real toolchain or touch the template.
+vi.mock("../src/core/rust-cell/doctor.js", () => ({
+	collectRuntimeChecks: () => [],
+	fixRuntime: () => [],
+}));
+
 vi.mock("../src/cli/daemon-ps.js", () => ({
 	runPs: async (json: boolean) => {
 		mocks.psCalls.push(json);
@@ -31,6 +38,12 @@ vi.mock("../src/cli/daemon-ps.js", () => ({
 	runReap: async (json: boolean, force: boolean) => {
 		mocks.reapCalls.push([json, force]);
 	},
+	performReap: async (force: boolean) => {
+		mocks.performReapCalls.push(force);
+		return { reaped: [], skipped: [] };
+	},
+	printReapReport: () => {},
+	discoverDaemons: async () => [],
 	runShutdownAll: async (json: boolean, force: boolean) => {
 		mocks.shutdownCalls.push([json, force]);
 	},
@@ -47,6 +60,7 @@ describe("public command routing", () => {
 		mocks.packageCommands.length = 0;
 		mocks.psCalls.length = 0;
 		mocks.reapCalls.length = 0;
+		mocks.performReapCalls.length = 0;
 		mocks.shutdownCalls.length = 0;
 		process.exitCode = undefined;
 		vi.spyOn(console, "log").mockImplementation(() => {});
@@ -243,7 +257,7 @@ describe("public command routing", () => {
 
 	it("routes doctor fixes through the safe cleanup path", async () => {
 		await handlePublicCommand(["doctor", "--fix", "--json"]);
-		expect(mocks.reapCalls).toEqual([[true, false]]);
+		expect(mocks.performReapCalls).toEqual([false]);
 	});
 
 	it("rejects the old daemon hierarchy with migration guidance", async () => {

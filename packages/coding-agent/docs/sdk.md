@@ -62,7 +62,7 @@ const { session } = await createAgentSession();
 // Custom: override specific options
 const { session } = await createAgentSession({
   model: myModel,
-  tools: ["ipython"],
+  tools: ["rust"],
   sessionManager: SessionManager.inMemory(),
 });
 ```
@@ -467,14 +467,14 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ### Tools
 
 ```typescript
-// Use the default built-in tool set: ipython
+// Use the default built-in tool set: rust, bash
 const { session } = await createAgentSession({
-  tools: ["ipython"],
+  tools: ["rust"],
 });
 
 // Pick specific tools
 const { session } = await createAgentSession({
-  tools: ["ipython"],
+  tools: ["rust"],
 });
 ```
 
@@ -484,7 +484,7 @@ const { session } = await createAgentSession({
 
 ```typescript
 import {
-  createIpythonToolDefinition,
+  createRustToolDefinition,
   createBashToolDefinition,
   createEditToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -494,7 +494,7 @@ const cwd = "/path/to/project";
 const { session } = await createAgentSession({
   cwd,
   customTools: [
-    createIpythonToolDefinition(cwd),
+    createRustToolDefinition(cwd),
     createBashToolDefinition(cwd),
     createEditToolDefinition(cwd),
   ],
@@ -926,7 +926,7 @@ const { session } = await createAgentSession({
   authStorage,
   modelRegistry,
 
-  tools: ["ipython"],
+  tools: ["rust"],
   customTools: [statusTool],
   resourceLoader: loader,
 
@@ -1106,8 +1106,8 @@ SessionManager
 SettingsManager
 
 // Tool factories (for custom cwd)
-createIpythonTool, createBashTool, createEditTool
-createIpythonToolDefinition, createBashToolDefinition, createEditToolDefinition
+createRustTool, createBashTool, createEditTool
+createRustToolDefinition, createBashToolDefinition, createEditToolDefinition
 
 // Types
 type CreateAgentSessionOptions

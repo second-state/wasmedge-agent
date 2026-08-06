@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
-import { isTemplateWarm, resolveToolchain, type ToolchainInfo, warmTemplate } from "./toolchain.js";
+import { ensureTemplateReady, resolveToolchain, type ToolchainInfo } from "./toolchain.js";
 import {
 	ensureWorkspaceAt,
 	listPersistentState,
@@ -25,7 +25,15 @@ export {
 	type BridgeServerOptions,
 } from "./bridge-server.js";
 export { CellRunner, composeToolText } from "./cell-runner.js";
-export { isTemplateWarm, resolveToolchain, type ToolchainInfo, warmTemplate } from "./toolchain.js";
+export {
+	ensureTemplateReady,
+	isTemplateVendored,
+	isTemplateWarm,
+	resolveToolchain,
+	type ToolchainInfo,
+	vendorTemplate,
+	warmTemplate,
+} from "./toolchain.js";
 export type {
 	CellInput,
 	CellResult,
@@ -120,10 +128,7 @@ export class RustCellProvisioner {
 	private async start(onProgress?: (message: string) => void): Promise<CellRunner> {
 		onProgress?.("Checking Rust/WasmEdge toolchain...");
 		this.toolchainInfo = resolveToolchain();
-		if (!isTemplateWarm()) {
-			onProgress?.("Warming the cell workspace template (one-time)...");
-			warmTemplate(this.toolchainInfo.cargoBin);
-		}
+		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress);
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		ensureWorkspaceAt(this.workspace);

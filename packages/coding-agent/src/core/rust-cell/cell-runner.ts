@@ -5,6 +5,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { withBuildPermit } from "./build-gate.js";
 import {
 	type CellInput,
 	type CellResult,
@@ -156,15 +157,28 @@ export class CellRunner {
 		writeFileSync(join(ws, "cell", "src", "main.rs"), input.code);
 
 		const compileStarted = Date.now();
-		const build = await runProcess(
-			this.opts.cargoBin,
-			["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
-			{
-				cwd: ws,
-				timeoutMs: this.opts.cellTimeoutMs,
-				signal: per.signal,
-			},
-		);
+		// Gate waiting counts against the cell budget: the caller sees honest
+		// wall time, and a saturated host cannot queue unbounded work. An abort
+		// while still queued surfaces as the same "aborted" result a mid-build
+		// abort produces.
+		const build = await withBuildPermit(
+			() =>
+				runProcess(
+					this.opts.cargoBin,
+					["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
+					{
+						cwd: ws,
+						timeoutMs: this.opts.cellTimeoutMs,
+						signal: per.signal,
+					},
+				),
+			per.signal,
+		).catch((error) => {
+			if (per.signal?.aborted) {
+				return { exitCode: null, stdout: "", stderr: "", aborted: true, timedOut: false } satisfies ProcOutcome;
+			}
+			throw error;
+		});
 		const compileMs = Date.now() - compileStarted;
 
 		if (build.aborted || build.timedOut) {

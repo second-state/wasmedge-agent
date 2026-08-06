@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { APP_NAME, SELF_UPDATE_INTERACTIVE_CHILD_ENV } from "../config.js";
+import { collectRuntimeChecks, fixRuntime } from "../core/rust-cell/doctor.js";
 import { handlePackageCommand, isSelfUpdateSource } from "../package-manager-cli.js";
 import { INTERNAL_RUNTIME_COMMAND_MARKER, parseArgs } from "./args.js";
 import {
@@ -13,7 +14,7 @@ import {
 	REMOVED_COMMAND_NAMES,
 } from "./command-registry.js";
 import { handleDaemonCommand } from "./daemon-command.js";
-import { runPs, runReap, runShutdownAll } from "./daemon-ps.js";
+import { discoverDaemons, performReap, printReapReport, runPs, runShutdownAll } from "./daemon-ps.js";
 import { DAEMON_UPDATE_RESTART_COORDINATOR_FLAG } from "./daemon-update-restart.js";
 
 export interface PublicCommandResult {
@@ -250,10 +251,37 @@ async function runStatus(args: string[]): Promise<PublicCommandResult> {
 async function runDoctor(args: string[]): Promise<PublicCommandResult> {
 	const options = parseBooleanOptions(args, new Set(["--fix", "--json"]), "doctor");
 	if (!options) return HANDLED;
-	if (options.has("--fix")) {
-		await runReap(options.has("--json"), false);
+	const json = options.has("--json");
+	const fix = options.has("--fix");
+
+	// Fix first so the reported checks reflect the repaired state.
+	const fixes = fix ? fixRuntime() : undefined;
+	const runtime = collectRuntimeChecks();
+
+	if (json) {
+		// One document in every mode; the reap outcome folds in under --fix.
+		if (fix) {
+			const { reaped, skipped } = await performReap(false);
+			console.log(JSON.stringify({ runtime, fixes, reaped, skipped }, null, 2));
+		} else {
+			console.log(JSON.stringify({ runtime, daemons: await discoverDaemons() }, null, 2));
+		}
+		return HANDLED;
+	}
+
+	console.log("Runtime:");
+	if (fixes && fixes.length > 0) {
+		for (const message of fixes) console.log(`  fix: ${message}`);
+	}
+	for (const check of runtime) {
+		console.log(`  [${check.ok ? " ok " : "FAIL"}] ${check.name}: ${check.detail}`);
+		if (!check.ok && check.fix) console.log(`         fix: ${check.fix}`);
+	}
+	console.log("\nBackground services:");
+	if (fix) {
+		printReapReport(await performReap(false));
 	} else {
-		await runPs(options.has("--json"));
+		await runPs(false);
 	}
 	return HANDLED;
 }
