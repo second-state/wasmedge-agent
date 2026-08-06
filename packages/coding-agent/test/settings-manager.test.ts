@@ -407,6 +407,29 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("rustCell", () => {
+		it("loads cellTimeoutMs and floors fractional values", () => {
+			expect(SettingsManager.inMemory({ rustCell: { cellTimeoutMs: 300_000 } }).getRustCellTimeoutMs()).toBe(
+				300_000,
+			);
+			expect(SettingsManager.inMemory({ rustCell: { cellTimeoutMs: 90_000.7 } }).getRustCellTimeoutMs()).toBe(
+				90_000,
+			);
+		});
+
+		it("falls through to the engine default on missing or junk values", () => {
+			expect(SettingsManager.inMemory({}).getRustCellTimeoutMs()).toBeUndefined();
+			expect(SettingsManager.inMemory({ rustCell: {} }).getRustCellTimeoutMs()).toBeUndefined();
+			expect(SettingsManager.inMemory({ rustCell: { cellTimeoutMs: 0 } }).getRustCellTimeoutMs()).toBeUndefined();
+			expect(SettingsManager.inMemory({ rustCell: { cellTimeoutMs: -5 } }).getRustCellTimeoutMs()).toBeUndefined();
+			expect(
+				SettingsManager.inMemory({
+					rustCell: { cellTimeoutMs: Number.NaN },
+				}).getRustCellTimeoutMs(),
+			).toBeUndefined();
+		});
+	});
+
 	describe("shellCommandPrefix", () => {
 		it("should load shellCommandPrefix from settings", () => {
 			const settingsPath = join(agentDir, "settings.json");

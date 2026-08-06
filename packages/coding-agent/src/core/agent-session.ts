@@ -8420,6 +8420,7 @@ export class AgentSession {
 			this._rustCellProvisioner = new RustCellProvisioner({
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
+				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
 				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
 				// Mount ALL discovered rust skills (visibility only gates the prompt),
