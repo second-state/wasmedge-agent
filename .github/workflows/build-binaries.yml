@@ -1,11 +1,8 @@
 name: Release Prime Agent
 
+# Fork note: upstream releases on every main push; this fork keeps the
+# workflow manual-only until its own release process exists (M5).
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       release_tag:

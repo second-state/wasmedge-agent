@@ -1,8 +1,6 @@
 name: Nightly Process Stress
 
 on:
-  schedule:
-    - cron: "0 9 * * *"
   workflow_dispatch:
 
 concurrency:
