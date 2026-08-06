@@ -141,18 +141,6 @@ export class McpManager {
 		return cred !== undefined;
 	}
 
-	/** `-<server>/SKILL.md` overrides for every built-in integration the user isn't logged into. */
-	getDisabledBuiltinSkillOverrides(): string[] {
-		const overrides: string[] = [];
-		for (const entry of BUILTIN_MCP_CATALOG) {
-			const integration = this.integrations.get(entry.server);
-			if (integration && !this.isAuthed(integration)) {
-				overrides.push(`-${entry.server}/SKILL.md`);
-			}
-		}
-		return overrides;
-	}
-
 	/** Host-request handlers exposed to cells. */
 	hostHandlers(): Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> {
 		const handlers: Record<string, (payload: Record<string, unknown>) => Promise<Record<string, unknown>>> = {

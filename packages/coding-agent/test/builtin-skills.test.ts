@@ -222,61 +222,49 @@ describe("builtin skills", () => {
 			const { skills, diagnostics } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
 
 			expect(diagnostics).toEqual([]);
-			expect(skills.length).toBeGreaterThan(0);
-			expect(skills.map((s) => s.name)).toContain("prime-intellect");
-			expect(skills.map((s) => s.name)).toContain("skill-creator");
+			expect(skills.map((s) => s.name).sort()).toEqual(["skill-creator", "websearch"]);
 		});
 
-		it("loads the bundled goal skill as a python skill", () => {
+		it("ships websearch as a rust crate skill", () => {
 			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
 
-			const goal = skills.find((s) => s.name === "goal");
-			expect(goal).toBeDefined();
-			expect(goal?.kind).toBe("python");
-			expect(goal?.kind === "python" && goal.python.importName).toBe("goal");
+			const websearch = skills.find((s) => s.name === "websearch");
+			expect(websearch).toBeDefined();
+			expect(websearch?.kind).toBe("rust");
+			expect(websearch?.kind === "rust" && websearch.rust.crateName).toBe("websearch");
 		});
 
-		it("loads the bundled compact skill as a python skill", () => {
+		it("does not ship the kernel-era orchestration thin shells", () => {
 			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
+			const names = skills.map((skill) => skill.name);
 
-			const compact = skills.find((s) => s.name === "compact");
-			expect(compact).toBeDefined();
-			expect(compact?.kind).toBe("python");
-			expect(compact?.kind === "python" && compact.python.importName).toBe("compact");
+			// rlm crate built-ins now; zero install/discovery cost (DESIGN §4.1).
+			for (const gone of [
+				"goal",
+				"compact",
+				"refine",
+				"agent-message",
+				"agent-observe",
+				"rlm-heartbeat",
+				"orchestration-heartbeat",
+				"edit",
+				"attach-image",
+				"linear",
+				"notion",
+				"prime-intellect",
+			]) {
+				expect(names).not.toContain(gone);
+			}
 		});
 
-		it("loads the bundled RLM heartbeat skill as a python skill", () => {
-			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
-
-			const rlmHeartbeat = skills.find((s) => s.name === "rlm-heartbeat");
-			expect(rlmHeartbeat).toBeDefined();
-			expect(rlmHeartbeat?.kind).toBe("python");
-			expect(rlmHeartbeat?.kind === "python" && rlmHeartbeat.python.importName).toBe("rlm_heartbeat");
-		});
-
-		it("does not ship orchestration heartbeat as a built-in skill", () => {
-			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
-
-			expect(skills.map((skill) => skill.name)).not.toContain("orchestration-heartbeat");
-		});
-
-		it("ships the edit skill as a python skill importable as `edit`", () => {
-			const { skills } = loadSkillsFromDir({ dir: getBundledSkillsDir(), source: "builtin" });
-
-			const edit = skills.find((s) => s.name === "edit");
-			expect(edit).toBeDefined();
-			expect(edit?.kind).toBe("python");
-			expect(edit?.kind === "python" && edit.python.importName).toBe("edit");
-		});
-
-		it("loads the skill-creator python template as a valid python skill", () => {
-			const referencePath = join(getBundledSkillsDir(), "skill-creator", "references", "python-skills.md");
+		it("loads the skill-creator rust template as a valid rust skill", () => {
+			const referencePath = join(getBundledSkillsDir(), "skill-creator", "references", "rust-skills.md");
 			const reference = readFileSync(referencePath, "utf-8");
 			const section = reference.match(/## Minimal Template([\s\S]*?)\n## /)?.[1];
 			expect(section).toBeDefined();
 
 			const files = [...(section as string).matchAll(/\*\*`([^`]+)`\*\*\s*\n+```[a-z]*\n([\s\S]*?)\n```/g)];
-			expect(files.map((m) => m[1])).toEqual(["SKILL.md", "pyproject.toml", "src/word_count/__init__.py"]);
+			expect(files.map((m) => m[1])).toEqual(["SKILL.md", "Cargo.toml", "src/lib.rs"]);
 
 			const templateRoot = join(tempDir, "template-skills");
 			for (const [, relPath, content] of files) {
@@ -289,8 +277,8 @@ describe("builtin skills", () => {
 			expect(diagnostics).toEqual([]);
 			expect(skills).toHaveLength(1);
 			expect(skills[0].name).toBe("word-count");
-			expect(skills[0].kind).toBe("python");
-			expect(skills[0].kind === "python" && skills[0].python.importName).toBe("word_count");
+			expect(skills[0].kind).toBe("rust");
+			expect(skills[0].kind === "rust" && skills[0].rust.crateName).toBe("word_count");
 		});
 	});
 

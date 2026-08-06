@@ -131,7 +131,6 @@ export interface DefaultResourceLoaderOptions {
 	/** Directory of built-in skills shipped with the package. Defaults to the bundled skills dir; pass null to disable. */
 	bundledSkillsDir?: string | null;
 	/** Extra force-exclude patterns for built-in skills (e.g. unauthenticated MCP integrations). */
-	extraBuiltinSkillOverrides?: () => string[];
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -221,7 +220,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 			bundledSkillsDir: this.bundledSkillsDir,
-			extraBuiltinSkillOverrides: options.extraBuiltinSkillOverrides,
 		});
 		this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
 		this.additionalSkillPaths = options.additionalSkillPaths ?? [];

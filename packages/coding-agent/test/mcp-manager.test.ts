@@ -25,9 +25,9 @@ describe("McpManager", () => {
 
 	it("disables every built-in integration when no credentials exist", () => {
 		const manager = new McpManager({ authStorage });
-		const overrides = manager.getDisabledBuiltinSkillOverrides();
-		expect(overrides).toContain("-linear/SKILL.md");
-		expect(overrides).toContain("-notion/SKILL.md");
+		for (const status of manager.listStatus()) {
+			expect(status.enabled).toBe(false);
+		}
 	});
 
 	it("enables an integration once credentials are stored", () => {
@@ -38,12 +38,10 @@ describe("McpManager", () => {
 			expires: Date.now() + 3600_000,
 		});
 		const manager = new McpManager({ authStorage });
-		const overrides = manager.getDisabledBuiltinSkillOverrides();
-		expect(overrides).not.toContain("-linear/SKILL.md");
-		expect(overrides).toContain("-notion/SKILL.md");
-
 		const status = manager.listStatus().find((s) => s.server === "linear");
 		expect(status?.enabled).toBe(true);
+		const notion = manager.listStatus().find((s) => s.server === "notion");
+		expect(notion?.enabled).toBe(false);
 	});
 
 	it("registers an OAuth provider per built-in integration", () => {

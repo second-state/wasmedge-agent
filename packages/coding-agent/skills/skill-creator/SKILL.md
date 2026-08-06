@@ -1,22 +1,22 @@
 ---
 name: skill-creator
-description: Create, validate, and install Prime Agent skills - both markdown skills and Python-backed skills callable from the IPython kernel. Use when the user asks to create a skill, turn a workflow, script, or prompt into a reusable skill, add a Python skill the agent can call, or asks how to write a SKILL.md and where skills live.
+description: Create, validate, and install Prime Agent skills - both markdown skills and Rust crate skills callable from rust cells. Use when the user asks to create a skill, turn a workflow, script, or helper into a reusable skill, add a Rust skill the agent can call, or asks how to write a SKILL.md and where skills live.
 ---
 
 # Skill Creator
 
-A skill is a directory with a `SKILL.md` file (YAML frontmatter + markdown instructions). At startup Prime Agent reads only each skill's name and description into the system prompt; the full file loads on demand when a task matches. Prime Agent follows the [Agent Skills standard](https://agentskills.io/specification) and extends it with Python-backed skills.
+A skill is a directory with a `SKILL.md` file (YAML frontmatter + markdown instructions). At startup Prime Agent reads only each skill's name and description into the system prompt; the full file loads on demand when a task matches. Prime Agent follows the [Agent Skills standard](https://agentskills.io/specification) and extends it with Rust crate skills.
 
 | Kind | What it is | When to use |
 |---|---|---|
 | markdown | `SKILL.md` plus optional scripts, references, and assets | Workflows, CLI recipes, domain knowledge, multi-step instructions |
-| python | A markdown skill that also ships a Python package installed into the agent's persistent IPython kernel | Capabilities that are naturally one Python call: API wrappers, fetchers, converters, computations |
+| rust | A markdown skill that also ships a Rust crate mounted into the session workspace as `agent_lib::skills::<name>` | Capabilities that are naturally one function call: API wrappers, parsers, converters, computations |
 
-Before writing a Python-backed skill, read [references/python-skills.md](references/python-skills.md) for the package contract.
+Before writing a Rust skill, read [references/rust-skills.md](references/rust-skills.md) for the crate contract.
 
 ## Creating a Skill
 
-1. **Pick the kind.** Default to markdown. Go Python only when the agent should *call* the capability (`await my_skill(...)`) instead of following instructions.
+1. **Pick the kind.** Default to markdown. Go Rust only when the agent should *call* the capability (`agent_lib::skills::my_skill::run(...)?`) instead of following instructions.
 2. **Pick the location.** Ask the user when it is not obvious from context:
    - Project skill, shared via the repo: `.prime/agent/skills/<name>/`
    - Personal global skill: `~/.prime/agent/skills/<name>/`
@@ -31,6 +31,8 @@ On a name collision the first skill found wins. Precedence: explicit `--skill` p
 ```
 my-skill/
 ├── SKILL.md              # Required: frontmatter + instructions
+├── Cargo.toml            # Rust skills only: makes the directory a crate
+├── src/lib.rs            # Rust skills only: the callable implementation
 ├── scripts/              # Optional helper scripts the instructions reference
 ├── references/           # Optional detailed docs, loaded only when needed
 └── assets/               # Optional templates and data files
@@ -70,6 +72,8 @@ Poor: `Helps with PDFs.`
 
 Keep `SKILL.md` short: the decision flow, the common commands, the contract. Push exhaustive detail (API schemas, full option lists, long examples) into `references/*.md` and link them, so they only enter context when actually needed. State setup steps (installs, env vars, credentials) explicitly and early.
 
+For Rust skills, the SKILL.md body **must document every public signature** (the mounted crate has no runtime introspection — SKILL.md is the API reference the model reads before calling).
+
 ## Verification
 
 After writing the skill:
@@ -78,4 +82,4 @@ After writing the skill:
 2. In an interactive session, `/reload` picks up new skills without a restart; other sessions pick them up on start. Loading problems (bad name, missing description, name collisions) surface as warnings — ask the user to check, or check diagnostics yourself if you can.
 3. A loaded skill is also invocable as `/skill:<name>`, which the user can try directly.
 
-For Python-backed skills, also run the checks in [references/python-skills.md](references/python-skills.md).
+For Rust skills, also run the checks in [references/rust-skills.md](references/rust-skills.md).

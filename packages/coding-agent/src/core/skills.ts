@@ -77,12 +77,14 @@ export interface SkillFrontmatter {
 	[key: string]: unknown;
 }
 
-export type SkillKind = "markdown" | "python";
+export type SkillKind = "markdown" | "rust";
 
-export interface SkillPythonMetadata {
-	importName: string;
-	packagePath: string;
-	pyprojectPath: string;
+export interface SkillRustMetadata {
+	/** Module path segment under agent_lib::skills:: (skill name with - as _). */
+	crateName: string;
+	/** Skill root directory: the crate root, mounted into the workspace in place. */
+	cratePath: string;
+	cargoTomlPath: string;
 }
 
 interface BaseSkill {
@@ -96,17 +98,17 @@ interface BaseSkill {
 
 export interface MarkdownSkill extends BaseSkill {
 	kind: "markdown";
-	python?: undefined;
+	rust?: undefined;
 }
 
-export interface PythonSkill extends BaseSkill {
-	kind: "python";
-	python: SkillPythonMetadata;
+export interface RustSkill extends BaseSkill {
+	kind: "rust";
+	rust: SkillRustMetadata;
 }
 
-export type Skill = MarkdownSkill | PythonSkill;
+export type Skill = MarkdownSkill | RustSkill;
 
-export interface PythonSkillRuntimeInfo extends SkillPythonMetadata {
+export interface RustSkillRuntimeInfo extends SkillRustMetadata {
 	name: string;
 }
 
@@ -191,76 +193,76 @@ function createSkillSourceInfo(filePath: string, baseDir: string, source: string
 	}
 }
 
-function pythonImportNameForSkill(name: string): string {
+function crateNameForSkill(name: string): string {
 	return name.replaceAll("-", "_");
 }
 
-function isValidPythonImportName(name: string): boolean {
-	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+function isValidCrateName(name: string): boolean {
+	return /^[a-z_][a-z0-9_]*$/.test(name);
 }
 
-function detectPythonSkill(
-	skillDir: string,
-	name: string,
-	diagnostics: ResourceDiagnostic[],
-): SkillPythonMetadata | null {
-	const pyprojectPath = join(skillDir, "pyproject.toml");
-	if (!existsSync(pyprojectPath)) {
-		return null;
-	}
-
+function isFile(path: string): boolean {
 	try {
-		if (!statSync(pyprojectPath).isFile()) {
-			return null;
-		}
+		return statSync(path).isFile();
 	} catch {
+		return false;
+	}
+}
+
+/** Detect a skills-as-crates skill (DESIGN.md §4.1): SKILL.md + Cargo.toml +
+ * src/lib.rs. A pyproject.toml without a Cargo.toml is a kernel-era python
+ * skill — unsupported by the rust runtime; its SKILL.md still loads as plain
+ * instructions, with a diagnostic explaining the downgrade. */
+function detectRustSkill(skillDir: string, name: string, diagnostics: ResourceDiagnostic[]): SkillRustMetadata | null {
+	const cargoTomlPath = join(skillDir, "Cargo.toml");
+	if (!isFile(cargoTomlPath)) {
+		const pyprojectPath = join(skillDir, "pyproject.toml");
+		if (isFile(pyprojectPath)) {
+			diagnostics.push({
+				type: "warning",
+				message: `skill "${name}" is a python skill; the rust runtime does not run python skills — its SKILL.md loads as plain instructions`,
+				path: pyprojectPath,
+			});
+		}
 		return null;
 	}
 
-	const importName = pythonImportNameForSkill(name);
-	if (!isValidPythonImportName(importName)) {
+	const crateName = crateNameForSkill(name);
+	if (!isValidCrateName(crateName)) {
 		diagnostics.push({
 			type: "warning",
-			message: `python skill import name "${importName}" is invalid`,
-			path: pyprojectPath,
+			message: `rust skill crate name "${crateName}" is invalid`,
+			path: cargoTomlPath,
 		});
 		return null;
 	}
 
-	const packageInitPath = join(skillDir, "src", importName, "__init__.py");
-	try {
-		if (!statSync(packageInitPath).isFile()) {
-			diagnostics.push({
-				type: "warning",
-				message: `python skill package src/${importName}/__init__.py not found`,
-				path: pyprojectPath,
-			});
-			return null;
-		}
-	} catch {
+	if (!isFile(join(skillDir, "src", "lib.rs"))) {
 		diagnostics.push({
 			type: "warning",
-			message: `python skill package src/${importName}/__init__.py not found`,
-			path: pyprojectPath,
+			message: `rust skill src/lib.rs not found`,
+			path: cargoTomlPath,
 		});
 		return null;
 	}
 
 	return {
-		importName,
-		packagePath: skillDir,
-		pyprojectPath,
+		crateName,
+		cratePath: skillDir,
+		cargoTomlPath,
 	};
 }
 
-export function getPythonSkillRuntimeInfo(skills: readonly Skill[]): PythonSkillRuntimeInfo[] {
+/** Mountable rust skills. Callers mount ALL discovered skills (visibility only
+ * gates the prompt), mirroring the kernel-era install-everything venv. */
+export function getRustSkillRuntimeInfo(skills: readonly Skill[]): RustSkillRuntimeInfo[] {
 	return skills
-		.filter((skill): skill is PythonSkill => skill.kind === "python")
+		.filter((skill): skill is RustSkill => skill.kind === "rust")
 		.map((skill) => ({
 			name: skill.name,
-			importName: skill.python.importName,
-			packagePath: skill.python.packagePath,
-			pyprojectPath: skill.python.pyprojectPath,
+			crateName: skill.rust.crateName,
+			cratePath: skill.rust.cratePath,
+			cargoTomlPath: skill.rust.cargoTomlPath,
 		}));
 }
 
@@ -418,7 +420,7 @@ function loadSkillFromFile(
 			return { skill: null, diagnostics };
 		}
 
-		const python = basename(filePath) === "SKILL.md" ? detectPythonSkill(skillDir, name, diagnostics) : null;
+		const rust = basename(filePath) === "SKILL.md" ? detectRustSkill(skillDir, name, diagnostics) : null;
 		const baseSkill: BaseSkill = {
 			name,
 			description: frontmatter.description,
@@ -429,7 +431,7 @@ function loadSkillFromFile(
 		};
 
 		return {
-			skill: python ? { ...baseSkill, kind: "python", python } : { ...baseSkill, kind: "markdown" },
+			skill: rust ? { ...baseSkill, kind: "rust", rust } : { ...baseSkill, kind: "markdown" },
 			diagnostics,
 		};
 	} catch (error) {
@@ -457,6 +459,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 	const lines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
 		"Read a skill's file in a rust cell when the task matches its description.",
+		'Skills with type rust are mounted as crates: call the functions their SKILL.md documents via the rust_use path (e.g. agent_lib::skills::websearch::run("query")?).',
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
 		"<available_skills>",
@@ -466,8 +469,8 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 		lines.push("  <skill>");
 		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
 		lines.push(`    <type>${skill.kind}</type>`);
-		if (skill.kind === "python") {
-			lines.push(`    <python_import>${escapeXml(skill.python.importName)}</python_import>`);
+		if (skill.kind === "rust") {
+			lines.push(`    <rust_use>agent_lib::skills::${escapeXml(skill.rust.crateName)}</rust_use>`);
 		}
 		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
 		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
@@ -524,10 +527,10 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 	const skillMap = new Map<string, Skill>();
 	const realPathSet = new Set<string>();
-	const pythonImportMap = new Map<string, Skill>();
+	const crateNameMap = new Map<string, Skill>();
 	const allDiagnostics: ResourceDiagnostic[] = [];
 	const collisionDiagnostics: ResourceDiagnostic[] = [];
-	const pythonImportDiagnostics: ResourceDiagnostic[] = [];
+	const crateNameDiagnostics: ResourceDiagnostic[] = [];
 
 	function addSkills(result: LoadSkillsResult) {
 		allDiagnostics.push(...result.diagnostics);
@@ -556,16 +559,16 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 			} else {
 				skillMap.set(skill.name, skill);
 				realPathSet.add(realPath);
-				if (skill.kind === "python") {
-					const existingPythonSkill = pythonImportMap.get(skill.python.importName);
-					if (existingPythonSkill) {
-						pythonImportDiagnostics.push({
+				if (skill.kind === "rust") {
+					const existingRustSkill = crateNameMap.get(skill.rust.crateName);
+					if (existingRustSkill) {
+						crateNameDiagnostics.push({
 							type: "warning",
-							message: `python import name "${skill.python.importName}" is shared by skills "${existingPythonSkill.name}" and "${skill.name}"`,
+							message: `rust crate name "${skill.rust.crateName}" is shared by skills "${existingRustSkill.name}" and "${skill.name}"`,
 							path: skill.filePath,
 						});
 					} else {
-						pythonImportMap.set(skill.python.importName, skill);
+						crateNameMap.set(skill.rust.crateName, skill);
 					}
 				}
 			}
@@ -627,6 +630,6 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 	return {
 		skills: Array.from(skillMap.values()),
-		diagnostics: [...allDiagnostics, ...collisionDiagnostics, ...pythonImportDiagnostics],
+		diagnostics: [...allDiagnostics, ...collisionDiagnostics, ...crateNameDiagnostics],
 	};
 }

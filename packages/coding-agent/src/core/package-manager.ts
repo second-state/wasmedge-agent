@@ -116,7 +116,6 @@ interface PackageManagerOptions {
 	/** Directory of built-in skills shipped with the package. Defaults to the bundled skills dir; pass null to disable. */
 	bundledSkillsDir?: string | null;
 	/** Extra force-exclude patterns for built-in skills (e.g. unauthenticated MCP integrations). */
-	extraBuiltinSkillOverrides?: () => string[];
 }
 
 type SourceScope = "user" | "project" | "temporary";
@@ -770,7 +769,6 @@ export class DefaultPackageManager implements PackageManager {
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private bundledSkillsDir: string | null;
-	private extraBuiltinSkillOverrides: () => string[];
 	private globalNpmRoot: string | undefined;
 	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
@@ -780,7 +778,6 @@ export class DefaultPackageManager implements PackageManager {
 		this.agentDir = options.agentDir;
 		this.settingsManager = options.settingsManager;
 		this.bundledSkillsDir = options.bundledSkillsDir === undefined ? getBundledSkillsDir() : options.bundledSkillsDir;
-		this.extraBuiltinSkillOverrides = options.extraBuiltinSkillOverrides ?? (() => []);
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -2252,7 +2249,7 @@ export class DefaultPackageManager implements PackageManager {
 				baseDir: this.bundledSkillsDir,
 			};
 			const builtinEntries = collectAutoSkillEntries(this.bundledSkillsDir, "pi");
-			// Built-in skills (edit, goal, …) are expected to ship with the package. A
+			// Built-in skills (websearch, skill-creator) are expected to ship with the package. A
 			// packaging slip that drops the skills/ dir from the build output would
 			// otherwise degrade silently to zero skills (ENG-4220); surface it loudly.
 			if (builtinEntries.length === 0) {
@@ -2266,10 +2263,8 @@ export class DefaultPackageManager implements PackageManager {
 			}
 			const builtinSkillOverrides = [
 				...userOverrides.skills,
-				// Disable the bundled websearch skill unless explicitly enabled…
+				// Disable the bundled websearch skill unless explicitly enabled.
 				...(this.settingsManager.getBundledWebsearchEnabled() ? [] : ["-websearch/SKILL.md"]),
-				// …and disable any MCP integration the user hasn't logged into.
-				...this.extraBuiltinSkillOverrides(),
 			];
 			addResources("skills", builtinEntries, builtinMetadata, builtinSkillOverrides, this.bundledSkillsDir);
 		}

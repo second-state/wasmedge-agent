@@ -219,18 +219,18 @@ export { type ParsedSkillBlock, parseSkillBlock } from "./core/skill-blocks.js";
 // Skills
 export {
 	formatSkillsForPrompt,
-	getPythonSkillRuntimeInfo,
+	getRustSkillRuntimeInfo,
 	type LoadSkillsFromDirOptions,
 	type LoadSkillsResult,
 	loadSkills,
 	loadSkillsFromDir,
 	type MarkdownSkill,
-	type PythonSkill,
-	type PythonSkillRuntimeInfo,
+	type RustSkill,
+	type RustSkillRuntimeInfo,
 	type Skill,
 	type SkillFrontmatter,
 	type SkillKind,
-	type SkillPythonMetadata,
+	type SkillRustMetadata,
 } from "./core/skills.js";
 export { createSyntheticSourceInfo } from "./core/source-info.js";
 // Tools

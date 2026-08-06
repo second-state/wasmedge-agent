@@ -54,7 +54,6 @@ import { sleep } from "../utils/sleep.js";
 import {
 	AGENT_MESSAGE_CUSTOM_TYPE,
 	AGENT_MESSAGE_RECEIVED_PREVIEW_LABEL,
-	AGENT_MESSAGE_SKILL_NAME,
 	type AgentFamilyCatalogEntry,
 	type AgentFamilyRosterResult,
 	type AgentSessionMessage,
@@ -71,7 +70,6 @@ import {
 	parseAgentSessionMessagePromptId,
 } from "./agent-messages.js";
 import {
-	AGENT_OBSERVE_SKILL_NAME,
 	type AgentObserveAgentSnapshot,
 	type AgentObserveController,
 	type AgentObserveListResult,
@@ -79,7 +77,6 @@ import {
 	createAgentObserveHostHandlers,
 	normalizeObserveLimit,
 	normalizeObserveMaxChars,
-	ORCHESTRATION_HEARTBEAT_SKILL_NAME,
 } from "./agent-observe.js";
 import { flushAgentTraceUpload } from "./agent-traces.js";
 import {
@@ -104,7 +101,6 @@ import {
 } from "./autonomous.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import {
-	COMPACT_SKILL_NAME,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
@@ -157,7 +153,6 @@ import {
 	emptyGoalState,
 	GOAL_CONTEXT_CUSTOM_TYPE,
 	GOAL_CONTEXT_PREVIEW_LABEL,
-	GOAL_SKILL_NAME,
 	GOAL_STATE_CUSTOM_TYPE,
 	type GoalHostResponse,
 	type GoalState,
@@ -205,7 +200,6 @@ import {
 	mergeHarnessStates,
 	mergeRefinementHistory,
 	planRefinement,
-	REFINE_SKILL_NAME,
 	type RefinementPlan,
 	type RefinementResult,
 	reviewAutoRefine,
@@ -8494,26 +8488,10 @@ export class AgentSession {
 	 * and compact skills are withheld when disabled for this session.
 	 */
 	private _modelVisibleSkills(): Skill[] {
-		let skills = this._resourceLoader.getSkills().skills;
-		if (!this._includeGoals) {
-			skills = skills.filter((skill) => skill.name !== GOAL_SKILL_NAME);
-		}
-		if (!this._includeCompactSkill) {
-			skills = skills.filter((skill) => skill.name !== COMPACT_SKILL_NAME);
-		}
-		if (!this._autoRefineAllowedForSession()) {
-			skills = skills.filter((skill) => skill.name !== REFINE_SKILL_NAME);
-		}
-		if (!this._agentMessageController) {
-			skills = skills.filter((skill) => skill.name !== AGENT_MESSAGE_SKILL_NAME);
-		}
-		if (!this._agentObserveController) {
-			skills = skills.filter((skill) => skill.name !== AGENT_OBSERVE_SKILL_NAME);
-		}
-		if (!this._agentObserveController || !this._rlmHeartbeatController) {
-			skills = skills.filter((skill) => skill.name !== ORCHESTRATION_HEARTBEAT_SKILL_NAME);
-		}
-		return skills;
+		// Orchestration capabilities (goal/compact/refine/msg/observe/heartbeat)
+		// are rlm crate built-ins gated by _rlmCapabilityTokens and the host
+		// handler registry, not by discovered skills — nothing to filter here.
+		return this._resourceLoader.getSkills().skills;
 	}
 
 	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */

@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
 import {
 	formatSkillsForPrompt,
-	getPythonSkillRuntimeInfo,
+	getRustSkillRuntimeInfo,
 	loadSkills,
 	loadSkillsFromDir,
 	type Skill,
-	type SkillPythonMetadata,
+	type SkillRustMetadata,
 } from "../src/core/skills.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
@@ -22,7 +22,7 @@ function createTestSkill(options: {
 	filePath: string;
 	baseDir: string;
 	disableModelInvocation?: boolean;
-	python?: SkillPythonMetadata;
+	rust?: SkillRustMetadata;
 	source?: string;
 }): Skill {
 	const base = {
@@ -33,11 +33,11 @@ function createTestSkill(options: {
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
 		disableModelInvocation: options.disableModelInvocation ?? false,
 	};
-	return options.python
+	return options.rust
 		? {
 				...base,
-				kind: "python",
-				python: options.python,
+				kind: "rust",
+				rust: options.rust,
 			}
 		: {
 				...base,
@@ -45,10 +45,10 @@ function createTestSkill(options: {
 			};
 }
 
-function writePythonSkill(root: string, name: string): void {
+function writeRustSkill(root: string, name: string): void {
 	const skillDir = join(root, name);
-	const importName = name.replaceAll("-", "_");
-	mkdirSync(join(skillDir, "src", importName), { recursive: true });
+	const crateName = name.replaceAll("-", "_");
+	mkdirSync(join(skillDir, "src"), { recursive: true });
 	writeFileSync(
 		join(skillDir, "SKILL.md"),
 		`---
@@ -60,13 +60,14 @@ Use this skill for tests.
 `,
 	);
 	writeFileSync(
-		join(skillDir, "pyproject.toml"),
-		`[project]
-name = "${name}"
+		join(skillDir, "Cargo.toml"),
+		`[package]
+name = "${crateName}"
 version = "0.1.0"
+edition = "2021"
 `,
 	);
-	writeFileSync(join(skillDir, "src", importName, "__init__.py"), "async def run():\n    return 'ok'\n");
+	writeFileSync(join(skillDir, "src", "lib.rs"), 'pub fn run() -> &\'static str {\n    "ok"\n}\n');
 }
 
 describe("skills", () => {
@@ -263,8 +264,8 @@ describe("skills", () => {
 			expect(skills[0].disableModelInvocation).toBe(false);
 		});
 
-		it("should load Python-backed skills from the same skill root", () => {
-			const skillDir = join(fixturesDir, "python-skill");
+		it("should load Rust crate skills from the same skill root", () => {
+			const skillDir = join(fixturesDir, "rust-skill");
 			const { skills, diagnostics } = loadSkillsFromDir({
 				dir: skillDir,
 				source: "test",
@@ -272,28 +273,41 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(1);
 			expect(skills[0]).toMatchObject({
-				name: "python-skill",
-				kind: "python",
-				python: {
-					importName: "python_skill",
-					packagePath: skillDir,
-					pyprojectPath: join(skillDir, "pyproject.toml"),
+				name: "rust-skill",
+				kind: "rust",
+				rust: {
+					crateName: "rust_skill",
+					cratePath: skillDir,
+					cargoTomlPath: join(skillDir, "Cargo.toml"),
 				},
 			});
-			expect(getPythonSkillRuntimeInfo(skills)).toEqual([
+			expect(getRustSkillRuntimeInfo(skills)).toEqual([
 				{
-					name: "python-skill",
-					importName: "python_skill",
-					packagePath: skillDir,
-					pyprojectPath: join(skillDir, "pyproject.toml"),
+					name: "rust-skill",
+					crateName: "rust_skill",
+					cratePath: skillDir,
+					cargoTomlPath: join(skillDir, "Cargo.toml"),
 				},
 			]);
 			expect(diagnostics).toHaveLength(0);
 		});
 
-		it("should warn and keep metadata-only skills when Python package files are missing", () => {
+		it("should warn and keep metadata-only skills when the crate lib.rs is missing", () => {
 			const { skills, diagnostics } = loadSkillsFromDir({
-				dir: join(fixturesDir, "python-package-missing"),
+				dir: join(fixturesDir, "rust-lib-missing"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].kind).toBe("markdown");
+			expect(
+				diagnostics.some((d: ResourceDiagnostic) => d.message.includes("rust skill src/lib.rs not found")),
+			).toBe(true);
+		});
+
+		it("should downgrade kernel-era python skills to markdown with a diagnostic", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "python-skill"),
 				source: "test",
 			});
 
@@ -301,7 +315,7 @@ describe("skills", () => {
 			expect(skills[0].kind).toBe("markdown");
 			expect(
 				diagnostics.some((d: ResourceDiagnostic) =>
-					d.message.includes("python skill package src/python_package_missing/__init__.py not found"),
+					d.message.includes("the rust runtime does not run python skills"),
 				),
 			).toBe(true);
 		});
@@ -334,25 +348,25 @@ describe("skills", () => {
 			expect(result).toContain("<location>/path/to/skill/SKILL.md</location>");
 		});
 
-		it("should include Python import metadata for Python-backed skills", () => {
+		it("should include the rust_use path for Rust crate skills", () => {
 			const skills: Skill[] = [
 				createTestSkill({
-					name: "python-skill",
-					description: "A Python skill.",
+					name: "rust-skill",
+					description: "A Rust skill.",
 					filePath: "/path/to/skill/SKILL.md",
 					baseDir: "/path/to/skill",
-					python: {
-						importName: "python_skill",
-						packagePath: "/path/to/skill",
-						pyprojectPath: "/path/to/skill/pyproject.toml",
+					rust: {
+						crateName: "rust_skill",
+						cratePath: "/path/to/skill",
+						cargoTomlPath: "/path/to/skill/Cargo.toml",
 					},
 				}),
 			];
 
 			const result = formatSkillsForPrompt(skills);
 
-			expect(result).toContain("<type>python</type>");
-			expect(result).toContain("<python_import>python_skill</python_import>");
+			expect(result).toContain("<type>rust</type>");
+			expect(result).toContain("<rust_use>agent_lib::skills::rust_skill</rust_use>");
 		});
 
 		it("should include intro text before XML", () => {
@@ -498,11 +512,11 @@ describe("skills", () => {
 			expect(withTilde.length).toBe(withoutTilde.length);
 		});
 
-		it("should warn when Python skills share an import name", () => {
+		it("should warn when Rust skills share a crate name", () => {
 			const tempDir = mkdtempSync(join(tmpdir(), "prime-agent-skills-"));
 			try {
-				writePythonSkill(tempDir, "web-search");
-				writePythonSkill(tempDir, "web_search");
+				writeRustSkill(tempDir, "web-search");
+				writeRustSkill(tempDir, "web_search");
 
 				const { skills, diagnostics } = loadSkills({
 					agentDir: emptyAgentDir,
@@ -514,9 +528,7 @@ describe("skills", () => {
 				expect(skills.map((skill) => skill.name).sort()).toEqual(["web-search", "web_search"]);
 				expect(
 					diagnostics.some((d: ResourceDiagnostic) =>
-						d.message.includes(
-							'python import name "web_search" is shared by skills "web-search" and "web_search"',
-						),
+						d.message.includes('rust crate name "web_search" is shared by skills "web-search" and "web_search"'),
 					),
 				).toBe(true);
 			} finally {

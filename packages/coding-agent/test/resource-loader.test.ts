@@ -468,10 +468,10 @@ Content`,
 			const { skills } = loader.getSkills();
 			const websearch = skills.find((s) => s.name === "websearch");
 			expect(websearch).toBeDefined();
-			expect(websearch?.kind).toBe("python");
-			if (websearch?.kind === "python") {
-				expect(websearch.python.importName).toBe("websearch");
-				expect(websearch.python.pyprojectPath.endsWith("pyproject.toml")).toBe(true);
+			expect(websearch?.kind).toBe("rust");
+			if (websearch?.kind === "rust") {
+				expect(websearch.rust.crateName).toBe("websearch");
+				expect(websearch.rust.cargoTomlPath.endsWith("Cargo.toml")).toBe(true);
 			}
 		});
 
