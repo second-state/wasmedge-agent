@@ -1,4 +1,4 @@
-import { DEFAULT_RLM_EXTRA_IMPORT_LABELS } from "../kernel/bootstrap.js";
+import { RUST_PRELUDE_LABELS } from "./rust-rlm.js";
 
 export interface RlmPromptOptions {
 	cwd: string;
@@ -42,7 +42,7 @@ export interface ChildAgentDoctrineOptions {
 
 export function buildChildAgentDoctrine(options: ChildAgentDoctrineOptions): string | undefined {
 	const depth = options.depth ?? 0;
-	const hasIpython = options.activeTools === undefined || options.activeTools.includes("ipython");
+	const hasIpython = options.activeTools === undefined || options.activeTools.includes("rust");
 	const hasAgentMessage = options.installedSkills?.includes("agent_message") ?? false;
 	if (depth <= 0) return undefined;
 
@@ -65,7 +65,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	const allowRecursion = options.allowRecursion ?? true;
 	const depth = options.depth ?? 0;
 	const activeTools = options.activeTools ?? [];
-	const hasIpython = options.activeTools === undefined ? true : activeTools.includes("ipython");
+	const hasIpython = options.activeTools === undefined ? true : activeTools.includes("rust");
 	const canRunShellSkills = hasIpython || activeTools.includes("bash");
 	const parts = [
 		"You are a general purpose agent that uses code to solve tasks.",
@@ -75,8 +75,8 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		`Working directory: ${cwd}`,
 		`Conversation log: ${messagesPath}`,
 		`Recursive agent depth: ${depth}`,
-		`Pre-installed Python packages: ${DEFAULT_RLM_EXTRA_IMPORT_LABELS.join(", ")}.`,
-		"Install additional packages with `uv pip install <pkg>` (this is a uv-managed venv with no pip module).",
+		`Prelude crates available in cells: ${RUST_PRELUDE_LABELS}.`,
+		"The prelude set is fixed: you cannot add dependencies yourself; if a task genuinely needs another crate, tell the user.",
 	];
 
 	const childDoctrine = buildChildAgentDoctrine(options);

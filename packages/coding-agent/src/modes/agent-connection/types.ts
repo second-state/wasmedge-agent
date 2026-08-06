@@ -15,7 +15,7 @@ import type {
 import type { ReplayBuiltInToolName } from "../../core/extensions/index.js";
 import type { InputSource } from "../../core/extensions/types.js";
 import type { GoalState } from "../../core/goals.js";
-import type { KernelSentAgentMessage } from "../../core/kernel/index.js";
+import type { KernelSentAgentMessage } from "../../core/host-bridge/types.js";
 import type { RefinementResult } from "../../core/refinement/index.js";
 import type { RlmMaxDepthStatus, SetRlmMaxDepthResult } from "../../core/rlm-max-depth.js";
 import type { SessionActionSnapshot } from "../../core/session-action-store.js";

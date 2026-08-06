@@ -169,8 +169,7 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
-import type { HostRequestHandlers, KernelSentAgentMessage } from "./kernel/index.js";
-import { type RestoreResult, snapshotPathIn } from "./kernel/state-snapshot.js";
+import type { HostRequestHandlers, KernelSentAgentMessage } from "./host-bridge/types.js";
 import type { McpManager } from "./mcp/mcp-manager.js";
 import {
 	type BashExecutionMessage,
@@ -185,7 +184,6 @@ import {
 	createSessionSlashCommandResultMessage,
 	HEARTBEAT_PROMPT_CUSTOM_TYPE,
 	HEARTBEAT_PROMPT_PREVIEW_LABEL,
-	IPYTHON_STATE_RESTORED_CUSTOM_TYPE,
 	isSessionSlashCommandMessage,
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -232,6 +230,7 @@ import {
 	type RlmSubagentRuntime,
 	type SubagentRuntimeHost,
 } from "./rlm-runtime.js";
+import { listPersistentState, type PersistentStateListing, RustCellProvisioner } from "./rust-cell/index.js";
 import {
 	ActionStore,
 	type ActionTicket,
@@ -255,7 +254,7 @@ import {
 } from "./session-manager.js";
 import type { SessionStats } from "./session-stats.js";
 import type { SettingsManager } from "./settings-manager.js";
-import { getPythonSkillRuntimeInfo, type Skill } from "./skills.js";
+import type { Skill } from "./skills.js";
 import {
 	parseRefineCommandOptions,
 	parseSessionSlashCommand,
@@ -267,7 +266,6 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
-import { IpythonKernelProvisioner } from "./tools/ipython.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import { addAssistantUsage, emptyUsage } from "./usage.js";
 import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR, WEBSEARCH_SKILL_NAME } from "./websearch-credential.js";
@@ -838,7 +836,7 @@ function appendSentAgentMessageToToolResult(
 	toolCallId: string,
 	sentMessage: KernelSentAgentMessage,
 ): boolean {
-	if (message.role !== "toolResult" || message.toolName !== "ipython" || message.toolCallId !== toolCallId) {
+	if (message.role !== "toolResult" || message.toolName !== "rust" || message.toolCallId !== toolCallId) {
 		return false;
 	}
 	const details = isObjectRecord(message.details) ? message.details : {};
@@ -962,7 +960,6 @@ interface RlmSubagentModelSelection {
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Cap on the post-compaction kernel namespace probe so a wedged kernel can't stall recovery. */
-const KERNEL_STATE_LISTING_TIMEOUT_MS = 5000;
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
 
 function noopRlmChildAbort(): void {}
@@ -1194,11 +1191,11 @@ export class AgentSession {
 	// re-populate the retained map after it's been cleared.
 	private _disposing = false;
 	private _disposeAsyncPromise?: Promise<void>;
-	private _ipythonKernelProvisioner?: IpythonKernelProvisioner;
-	/** Artifact dir backing the current provisioner's kernel snapshot, if any. */
-	private _ipythonKernelSnapshotDir?: string;
+	private _rustCellProvisioner?: RustCellProvisioner;
+	/** Session workspace dir backing the rust-cell runtime, if persisted. */
+	private _rustWorkspaceDir?: string;
 	/** True once the runtime has been built once; later builds are in-process rebuilds (/reload). */
-	private _ipythonRuntimeBuilt = false;
+	private _runtimeBuilt = false;
 	private readonly _prewarmIpythonKernel: boolean;
 	private _rlmDepth: number;
 	private readonly _configuredRlmMaxDepth: number | undefined;
@@ -1530,24 +1527,12 @@ export class AgentSession {
 	}
 
 	private _applyLateIpythonSentAgentMessages(message: AgentMessage): void {
-		if (message.role !== "toolResult" || message.toolName !== "ipython") {
+		if (message.role !== "toolResult" || message.toolName !== "rust") {
 			return;
 		}
 		for (const sentMessage of this._lateIpythonSentAgentMessages.get(message.toolCallId) ?? []) {
 			appendSentAgentMessageToToolResult(message, message.toolCallId, sentMessage);
 		}
-	}
-
-	private _recordLateIpythonSentAgentMessage(toolCallId: string, message: KernelSentAgentMessage): void {
-		const record = () => {
-			if (this._disposed || !this._rememberLateIpythonSentAgentMessage(toolCallId, message)) {
-				return;
-			}
-			this.sessionManager.appendCustomEntry(IPYTHON_SENT_AGENT_MESSAGE_CUSTOM_ENTRY, { toolCallId, message });
-			this._emit({ type: "ipython_sent_agent_message", toolCallId, message });
-		};
-		this._agentEventQueue = this._agentEventQueue.then(record, record);
-		this._agentEventQueue.catch(() => {});
 	}
 
 	private _emitGoalUpdate(): void {
@@ -2037,19 +2022,19 @@ export class AgentSession {
 		if (!this._includeGoals) {
 			throw new Error("Goals are disabled. Enable goals before using /goal.");
 		}
-		const ipythonTool = this._toolRegistry.get("ipython");
-		if (!ipythonTool) {
-			throw new Error("Goals require the ipython tool, which is not available in this session.");
+		const rustTool = this._toolRegistry.get("rust");
+		if (!rustTool) {
+			throw new Error("Goals require the rust tool, which is not available in this session.");
 		}
 		const activeToolNames = new Set(this.getActiveToolNames());
-		if (!activeToolNames.has("ipython")) {
-			activeToolNames.add("ipython");
+		if (!activeToolNames.has("rust")) {
+			activeToolNames.add("rust");
 			this.setActiveToolsByName([...activeToolNames]);
 		}
 		if (context) {
 			const contextTools = [...(context.tools ?? [])];
-			if (!contextTools.some((tool) => tool.name === "ipython")) {
-				contextTools.push(ipythonTool);
+			if (!contextTools.some((tool) => tool.name === "rust")) {
+				contextTools.push(rustTool);
 				context.tools = contextTools;
 			}
 		}
@@ -3940,9 +3925,9 @@ export class AgentSession {
 		this._rlmChildCleanupFailures.clear();
 		this._deletedRlmChildIds.clear();
 		try {
-			await this._ipythonKernelProvisioner?.dispose();
+			await this._rustCellProvisioner?.dispose();
 		} catch {
-			// a failed kernel startup already cleaned up after itself
+			// a failed runtime startup already cleaned up after itself
 		}
 		this.dispose();
 	}
@@ -6865,37 +6850,21 @@ export class AgentSession {
 	// Added to history (not a nextTurn message) so it also reaches the continue()-driven
 	// auto-compaction resume, which never injects nextTurn messages.
 	private async _notifyKernelStateAfterCompaction(): Promise<void> {
-		const provisioner = this._ipythonKernelProvisioner;
-		// No kernel means no state to remind about; only stay silent in that case.
-		if (!provisioner?.hasRunningKernel) return;
-		// Bound the probe so a wedged kernel can't stall recovery, and abort it on timeout so
-		// the kernel's serialized execution queue isn't left occupied by a never-resolving cell.
-		const abort = new AbortController();
-		const timer = setTimeout(() => abort.abort(), KERNEL_STATE_LISTING_TIMEOUT_MS);
-		if (typeof timer === "object" && "unref" in timer) timer.unref();
-		let names: string[] | null;
-		try {
-			names = await provisioner.listNamespaceNames(abort.signal).catch(() => null);
-		} finally {
-			clearTimeout(timer);
-		}
-		// null is a listing failure/timeout; only claim state survived if the kernel is still up
-		// (it may have died in the window since the check above).
-		if (names === null && !provisioner.hasRunningKernel) return;
-		const detail =
-			names === null
-				? ""
-				: names.length > 0
-					? ` These names are still defined: ${names.join(", ")}.`
-					: " You have not defined any names yet.";
+		const provisioner = this._rustCellProvisioner;
+		// No runtime means no persistent state to remind about.
+		if (!provisioner?.hasRunner) return;
+		const listing = provisioner.listState();
+		const stateDetail =
+			listing.stateKeys.length > 0 ? ` state keys: ${listing.stateKeys.join(", ")}.` : " no state keys yet.";
+		const libDetail = listing.libFunctions.length > 0 ? ` agent_lib API: ${listing.libFunctions.join(", ")}.` : "";
 		const content = [
-			"<ipython_state>",
-			`Your IPython kernel persisted through compaction; all variables, imports, and helpers you defined remain available.${detail}`,
-			"</ipython_state>",
+			"<rust_state>",
+			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${libDetail}`,
+			"</rust_state>",
 		].join("\n");
 		const message = {
 			role: "custom" as const,
-			customType: "ipython_state",
+			customType: "rust_state",
 			content,
 			display: false,
 			timestamp: Date.now(),
@@ -6915,33 +6884,26 @@ export class AgentSession {
 	}
 
 	/**
-	 * Tell the model when a resumed session revived its IPython kernel state, so it
-	 * knows which variables are actually available instead of assuming the kernel is
-	 * the one it left. Delivered as context before the next turn.
+	 * Tell the model when a resumed session found its persistent workspace, so it
+	 * checks rlm::state and agent_lib instead of assuming a fresh slate.
+	 * Delivered as context before the next turn.
 	 */
-	private _onIpythonStateRestored(result: RestoreResult): void {
-		const lines = ["<ipython_state_restored>"];
-		if (result.restored.length > 0) {
-			lines.push(
-				`Your IPython kernel state was revived from your previous session. These names are available again: ${result.restored.join(", ")}.`,
-			);
-		} else {
-			lines.push(
-				"Your previous IPython kernel state could not be revived; the kernel is starting fresh, so re-create any variables, imports, or loaded data you need.",
-			);
+	private _notifyWorkspaceRestored(listing: PersistentStateListing): void {
+		if (listing.stateKeys.length === 0 && listing.libFunctions.length === 0 && listing.blobNames.length === 0) {
+			return;
 		}
-		if (result.failed.length > 0) {
-			lines.push(
-				`These could not be restored and must be recreated if needed: ${result.failed.map((f) => f.name).join(", ")}.`,
-			);
-		}
-		lines.push("</ipython_state_restored>");
+		const lines = ["<rust_state_restored>"];
+		lines.push("Your persistent workspace was restored from your previous session.");
+		if (listing.stateKeys.length > 0) lines.push(`state keys: ${listing.stateKeys.join(", ")}.`);
+		if (listing.blobNames.length > 0) lines.push(`state blobs: ${listing.blobNames.join(", ")}.`);
+		if (listing.libFunctions.length > 0) lines.push(`agent_lib API: ${listing.libFunctions.join(", ")}.`);
+		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{
-				customType: IPYTHON_STATE_RESTORED_CUSTOM_TYPE,
+				customType: "rust_state_restored",
 				content: lines.join("\n"),
 				display: true,
-				details: { restored: result.restored.length > 0 },
+				details: { restored: true },
 			},
 			{ deliverAs: "nextTurn" },
 		).catch(() => {});
@@ -8535,7 +8497,6 @@ export class AgentSession {
 		flagValues?: Map<string, boolean | string>;
 		includeAllExtensionTools?: boolean;
 	}): void {
-		const pythonSkills = getPythonSkillRuntimeInfo(this._modelVisibleSkills());
 		let configuredBaseToolDefinitions: Record<string, ToolDefinition>;
 		if (this._baseToolsOverride) {
 			configuredBaseToolDefinitions = Object.fromEntries(
@@ -8545,34 +8506,29 @@ export class AgentSession {
 				]),
 			);
 		} else {
-			// Rebuilding (e.g. /reload) replaces the provisioner; drop the previous
-			// kernel so the session never holds two live kernels. Gate the new kernel's
-			// startup on the old one's dispose (which flushes a final snapshot), so a
-			// reload can't restore from a snapshot the old kernel is still writing.
-			const previousDispose = this._ipythonKernelProvisioner?.dispose();
-			this._ipythonKernelSnapshotDir = this.sessionManager.getSessionArtifactDir();
-			// Only surface the "revived from your previous session" notice on the first
-			// build (a genuine resume). A later rebuild (/reload) restores state silently
-			// for continuity — the conversation is unchanged, so there's nothing to flag.
-			const notifyRestore = !this._ipythonRuntimeBuilt;
-			this._ipythonKernelProvisioner = new IpythonKernelProvisioner(this._cwd, {
-				env: this._rlmKernelEnv(),
-				sessionId: this.sessionId,
-				hostHandlers: this._createKernelHostHandlers(),
-				pythonSkills,
-				snapshotDir: this._ipythonKernelSnapshotDir,
-				readyGate: previousDispose,
-				onRestore: notifyRestore ? (result) => this._onIpythonStateRestored(result) : undefined,
+			// Rebuilding (e.g. /reload) replaces the provisioner. Cells are
+			// short-lived processes, so there is no live runtime to hand over.
+			void this._rustCellProvisioner?.dispose();
+			const artifactDir = this.sessionManager.getSessionArtifactDir();
+			this._rustWorkspaceDir = artifactDir ? join(artifactDir, "workspace") : undefined;
+			const workspaceExisted = !!this._rustWorkspaceDir && existsSync(join(this._rustWorkspaceDir, "Cargo.toml"));
+			const notifyRestore = !this._runtimeBuilt && workspaceExisted;
+			this._rustCellProvisioner = new RustCellProvisioner({
+				cwd: this._cwd,
+				workspaceDir: this._rustWorkspaceDir,
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
-				ipython: {
-					provisioner: this._ipythonKernelProvisioner,
+				rust: {
+					provisioner: this._rustCellProvisioner,
+				},
+				bash: {
 					commandPrefix: this.settingsManager.getShellCommandPrefix(),
 					shellPath: this.settingsManager.getShellPath(),
-					onLateSentAgentMessage: (toolCallId, message) =>
-						this._recordLateIpythonSentAgentMessage(toolCallId, message),
 				},
 			});
+			if (notifyRestore) {
+				this._notifyWorkspaceRestored(listPersistentState(this._rustWorkspaceDir as string));
+			}
 		}
 
 		this._baseToolDefinitions = new Map(
@@ -8605,29 +8561,25 @@ export class AgentSession {
 		this._bindExtensionCore(this._extensionRunner);
 		this._applyExtensionBindings(this._extensionRunner);
 
-		const defaultActiveToolNames = this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : ["ipython"];
+		const defaultActiveToolNames = this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : ["rust", "bash"];
 		const baseActiveToolNames = [...(options.activeToolNames ?? defaultActiveToolNames)];
 		if (this._goalState.status === "active" && this._includeGoals) {
-			// An active goal needs ipython so the model can reach the goal skill.
-			baseActiveToolNames.push("ipython");
+			// An active goal needs the rust tool so the model can reach the goal bridge.
+			baseActiveToolNames.push("rust");
 		}
 		this._refreshToolRegistry({
 			activeToolNames: [...new Set(baseActiveToolNames)],
 			includeAllExtensionTools: options.includeAllExtensionTools,
 		});
 
-		// Prewarm when configured, or whenever we're resuming a session that already
-		// has a kernel snapshot — so its state is revived and the model is told what
-		// came back before the first turn, rather than a turn later when the kernel
-		// would otherwise lazily start on first use.
-		const hasSnapshot =
-			!!this._ipythonKernelSnapshotDir && existsSync(snapshotPathIn(this._ipythonKernelSnapshotDir));
-		if ((this._prewarmIpythonKernel || hasSnapshot) && this.getActiveToolNames().includes("ipython")) {
-			this._ipythonKernelProvisioner?.prewarm();
+		// Prewarm when configured so the first cell doesn't pay toolchain checks
+		// and the template clone.
+		if (this._prewarmIpythonKernel && this.getActiveToolNames().includes("rust")) {
+			this._rustCellProvisioner?.prewarm();
 		}
 
 		// Subsequent builds are in-process rebuilds (/reload), not a fresh resume.
-		this._ipythonRuntimeBuilt = true;
+		this._runtimeBuilt = true;
 	}
 
 	/**
@@ -8657,7 +8609,8 @@ export class AgentSession {
 		return skills;
 	}
 
-	/** Typed handlers for host requests arriving from the IPython kernel comm bridge. */
+	/** Typed handlers for host requests; rewired to the rust-cell bridge in WP3. */
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: WP3 (bridge) consumes this
 	private _createKernelHostHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
@@ -8796,6 +8749,7 @@ export class AgentSession {
 		}
 	}
 
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: WP3 (bridge/child env) consumes this
 	private _rlmKernelEnv(): Record<string, string> {
 		// Kernel env is provisioning-time only: RLM_MAX_DEPTH may be stale in an already-running kernel;
 		// the TypeScript-side spawn check remains authoritative.

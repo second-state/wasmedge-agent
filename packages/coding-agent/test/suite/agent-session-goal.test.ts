@@ -59,17 +59,17 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 }
 
 /**
- * Stand-in for the real ipython tool. Goal calls reach the host over the
- * kernel comm bridge while an ipython cell executes; this stub mirrors that
+ * Stand-in for the real rust tool. Goal calls reach the host over the
+ * kernel comm bridge while an rust cell executes; this stub mirrors that
  * timing by dispatching `goal.*` host requests from inside tool execution.
  *
  * Cell format: `goal.<op>` optionally followed by a JSON payload, e.g.
  * `goal.create {"objective": "write a note"}`.
  */
-function createFauxIpythonTool(sessionRef: { current?: AgentSession }): AgentTool {
+function createFauxRustTool(sessionRef: { current?: AgentSession }): AgentTool {
 	return {
-		name: "ipython",
-		label: "ipython",
+		name: "rust",
+		label: "rust",
 		description: "Execute Python code in the agent kernel.",
 		parameters: Type.Object({ code: Type.String() }),
 		execute: async (_toolCallId, params) => {
@@ -155,18 +155,18 @@ describe("AgentSession goals", () => {
 
 	async function createGoalHarness(extraTools: AgentTool[] = []): Promise<Harness> {
 		const sessionRef: { current?: AgentSession } = {};
-		const harness = await createHarness({ tools: [createFauxIpythonTool(sessionRef), ...extraTools] });
+		const harness = await createHarness({ tools: [createFauxRustTool(sessionRef), ...extraTools] });
 		sessionRef.current = harness.session;
 		harnesses.push(harness);
 		return harness;
 	}
 
-	it("keeps continuing until the model completes the goal through ipython", async () => {
+	it("keeps continuing until the model completes the goal through the rust tool", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
 			fauxAssistantMessage("I need another step."),
 			fauxAssistantMessage("The work is complete."),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -191,14 +191,11 @@ describe("AgentSession goals", () => {
 	it("counts tokens from the goal completion turn", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
-			assistantWithUsage(
-				fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
-				{
-					input: 4,
-					output: 2,
-					totalTokens: 6,
-				},
-			),
+			assistantWithUsage(fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }), {
+				input: 4,
+				output: 2,
+				totalTokens: 6,
+			}),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -214,10 +211,11 @@ describe("AgentSession goals", () => {
 	it("does not count post-completion turns against the finished goal", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
-			assistantWithUsage(
-				fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
-				{ input: 4, output: 2, totalTokens: 6 },
-			),
+			assistantWithUsage(fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }), {
+				input: 4,
+				output: 2,
+				totalTokens: 6,
+			}),
 			assistantWithUsage(
 				"Goal complete; here is a long closing summary that must not be billed to the finished goal.",
 				{ input: 20, output: 10, totalTokens: 30 },
@@ -316,17 +314,17 @@ describe("AgentSession goals", () => {
 		);
 	});
 
-	it("activates ipython when a slash goal starts from an inactive tool set", async () => {
+	it("activates rust when a slash goal starts from an inactive tool set", async () => {
 		const harness = await createGoalHarness();
 		harness.session.setActiveToolsByName([]);
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
 		await harness.session.prompt("/goal finish the task");
 
-		expect(harness.session.getActiveToolNames()).toEqual(["ipython"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["rust"]);
 		expect(harness.session.goalState).toMatchObject({
 			active: false,
 			status: "complete",
@@ -339,14 +337,14 @@ describe("AgentSession goals", () => {
 		harness.session.setActiveToolsByName([]);
 		harness.setResponses([
 			fauxAssistantMessage("Still working."),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
 		await harness.session.prompt("continue");
 
 		expect(visibleAssistantTexts(harness)).toEqual(["Still working.", "Goal complete."]);
-		expect(harness.session.getActiveToolNames()).toEqual(["ipython"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["rust"]);
 		expect(harness.session.goalState).toMatchObject({
 			active: false,
 			status: "complete",
@@ -355,7 +353,7 @@ describe("AgentSession goals", () => {
 
 	it("does not re-add deactivated tools on runtime rebuild without an active goal", async () => {
 		const harness = await createGoalHarness();
-		expect(harness.session.getActiveToolNames()).toEqual(["ipython"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["rust"]);
 
 		harness.session.setActiveToolsByName([]);
 		await harness.session.reload();
@@ -369,7 +367,7 @@ describe("AgentSession goals", () => {
 
 		await harness.session.reload();
 
-		expect(harness.session.getActiveToolNames()).toEqual(["ipython"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["rust"]);
 	});
 
 	it("does not reject continuation when goal error update listeners throw", async () => {
@@ -393,7 +391,7 @@ describe("AgentSession goals", () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
 			fauxAssistantMessage("Done."),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -408,17 +406,14 @@ describe("AgentSession goals", () => {
 		});
 	});
 
-	it("lets the model create a persistent goal through ipython", async () => {
+	it("lets the model create a persistent goal through the rust tool", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
-			fauxAssistantMessage(
-				fauxToolCall("ipython", { code: 'goal.create {"objective": "write a benchmark note"}' }),
-				{
-					stopReason: "toolUse",
-				},
-			),
+			fauxAssistantMessage(fauxToolCall("rust", { code: 'goal.create {"objective": "write a benchmark note"}' }), {
+				stopReason: "toolUse",
+			}),
 			fauxAssistantMessage("Started the note."),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -445,7 +440,7 @@ describe("AgentSession goals", () => {
 		}
 
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 		await harness.session.prompt("/goal finish the task");
@@ -484,7 +479,7 @@ describe("AgentSession goals", () => {
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage("answered the side question"),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -564,7 +559,7 @@ describe("AgentSession goals", () => {
 		await promptPromise;
 
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 		await harness.session.prompt("/goal resume");
@@ -579,7 +574,7 @@ describe("AgentSession goals", () => {
 	it("does not resume a completed goal", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 			fauxAssistantMessage("should not run"),
 		]);
@@ -671,10 +666,11 @@ describe("AgentSession goals", () => {
 	it("completes a goal whose completing turn crosses the budget without a stale budget-limit steer", async () => {
 		const harness = await createGoalHarness();
 		harness.setResponses([
-			assistantWithUsage(
-				fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
-				{ input: 6, output: 5, totalTokens: 11 },
-			),
+			assistantWithUsage(fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }), {
+				input: 6,
+				output: 5,
+				totalTokens: 11,
+			}),
 			fauxAssistantMessage("Goal complete."),
 		]);
 
@@ -846,7 +842,7 @@ describe("AgentSession goals", () => {
 
 		harness.setResponses([
 			fauxAssistantMessage("answered the interjection"),
-			fauxAssistantMessage(fauxToolCall("ipython", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("rust", COMPLETE_GOAL_CELL), { stopReason: "toolUse" }),
 			fauxAssistantMessage("Goal complete."),
 		]);
 

@@ -86,8 +86,6 @@ export type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
-	IpythonToolCallEvent,
-	IpythonToolResultEvent,
 	KeybindingsManager,
 	LoadExtensionsResult,
 	// Events - Message
@@ -112,6 +110,8 @@ export type {
 	// Events - Resources
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
+	RustToolCallEvent,
+	RustToolResultEvent,
 	SendMessageHandler,
 	SendUserMessageHandler,
 	SessionBeforeCompactEvent,
@@ -162,7 +162,7 @@ export {
 	defineTool,
 	isBashToolResult,
 	isEditToolResult,
-	isIpythonToolResult,
+	isRustToolResult,
 	isToolCallEventType,
 } from "./types.js";
 export { wrapRegisteredTool, wrapRegisteredTools } from "./wrapper.js";

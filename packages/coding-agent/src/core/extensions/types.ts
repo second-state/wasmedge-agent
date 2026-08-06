@@ -61,13 +61,7 @@ import type { SourceInfo } from "../source-info.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type { BashOperations } from "../tools/bash.js";
 import type { EditToolDetails } from "../tools/edit.js";
-import type {
-	BashToolDetails,
-	BashToolInput,
-	EditToolInput,
-	IpythonToolDetails,
-	IpythonToolInput,
-} from "../tools/index.js";
+import type { BashToolDetails, BashToolInput, EditToolInput, RustToolDetails, RustToolInput } from "../tools/index.js";
 
 export type { ExecOptions, ExecResult } from "../exec.js";
 export type { BuildSystemPromptOptions } from "../system-prompt.js";
@@ -797,9 +791,9 @@ export interface EditToolCallEvent extends ToolCallEventBase {
 	input: EditToolInput;
 }
 
-export interface IpythonToolCallEvent extends ToolCallEventBase {
-	toolName: "ipython";
-	input: IpythonToolInput;
+export interface RustToolCallEvent extends ToolCallEventBase {
+	toolName: "rust";
+	input: RustToolInput;
 }
 
 export interface CustomToolCallEvent extends ToolCallEventBase {
@@ -813,7 +807,7 @@ export interface CustomToolCallEvent extends ToolCallEventBase {
  * `event.input` is mutable. Mutate it in place to patch tool arguments before execution.
  * Later `tool_call` handlers see earlier mutations. No re-validation is performed after mutation.
  */
-export type ToolCallEvent = BashToolCallEvent | EditToolCallEvent | IpythonToolCallEvent | CustomToolCallEvent;
+export type ToolCallEvent = BashToolCallEvent | EditToolCallEvent | RustToolCallEvent | CustomToolCallEvent;
 
 interface ToolResultEventBase {
 	type: "tool_result";
@@ -833,9 +827,9 @@ export interface EditToolResultEvent extends ToolResultEventBase {
 	details: EditToolDetails | undefined;
 }
 
-export interface IpythonToolResultEvent extends ToolResultEventBase {
-	toolName: "ipython";
-	details: IpythonToolDetails | undefined;
+export interface RustToolResultEvent extends ToolResultEventBase {
+	toolName: "rust";
+	details: RustToolDetails | undefined;
 }
 
 export interface CustomToolResultEvent extends ToolResultEventBase {
@@ -844,11 +838,7 @@ export interface CustomToolResultEvent extends ToolResultEventBase {
 }
 
 /** Fired after a tool executes. Can modify result. */
-export type ToolResultEvent =
-	| BashToolResultEvent
-	| EditToolResultEvent
-	| IpythonToolResultEvent
-	| CustomToolResultEvent;
+export type ToolResultEvent = BashToolResultEvent | EditToolResultEvent | RustToolResultEvent | CustomToolResultEvent;
 
 // Type guards for ToolResultEvent
 export function isBashToolResult(e: ToolResultEvent): e is BashToolResultEvent {
@@ -857,8 +847,8 @@ export function isBashToolResult(e: ToolResultEvent): e is BashToolResultEvent {
 export function isEditToolResult(e: ToolResultEvent): e is EditToolResultEvent {
 	return e.toolName === "edit";
 }
-export function isIpythonToolResult(e: ToolResultEvent): e is IpythonToolResultEvent {
-	return e.toolName === "ipython";
+export function isRustToolResult(e: ToolResultEvent): e is RustToolResultEvent {
+	return e.toolName === "rust";
 }
 
 /**
@@ -883,7 +873,7 @@ export function isIpythonToolResult(e: ToolResultEvent): e is IpythonToolResultE
  */
 export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): event is BashToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
-export function isToolCallEventType(toolName: "ipython", event: ToolCallEvent): event is IpythonToolCallEvent;
+export function isToolCallEventType(toolName: "rust", event: ToolCallEvent): event is RustToolCallEvent;
 export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
 	toolName: TName,
 	event: ToolCallEvent,

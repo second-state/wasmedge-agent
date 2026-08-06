@@ -27,9 +27,9 @@ describe("regression #4428: remove legacy pi-mono built-in tools", () => {
 		}
 	});
 
-	it("registers only ipython as a built-in tool", () => {
-		expect([...allToolNames]).toEqual(["ipython"]);
-		expect(Object.keys(createAllToolDefinitions(process.cwd()))).toEqual(["ipython"]);
+	it("registers only rust and bash as built-in tools", () => {
+		expect([...allToolNames]).toEqual(["rust", "bash"]);
+		expect(Object.keys(createAllToolDefinitions(process.cwd()))).toEqual(["rust", "bash"]);
 	});
 
 	it("keeps legacy names available for extension and custom tool allowlists", () => {
@@ -39,7 +39,7 @@ describe("regression #4428: remove legacy pi-mono built-in tools", () => {
 		expect(result.diagnostics).toEqual([]);
 	});
 
-	it("does not expose removed built-in tool names when only they are requested", async () => {
+	it("does not expose the removed edit built-in when only it is requested", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory(tempDir);
 		const resourceLoader = new DefaultResourceLoader({
@@ -56,7 +56,7 @@ describe("regression #4428: remove legacy pi-mono built-in tools", () => {
 			settingsManager,
 			sessionManager,
 			resourceLoader,
-			tools: ["bash", "edit"],
+			tools: ["edit"],
 		});
 		await session.bindExtensions({});
 
@@ -108,7 +108,7 @@ describe("regression #4428: remove legacy pi-mono built-in tools", () => {
 		session.dispose();
 	});
 
-	it("applies shell settings to ipython bash cells", async () => {
+	it("applies shell settings to the bash built-in", async () => {
 		const shellPath = join(tempDir, "custom-shell.sh");
 		writeFileSync(shellPath, "#!/bin/sh\nprintf 'custom-shell\\n'\nexec /bin/sh \"$@\"\n");
 		chmodSync(shellPath, 0o755);
@@ -131,15 +131,15 @@ describe("regression #4428: remove legacy pi-mono built-in tools", () => {
 			settingsManager,
 			sessionManager,
 			resourceLoader,
-			tools: ["ipython"],
+			tools: ["bash"],
 		});
 
 		try {
-			expect(session.getActiveToolNames()).toEqual(["ipython"]);
-			const ipythonTool = session.agent.state.tools.find((tool) => tool.name === "ipython");
-			expect(ipythonTool).toBeTruthy();
+			expect(session.getActiveToolNames()).toEqual(["bash"]);
+			const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
+			expect(bashTool).toBeTruthy();
 
-			const result = await ipythonTool!.execute("tool-1", { code: "%%bash\necho body" });
+			const result = await bashTool!.execute("tool-1", { command: "echo body" });
 			const output = result.content
 				.filter((item): item is { type: "text"; text: string } => item.type === "text")
 				.map((item) => item.text)
