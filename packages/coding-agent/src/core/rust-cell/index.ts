@@ -5,10 +5,19 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { HostRequestHandlers } from "../host-bridge/types.js";
+import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo, warmTemplate } from "./toolchain.js";
 import { ensureWorkspaceAt, listPersistentState, type PersistentStateListing } from "./workspace.js";
 
+export {
+	BRIDGE_PROTOCOL_VERSION,
+	type BridgeCellScope,
+	type BridgeEmitSinks,
+	BridgeServer,
+	type BridgeServerOptions,
+} from "./bridge-server.js";
 export { CellRunner, composeToolText } from "./cell-runner.js";
 export { isTemplateWarm, resolveToolchain, type ToolchainInfo, warmTemplate } from "./toolchain.js";
 export type {
@@ -35,6 +44,12 @@ export interface RustCellProvisionerOptions {
 	workspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
+	/** Host request registry; when set, cells run with a live bridge. */
+	hostHandlers?: HostRequestHandlers;
+	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
+	cellEnv?: Record<string, string>;
+	/** Sink for bridge protocol diagnostics. */
+	onDiagnostic?: (message: string) => void;
 }
 
 const DEFAULT_CELL_TIMEOUT_MS = 120_000;
@@ -48,6 +63,7 @@ export class RustCellProvisioner {
 	private runner: CellRunner | undefined;
 	private toolchainInfo: ToolchainInfo | undefined;
 	private workspace: string | undefined;
+	private bridgeServer: BridgeServer | undefined;
 
 	constructor(options: RustCellProvisionerOptions) {
 		this.options = options;
@@ -63,6 +79,10 @@ export class RustCellProvisioner {
 
 	get toolchain(): ToolchainInfo | undefined {
 		return this.toolchainInfo;
+	}
+
+	get bridge(): BridgeServer | undefined {
+		return this.bridgeServer;
 	}
 
 	ensure(onProgress?: (message: string) => void): Promise<CellRunner> {
@@ -92,12 +112,20 @@ export class RustCellProvisioner {
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		ensureWorkspaceAt(this.workspace);
+		if (this.options.hostHandlers && !this.bridgeServer) {
+			this.bridgeServer = new BridgeServer({
+				handlers: this.options.hostHandlers,
+				onDiagnostic: this.options.onDiagnostic,
+			});
+		}
 		return new CellRunner({
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			cargoBin: this.toolchainInfo.cargoBin,
 			cellTimeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+			bridge: this.bridgeServer,
+			cellEnv: this.options.cellEnv,
 		});
 	}
 
@@ -115,5 +143,8 @@ export class RustCellProvisioner {
 	async dispose(): Promise<void> {
 		this.runner = undefined;
 		this.starting = undefined;
+		const bridge = this.bridgeServer;
+		this.bridgeServer = undefined;
+		await bridge?.dispose();
 	}
 }

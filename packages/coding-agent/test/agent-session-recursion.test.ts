@@ -2046,7 +2046,7 @@ describe("AgentSession rlm recursion", () => {
 		expect(child.rlmMaxDepth).toBe(2);
 
 		await child.setRlmMaxDepth(3);
-		expect((child as unknown as InspectableRlmDirSession)._rlmKernelEnv().RLM_MAX_DEPTH).toBe("3");
+		expect((child as unknown as InspectableRlmDirSession)._rustCellEnv().RLM_MAX_DEPTH).toBe("3");
 		expect(root.rlmMaxDepth).toBe(2);
 		const grandchildResult = await child.runRlmChild("grandchild after override");
 		if (!grandchildResult.session_dir) throw new Error("Missing grandchild session directory");
@@ -2804,7 +2804,8 @@ describe("AgentSession rlm recursion", () => {
 
 interface InspectableRlmDirSession {
 	_ensureRlmSessionDir(): string | undefined;
-	_rlmKernelEnv(): Record<string, string>;
+	_rustCellEnv(): Record<string, string>;
+	_resolveSerperApiKey(): string | undefined;
 }
 
 describe("AgentSession RLM session dir", () => {
@@ -2866,24 +2867,22 @@ describe("AgentSession RLM session dir", () => {
 		return session;
 	}
 
-	it("does not create a /tmp dir or set RLM_SESSION_DIR for a non-persisted session", () => {
+	it("does not create a /tmp dir for a non-persisted session and keeps the cell env minimal", () => {
 		const root = createSession(SessionManager.inMemory(tempDir));
 		const inspectable = root as unknown as InspectableRlmDirSession;
 
 		const before = readdirSync(tmpdir()).filter((name) => name.startsWith("prime-agent-rlm-"));
 
 		expect(inspectable._ensureRlmSessionDir()).toBeUndefined();
-		const env = inspectable._rlmKernelEnv();
-		expect(env.RLM_SESSION_DIR).toBeUndefined();
-		expect(env.RLM_HARNESS_STATE_DIR).toBeUndefined();
-		expect(env.RLM_GLOBAL_HARNESS_STATE_DIR).toBeDefined();
-		expect(env).toMatchObject({ RLM_DEPTH: "0" });
+		// WP3 sandbox hygiene: cells get depth counters only — no host paths,
+		// no credentials (harness-dir mounts land in WP7, keys stay host-side).
+		expect(inspectable._rustCellEnv()).toEqual({ RLM_DEPTH: "0", RLM_MAX_DEPTH: expect.any(String) });
 
 		const after = readdirSync(tmpdir()).filter((name) => name.startsWith("prime-agent-rlm-"));
 		expect(after).toEqual(before);
 	});
 
-	it("uses the persistent artifact dir and sets RLM_SESSION_DIR for a persisted session", () => {
+	it("uses the persistent artifact dir for the rlm session dir without leaking it into the cell env", () => {
 		const sessionManager = SessionManager.create(tempDir, join(tempDir, "sessions"));
 		const root = createSession(sessionManager);
 		const inspectable = root as unknown as InspectableRlmDirSession;
@@ -2891,12 +2890,12 @@ describe("AgentSession RLM session dir", () => {
 		const artifactDir = sessionManager.getSessionArtifactDir();
 		expect(artifactDir).toBeDefined();
 		expect(inspectable._ensureRlmSessionDir()).toBe(artifactDir);
-		expect(inspectable._rlmKernelEnv().RLM_SESSION_DIR).toBe(artifactDir);
-		expect(inspectable._rlmKernelEnv().RLM_HARNESS_STATE_DIR).toBe(join(artifactDir!, "harness"));
-		expect(inspectable._rlmKernelEnv().RLM_GLOBAL_HARNESS_STATE_DIR).toBeDefined();
+		const env = inspectable._rustCellEnv();
+		expect(env.RLM_SESSION_DIR).toBeUndefined();
+		expect(env.RLM_HARNESS_STATE_DIR).toBeUndefined();
 	});
 
-	it("points RLM_HARNESS_STATE_DIR at the session's own artifact dir for subagent sessions", () => {
+	it("keeps a parent-assigned rlm session dir for spawn bookkeeping", () => {
 		// Subagent layout: the parent assigns rlmSessionDir, but the child's own
 		// sessionManager persists artifacts (and reads local harness state) elsewhere.
 		const subDir = join(tempDir, "parent-artifact", "sub-abc12345");
@@ -2908,18 +2907,7 @@ describe("AgentSession RLM session dir", () => {
 		const artifactDir = sessionManager.getSessionArtifactDir();
 		expect(artifactDir).toBeDefined();
 		expect(artifactDir).not.toBe(subDir);
-		const env = inspectable._rlmKernelEnv();
-		expect(env.RLM_SESSION_DIR).toBe(subDir);
-		expect(env.RLM_HARNESS_STATE_DIR).toBe(join(artifactDir!, "harness"));
-	});
-
-	it("falls back to the rlm session dir for RLM_HARNESS_STATE_DIR without an artifact dir", () => {
-		const ephemeralDir = join(tempDir, "ephemeral-rlm");
-		mkdirSync(ephemeralDir, { recursive: true });
-		const root = createSession(SessionManager.inMemory(tempDir), undefined, undefined, false, ephemeralDir);
-		const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-		expect(env.RLM_SESSION_DIR).toBe(ephemeralDir);
-		expect(env.RLM_HARNESS_STATE_DIR).toBe(join(ephemeralDir, "harness"));
+		expect(inspectable._ensureRlmSessionDir()).toBe(subDir);
 	});
 
 	it("loads the ephemeral RLM harness path into the host system prompt", () => {
@@ -2963,64 +2951,50 @@ describe("AgentSession RLM session dir", () => {
 		expect(prompt).toContain("Loaded from the RLM session harness path.");
 	});
 
-	it("exports the configured agentDir to the kernel so skills find auth.json", () => {
+	it("never exports agentDir or credentials into the cell env", () => {
+		// Kernel-era Python skills read auth.json in-sandbox; the websearch.run
+		// host handler replaced that (D12) — nothing host-specific leaks in.
 		const agentDir = join(tempDir, "custom-agent-dir");
-		const root = createSession(SessionManager.inMemory(tempDir), agentDir);
-		const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-		expect(env.PRIME_AGENT_CODING_AGENT_DIR).toBe(agentDir);
-	});
-
-	it("omits the agentDir env var when none is configured", () => {
-		const root = createSession(SessionManager.inMemory(tempDir));
-		const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
+		const root = createSession(SessionManager.inMemory(tempDir), agentDir, "stored-key", true);
+		const env = (root as unknown as InspectableRlmDirSession)._rustCellEnv();
 		expect(env.PRIME_AGENT_CODING_AGENT_DIR).toBeUndefined();
-	});
-
-	it("exports agentDir but skips key injection when no websearch skill is loaded", () => {
-		const agentDir = join(tempDir, "custom-agent-dir");
-		const root = createSession(SessionManager.inMemory(tempDir), agentDir, "stored-key", false);
-		const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-		expect(env.PRIME_AGENT_CODING_AGENT_DIR).toBe(agentDir);
 		expect(env.SERPER_API_KEY).toBeUndefined();
 	});
 
-	it("injects the key for a custom websearch skill even when bundled is off", () => {
+	it("resolves a stored literal Serper key host-side regardless of loaded skills", () => {
 		const previous = process.env.SERPER_API_KEY;
 		delete process.env.SERPER_API_KEY;
 		try {
-			// loadWebsearchSkill=true models a --skill/project websearch; the bundled
-			// setting is irrelevant because the gate checks the loaded skill, not settings.
-			const root = createSession(SessionManager.inMemory(tempDir), undefined, "custom-key", true);
-			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("custom-key");
+			// No websearch skill loaded: resolution is host-side now, so the
+			// kernel-era "only when a skill can use it" env gate is gone.
+			const root = createSession(SessionManager.inMemory(tempDir), undefined, "literal-serper-key", false);
+			expect((root as unknown as InspectableRlmDirSession)._resolveSerperApiKey()).toBe("literal-serper-key");
 		} finally {
 			if (previous === undefined) delete process.env.SERPER_API_KEY;
 			else process.env.SERPER_API_KEY = previous;
 		}
 	});
 
-	it("injects a literal stored Serper key into the kernel", () => {
+	it("prefers the SERPER_API_KEY env var over the stored credential", () => {
 		const previous = process.env.SERPER_API_KEY;
-		delete process.env.SERPER_API_KEY;
+		process.env.SERPER_API_KEY = "env-wins";
 		try {
-			const root = createSession(SessionManager.inMemory(tempDir), undefined, "literal-serper-key", true);
-			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("literal-serper-key");
+			const root = createSession(SessionManager.inMemory(tempDir), undefined, "stored-key", true);
+			expect((root as unknown as InspectableRlmDirSession)._resolveSerperApiKey()).toBe("env-wins");
 		} finally {
 			if (previous === undefined) delete process.env.SERPER_API_KEY;
 			else process.env.SERPER_API_KEY = previous;
 		}
 	});
 
-	it("resolves an env-var-reference Serper key before injecting it", () => {
+	it("resolves an env-var-reference Serper key", () => {
 		const previousKey = process.env.SERPER_API_KEY;
 		const previousRef = process.env.MY_SERPER_REF;
 		delete process.env.SERPER_API_KEY;
 		process.env.MY_SERPER_REF = "resolved-secret";
 		try {
 			const root = createSession(SessionManager.inMemory(tempDir), undefined, "MY_SERPER_REF", true);
-			const env = (root as unknown as InspectableRlmDirSession)._rlmKernelEnv();
-			expect(env.SERPER_API_KEY).toBe("resolved-secret");
+			expect((root as unknown as InspectableRlmDirSession)._resolveSerperApiKey()).toBe("resolved-secret");
 		} finally {
 			if (previousKey === undefined) delete process.env.SERPER_API_KEY;
 			else process.env.SERPER_API_KEY = previousKey;

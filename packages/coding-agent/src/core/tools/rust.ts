@@ -79,7 +79,7 @@ export function createRustToolDefinition(
 		// Cells share one workspace and one target dir — never two cells at once.
 		executionMode: "sequential",
 		parameters: rustSchema,
-		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+		execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 			let hasWorkingMessage = false;
 			const setToolWorkingMessage = (message?: string) => {
 				setWorkingMessage(ctx, message);
@@ -95,6 +95,7 @@ export function createRustToolDefinition(
 				});
 				const result = await runner.execute(params as CellInput, {
 					signal,
+					cellId: toolCallId,
 					onChunk: (chunk) => {
 						onUpdate?.({
 							content: [{ type: "text", text: chunk }],

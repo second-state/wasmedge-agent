@@ -268,7 +268,8 @@ import { type BashOperations, createLocalBashOperations } from "./tools/bash.js"
 import { createAllToolDefinitions } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import { addAssistantUsage, emptyUsage } from "./usage.js";
-import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR, WEBSEARCH_SKILL_NAME } from "./websearch-credential.js";
+import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR } from "./websearch-credential.js";
+import { createWebsearchHostHandler } from "./websearch-host.js";
 
 export type { GoalState, GoalStatus } from "./goals.js";
 export type { SessionStats } from "./session-stats.js";
@@ -8516,6 +8517,8 @@ export class AgentSession {
 			this._rustCellProvisioner = new RustCellProvisioner({
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
+				hostHandlers: this._createKernelHostHandlers(),
+				cellEnv: this._rustCellEnv(),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
 				rust: {
@@ -8609,8 +8612,7 @@ export class AgentSession {
 		return skills;
 	}
 
-	/** Typed handlers for host requests; rewired to the rust-cell bridge in WP3. */
-	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: WP3 (bridge) consumes this
+	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */
 	private _createKernelHostHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
 			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
@@ -8623,6 +8625,10 @@ export class AgentSession {
 				id: this.model?.id ?? null,
 				provider: this.model?.provider ?? null,
 				input: this.model?.input ?? [],
+			}),
+			// D12: guests never talk to the network; the Serper key stays host-side.
+			"websearch.run": createWebsearchHostHandler({
+				resolveApiKey: () => this._resolveSerperApiKey(),
 			}),
 		};
 		if (this._includeGoals) {
@@ -8749,48 +8755,29 @@ export class AgentSession {
 		}
 	}
 
-	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: WP3 (bridge/child env) consumes this
-	private _rlmKernelEnv(): Record<string, string> {
-		// Kernel env is provisioning-time only: RLM_MAX_DEPTH may be stale in an already-running kernel;
-		// the TypeScript-side spawn check remains authoritative.
-		const env: Record<string, string> = {
+	/** WASI env for every cell. Informational only: the TypeScript-side spawn
+	 * check remains authoritative for depth limits; harness-dir mounts land in
+	 * WP7. Bridge address/token/cell id are added per cell by the runner. */
+	private _rustCellEnv(): Record<string, string> {
+		return {
 			RLM_DEPTH: String(this._rlmDepth),
 			RLM_MAX_DEPTH: String(this._rlmMaxDepth),
-			RLM_GLOBAL_HARNESS_STATE_DIR: getGlobalHarnessStateDir(),
 		};
-		const rlmSessionDir = this._ensureRlmSessionDir();
-		if (rlmSessionDir) {
-			env.RLM_SESSION_DIR = rlmSessionDir;
-			// Keep kernel writes and host reads (system prompt, review, /refine) on
-			// the same local harness path. Subagents prefer their own artifact dir;
-			// ephemeral sessions fall back to the RLM session dir once it exists.
-			env.RLM_HARNESS_STATE_DIR = this._localHarnessStateDir() ?? getLocalHarnessStateDir(rlmSessionDir)!;
-		}
-		this._addWebsearchKeyEnv(env);
-		return env;
 	}
 
-	private _addWebsearchKeyEnv(env: Record<string, string>): void {
-		if (this._agentDir) {
-			env.PRIME_AGENT_CODING_AGENT_DIR = this._agentDir;
-		}
-
-		if (process.env[SERPER_ENV_VAR]?.trim()) {
-			return;
-		}
-		// Inject only when a websearch skill (bundled or custom) is actually loaded,
-		// so the key isn't exposed to kernels that can't use it.
-		if (!this._resourceLoader.getSkills().skills.some((skill) => skill.name === WEBSEARCH_SKILL_NAME)) {
-			return;
+	/** Kernel-era _addWebsearchKeyEnv, host-side: the key resolves fresh per
+	 * websearch.run call (so /login mid-session works) and never enters the
+	 * sandbox. Env var wins over the stored credential. */
+	private _resolveSerperApiKey(): string | undefined {
+		const envKey = process.env[SERPER_ENV_VAR]?.trim();
+		if (envKey) {
+			return envKey;
 		}
 		const cred = this._modelRegistry.authStorage.get(SERPER_CREDENTIAL_ID);
 		if (cred?.type !== "api_key") {
-			return;
+			return undefined;
 		}
-		const resolved = resolveConfigValue(cred.key)?.trim();
-		if (resolved) {
-			env[SERPER_ENV_VAR] = resolved;
-		}
+		return resolveConfigValue(cred.key)?.trim() || undefined;
 	}
 
 	// Undefined when there's no persistent artifact dir (e.g. the viewer client):

@@ -326,7 +326,7 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 **對映現制的差異聲明**：現制 comm 允許 cell 結束後的 detached asyncio task 繼續發訊（`onLateSentAgentMessage` LRU 機制）；新制 cell 進程結束即斷線，**無 late message**——這是簡化（一個 cell 的 side effect 隨 cell 終結），`agent_message` 要在 cell 存活期間送出。此語意差異需寫進 prompt（§3）。
 
-### 2.8 狀態層規格
+**實作註記（WP3，2026-08-06）**：(1) guest 端 30s 逾時以 non-blocking socket + 5ms poll 迴圈實現（`wasmedge_wasi_socket` 無 read timeout API）；host 端 cellTimeout 為硬後盾。guest 收發 lockstep（每 req/emit 同步等回應），故無 frame 交錯。(2) 傳輸層錯誤丟棄連線、下次呼叫重連；`req` 絕不自動重試（副作用如 spawn 不可重放）；host 回報的錯誤（`status:"error"`）保留連線。(3) `sentAgentMessages` 收據由 host 在 `agent_message.send` 成功時直接合成進 CellResult（取代現制的 iopub MIME 回收）。(4) `rlm::mcp::{list_tools,call_tool}` API 已就位，對應 host handler（host 側 MCP client 代理）隨 WP6 skills 遷移落地。(5) `attach_image` 先不縮圖（WP6 移植），guest 端強制 350K base64 上限。(6) handler registry 於 `_buildRuntime` 建立——與上游 kernel provisioner 同一掛點，controller 後綁（如 headless heartbeat）觸發 rebuild 自動帶入。
 
 - `state.json`：單一 JSON object `{ "<key>": <any JSON> }`；guest 寫入原子（tmp+rename）；單檔軟上限 8 MiB（超過時 `rlm::state::set` 回 `Error::State`，指示改用 blob）。
 - `blobs/<name>`：任意 bytes；`keys()`/`list_blobs()` 供盤點。
