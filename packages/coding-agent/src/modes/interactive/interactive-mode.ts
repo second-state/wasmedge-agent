@@ -95,7 +95,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
 import { emptyGoalState, formatGoalUsage, GOAL_CONTEXT_PREVIEW_LABEL, type GoalState } from "../../core/goals.js";
-import type { KernelSentAgentMessage } from "../../core/kernel/index.js";
+import type { KernelSentAgentMessage } from "../../core/host-bridge/types.js";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import {
 	bashOutputToText,

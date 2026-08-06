@@ -1,5 +1,3 @@
-import { parseIpythonBashCell } from "./ipython-cell-code.js";
-
 const DESCRIPTOR_MAX_WIDTH = 64;
 
 const MAGIC_LINE_PATTERN = /^\s*!/;
@@ -431,13 +429,4 @@ export function previewPythonCode(code: string): CodePreview {
 		};
 	}
 	return { language: "python", text: "" };
-}
-
-export function previewIpythonCode(code: string): CodePreview {
-	const trimmedCode = code.trimEnd();
-	const bashCell = parseIpythonBashCell(trimmedCode);
-	if (bashCell) {
-		return previewBashCommand(bashCell.body);
-	}
-	return previewPythonCode(trimmedCode);
 }

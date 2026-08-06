@@ -4,8 +4,8 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { EditToolDetails } from "../../../core/tools/edit.js";
 import { generateDiffString } from "../../../core/tools/edit-diff.js";
-import type { IpythonToolDetails } from "../../../core/tools/ipython.js";
 import { resolveToCwd } from "../../../core/tools/path-utils.js";
+import type { RustToolDetails } from "../../../core/tools/rust.js";
 import { canonicalizePath, formatPathRelativeToCwdOrAbsolute } from "../../../utils/paths.js";
 import { theme } from "../theme/theme.js";
 
@@ -44,8 +44,10 @@ export function getToolFileChanges(
 	cwd: string,
 ): FileChangeSummary[] {
 	const changes = new Map<string, FileChangeSummary>();
-	if (toolName === "ipython") {
-		for (const display of (result.details as IpythonToolDetails | undefined)?.diffs ?? []) {
+	if (toolName === "rust") {
+		const details = result.details as RustToolDetails | undefined;
+		const diffs = details && "diffs" in details ? details.diffs : undefined;
+		for (const display of diffs ?? []) {
 			const { diff } = generateDiffString(display.oldStr, display.newStr, 4, display.startLine ?? 1);
 			mergeFileChange(changes, { path: display.path, ...countChangedLines(diff) }, cwd);
 		}

@@ -1,6 +1,6 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import type { HostRequestHandlers } from "../../../src/core/kernel/index.js";
+import type { HostRequestHandlers } from "../../../src/core/host-bridge/types.js";
 import { SessionManager } from "../../../src/core/session-manager.js";
 import { createHarness } from "../harness.js";
 

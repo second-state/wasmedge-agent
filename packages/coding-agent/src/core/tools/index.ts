@@ -19,13 +19,12 @@ export {
 } from "./edit.js";
 export { withFileMutationQueue } from "./file-mutation-queue.js";
 export {
-	createIpythonTool,
-	createIpythonToolDefinition,
-	IpythonKernelProvisioner,
-	type IpythonToolDetails,
-	type IpythonToolInput,
-	type IpythonToolOptions,
-} from "./ipython.js";
+	createRustTool,
+	createRustToolDefinition,
+	type RustToolDetails,
+	type RustToolInput,
+	type RustToolOptions,
+} from "./rust.js";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -39,21 +38,25 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
-import { createIpythonTool, createIpythonToolDefinition, type IpythonToolOptions } from "./ipython.js";
+import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.js";
+import { createRustTool, createRustToolDefinition, type RustToolOptions } from "./rust.js";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "ipython";
-export const allToolNames: Set<ToolName> = new Set(["ipython"]);
+export type ToolName = "rust" | "bash";
+export const allToolNames: Set<ToolName> = new Set(["rust", "bash"]);
 
 export interface ToolsOptions {
-	ipython?: IpythonToolOptions;
+	rust?: RustToolOptions;
+	bash?: BashToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
 	switch (toolName) {
-		case "ipython":
-			return createIpythonToolDefinition(cwd, options?.ipython);
+		case "rust":
+			return createRustToolDefinition(cwd, options?.rust);
+		case "bash":
+			return createBashToolDefinition(cwd, options?.bash);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -61,8 +64,10 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
 	switch (toolName) {
-		case "ipython":
-			return createIpythonTool(cwd, options?.ipython);
+		case "rust":
+			return createRustTool(cwd, options?.rust);
+		case "bash":
+			return createBashTool(cwd, options?.bash);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -70,12 +75,14 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
-		ipython: createIpythonToolDefinition(cwd, options?.ipython),
+		rust: createRustToolDefinition(cwd, options?.rust),
+		bash: createBashToolDefinition(cwd, options?.bash),
 	};
 }
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
 	return {
-		ipython: createIpythonTool(cwd, options?.ipython),
+		rust: createRustTool(cwd, options?.rust),
+		bash: createBashTool(cwd, options?.bash),
 	};
 }

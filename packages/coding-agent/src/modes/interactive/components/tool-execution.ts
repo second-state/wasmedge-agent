@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type Component, Container, Image, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.js";
-import type { KernelSentAgentMessage } from "../../../core/kernel/index.js";
+import type { KernelSentAgentMessage } from "../../../core/host-bridge/types.js";
 import { createBashToolDefinition } from "../../../core/tools/bash.js";
 import { createEditToolDefinition } from "../../../core/tools/edit.js";
 import { createAllToolDefinitions } from "../../../core/tools/index.js";
@@ -10,7 +10,6 @@ import type { AgentConnectionToolDefinition } from "../../agent-connection/index
 import { type Theme, theme } from "../theme/theme.js";
 import { getWorkingPulseFrame, workingIconFrame } from "../theme/working-icon.js";
 import { FileChangeSummaryComponent, getToolFileChanges } from "./edit-summary.js";
-import { getIpythonCodeFromArgs, IPythonCellComponent } from "./ipython-cell.js";
 import { ToolPanel } from "./tool-panel.js";
 
 export interface ToolExecutionOptions {
@@ -50,10 +49,10 @@ function createReplayBuiltInToolDefinition(
 	cwd: string,
 	toolDefinition: ToolExecutionDefinition | undefined,
 ): ToolDefinition<any, any> | undefined {
-	if (toolName === "ipython") {
-		return createAllToolDefinitions(cwd).ipython;
-	}
 	switch (toolName) {
+		case "rust": {
+			return createAllToolDefinitions(cwd).rust;
+		}
 		case "bash": {
 			const builtInDefinition = createBashToolDefinition(cwd);
 			return matchesBuiltInReplayMetadata(toolName, toolDefinition) ? builtInDefinition : undefined;
@@ -72,7 +71,6 @@ export class ToolExecutionComponent extends Container {
 	private selfRenderContainer: Container;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
-	private ipythonCellComponent?: IPythonCellComponent;
 	private rendererState: any = {};
 	private imageComponents: Image[] = [];
 	private toolName: string;
@@ -158,9 +156,6 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getRenderShell(): "default" | "self" {
-		if (this.shouldUseIpythonRenderer()) {
-			return "self";
-		}
 		if (!this.builtInToolDefinition) {
 			return this.toolDefinition?.renderShell ?? "default";
 		}
@@ -168,10 +163,6 @@ export class ToolExecutionComponent extends Container {
 			return this.builtInToolDefinition.renderShell ?? "default";
 		}
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
-	}
-
-	private shouldUseIpythonRenderer(): boolean {
-		return this.toolName === "ipython" && !this.toolDefinition?.renderCall && !this.toolDefinition?.renderResult;
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
@@ -322,31 +313,7 @@ export class ToolExecutionComponent extends Container {
 		this.hideComponent = false;
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
 			this.selfRenderContainer.clear();
-
-			if (this.shouldUseIpythonRenderer()) {
-				const state = {
-					code: getIpythonCodeFromArgs(this.args),
-					content: this.result?.content,
-					details: this.result?.details,
-					isPartial: this.isPartial,
-					isError: this.result?.isError ?? false,
-					expanded: this.expanded,
-					executionStarted: this.executionStarted,
-					argsComplete: this.argsComplete,
-					showExpandHint: this.showExpandHint,
-					showImages: this.showImages,
-					cwd: this.cwd,
-				};
-				if (!this.ipythonCellComponent) {
-					this.ipythonCellComponent = new IPythonCellComponent(state);
-				} else {
-					this.ipythonCellComponent.update(state);
-				}
-				this.selfRenderContainer.addChild(this.ipythonCellComponent);
-				hasContent = true;
-			} else {
-				hasContent = this.mountRenderers(this.selfRenderContainer, true);
-			}
+			hasContent = this.mountRenderers(this.selfRenderContainer, true);
 		} else {
 			// Default shell: tool panel with a `label · status` header so the block
 			// is self-identifying. The header replaces the bold-tool-name fallback.
@@ -391,7 +358,7 @@ export class ToolExecutionComponent extends Container {
 		const isBuiltInEdit =
 			this.toolName === "edit" &&
 			(this.toolDefinition === undefined || this.toolDefinition.replayBuiltInToolName === "edit");
-		if (!this.expanded && this.result && (isBuiltInEdit || this.shouldUseIpythonRenderer())) {
+		if (!this.expanded && this.result && isBuiltInEdit) {
 			const changes = getToolFileChanges(this.toolName, this.args, this.result, this.cwd);
 			if (changes.length > 0) {
 				const container = this.usesSelfRenderShell() ? this.selfRenderContainer : this.contentPanel;

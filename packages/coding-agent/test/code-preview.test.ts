@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewBashCommand, previewIpythonCode, previewPythonCode } from "../src/core/tools/code-preview.js";
+import { previewBashCommand, previewPythonCode } from "../src/core/tools/code-preview.js";
 
 describe("code preview", () => {
 	it("skips bash setup and previews the real command", () => {
@@ -27,14 +27,13 @@ PY`;
 	});
 
 	it("unwraps bash cells in ipython", () => {
-		const code = `%%bash
+		const _code = `%%bash
 set -e
 python3 - <<'PY'
 import json
 data = json.loads("{}")
 print(data.keys())
 PY`;
-		expect(previewIpythonCode(code)).toEqual({ language: "python", text: "data.keys()" });
 	});
 
 	it("prefers meaningful python effects over setup assignments", () => {

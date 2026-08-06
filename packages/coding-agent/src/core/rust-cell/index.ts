@@ -101,6 +101,11 @@ export class RustCellProvisioner {
 		});
 	}
 
+	/** Fire-and-forget warmup so the first cell skips toolchain checks. */
+	prewarm(): void {
+		void this.ensure().catch(() => {});
+	}
+
 	/** State listing for compaction/resume notices; empty when never started. */
 	listState(): PersistentStateListing {
 		if (!this.workspace) return { stateKeys: [], blobNames: [], libFunctions: [] };

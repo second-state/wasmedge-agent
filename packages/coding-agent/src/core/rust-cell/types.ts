@@ -1,5 +1,7 @@
 /** Shared types for the rust-cell runtime (DESIGN.md §2.2). */
 
+import type { KernelAttachment, KernelDiffDisplay, KernelSentAgentMessage } from "../host-bridge/types.js";
+
 export interface LibFile {
 	/** Path inside agent_lib/, e.g. "src/helpers/log_parse.rs". */
 	path: string;
@@ -29,6 +31,10 @@ export interface CellResult {
 	libReverted: boolean;
 	/** The readonly /agent/lib preopen failed to bind; the mount was dropped. */
 	libReadonlyFallback: boolean;
+	/** Rich output (host-synthesized lib diffs now; bridge emits from WP3). */
+	diffs: KernelDiffDisplay[];
+	attachments: KernelAttachment[];
+	sentAgentMessages: KernelSentAgentMessage[];
 }
 
 export interface RunnerOptions {

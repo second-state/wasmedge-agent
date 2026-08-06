@@ -202,12 +202,26 @@ export class CellRunner {
 		});
 		const runMs = Date.now() - runStarted;
 
+		// D14 rich output: synthesize a diff per applied lib file for the TUI.
+		const libDiffs =
+			applied && input.lib
+				? input.lib.map((file) => {
+						const target = join(ws, "agent_lib", file.path);
+						return {
+							path: `agent_lib/${file.path}`,
+							oldStr: applied.backups.get(target) ?? "",
+							newStr: file.content,
+						};
+					})
+				: [];
+
 		const base = {
 			started,
 			compileMs,
 			runMs,
 			libApplied,
 			libReverted: false,
+			diffs: libDiffs,
 			stdout: truncate(exec.stdout),
 			stderr: truncate(exec.stderr),
 			exitCode: exec.exitCode ?? undefined,
@@ -262,6 +276,7 @@ export class CellRunner {
 			runMs: number;
 			libApplied: boolean;
 			libReverted: boolean;
+			diffs?: CellResult["diffs"];
 			stdout?: string;
 			stderr?: string;
 			compileDiagnostics?: string;
@@ -280,6 +295,9 @@ export class CellRunner {
 			libApplied: partial.libApplied,
 			libReverted: partial.libReverted,
 			libReadonlyFallback: !this.mountLibReadonly,
+			diffs: partial.diffs ?? [],
+			attachments: [],
+			sentAgentMessages: [],
 		};
 	}
 }
