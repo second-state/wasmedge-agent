@@ -34,9 +34,14 @@ export function resolveToolchain(): ToolchainInfo {
 		throw new Error(`wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path`);
 	}
 
-	const targets = execFileSync("rustup", ["target", "list", "--installed"], { encoding: "utf-8" });
-	if (!targets.includes("wasm32-wasip1")) {
-		throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
+	// Without rustup (e.g. distro/homebrew Rust) skip the target precheck; a
+	// missing target then surfaces as the cargo build error instead.
+	const rustupBin = findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
+	if (existsSync(rustupBin)) {
+		const targets = execFileSync(rustupBin, ["target", "list", "--installed"], { encoding: "utf-8" });
+		if (!targets.includes("wasm32-wasip1")) {
+			throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
+		}
 	}
 
 	const wasmedgeVersion = execFileSync(wasmedgeBin, ["--version"], { encoding: "utf-8" }).trim();
