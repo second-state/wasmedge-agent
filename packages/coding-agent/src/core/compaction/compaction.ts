@@ -495,8 +495,8 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
-const KERNEL_PERSIST_SUMMARY_NOTE =
-	"Note: the IPython kernel keeps running after this summary — every Python variable, import, and helper you defined stays available. The cells that defined them won't appear above, so record in the summary any names worth remembering so you reuse them instead of redefining them.";
+const WORKSPACE_PERSIST_SUMMARY_NOTE =
+	"Note: your rust workspace survives this summary — rlm::state values, state blobs, and agent_lib helpers all persist through compaction. The cells that created them won't appear above, so record in the summary any state keys and agent_lib functions worth remembering so you reuse them instead of rebuilding them.";
 
 const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
@@ -539,14 +539,14 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
 /**
  * Build the instruction portion of the summarization prompt: the initial or
- * update template, optional user instructions, and the kernel persistence note.
+ * update template, optional user instructions, and the workspace persistence note.
  */
 export function buildSummarizationPrompt(customInstructions?: string, previousSummary?: string): string {
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
 		basePrompt += `\n\n<user-instructions>\nThe user provided these instructions for this summary. Follow them with high priority while keeping the section format above: emphasize what they ask to focus on, and preserve verbatim anything they ask to remember.\n${customInstructions}\n</user-instructions>`;
 	}
-	return `${basePrompt}\n\n${KERNEL_PERSIST_SUMMARY_NOTE}`;
+	return `${basePrompt}\n\n${WORKSPACE_PERSIST_SUMMARY_NOTE}`;
 }
 
 /**

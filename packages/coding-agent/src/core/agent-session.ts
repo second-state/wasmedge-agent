@@ -185,6 +185,7 @@ import {
 	HEARTBEAT_PROMPT_CUSTOM_TYPE,
 	HEARTBEAT_PROMPT_PREVIEW_LABEL,
 	isSessionSlashCommandMessage,
+	RUST_STATE_RESTORED_CUSTOM_TYPE,
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
@@ -6739,7 +6740,7 @@ export class AgentSession {
 
 	// Added to history (not a nextTurn message) so it also reaches the continue()-driven
 	// auto-compaction resume, which never injects nextTurn messages.
-	private async _notifyKernelStateAfterCompaction(): Promise<void> {
+	private async _notifyWorkspaceStateAfterCompaction(): Promise<void> {
 		const provisioner = this._rustCellProvisioner;
 		// No runtime means no persistent state to remind about.
 		if (!provisioner?.hasRunner) return;
@@ -6790,7 +6791,7 @@ export class AgentSession {
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{
-				customType: "rust_state_restored",
+				customType: RUST_STATE_RESTORED_CUSTOM_TYPE,
 				content: lines.join("\n"),
 				display: true,
 				details: { restored: true },
@@ -6992,7 +6993,7 @@ export class AgentSession {
 				fromExtension,
 			});
 		}
-		await this._notifyKernelStateAfterCompaction();
+		await this._notifyWorkspaceStateAfterCompaction();
 		await this._reapDeletedRlmSubagentRuntimesAfterCompaction();
 
 		return { summary, firstKeptEntryId, tokensBefore, details };

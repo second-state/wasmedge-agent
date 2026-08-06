@@ -13,12 +13,12 @@ import {
 	type CustomMessage,
 	HEARTBEAT_PROMPT_CUSTOM_TYPE,
 	type HeartbeatPromptDetails,
-	IPYTHON_STATE_RESTORED_CUSTOM_TYPE,
-	type IpythonStateRestoredDetails,
 	RLM_CHILD_FAILURE_CUSTOM_TYPE,
 	RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE,
 	type RlmChildFailureDetails,
 	type RlmChildTerminalNoticeDetails,
+	RUST_STATE_RESTORED_CUSTOM_TYPE,
+	type RustStateRestoredDetails,
 } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 import { keyText } from "./keybinding-hints.js";
@@ -26,7 +26,7 @@ import { keyText } from "./keybinding-hints.js";
 type InjectedPromptDetails =
 	| GoalContextDetails
 	| HeartbeatPromptDetails
-	| IpythonStateRestoredDetails
+	| RustStateRestoredDetails
 	| RlmChildFailureDetails
 	| RlmChildTerminalNoticeDetails;
 type InjectedPromptMessage = CustomMessage<InjectedPromptDetails>;
@@ -36,7 +36,7 @@ export function isInjectedPromptMessage(message: AgentMessage): message is Injec
 		message.role === "custom" &&
 		(message.customType === HEARTBEAT_PROMPT_CUSTOM_TYPE ||
 			message.customType === GOAL_CONTEXT_CUSTOM_TYPE ||
-			message.customType === IPYTHON_STATE_RESTORED_CUSTOM_TYPE ||
+			message.customType === RUST_STATE_RESTORED_CUSTOM_TYPE ||
 			message.customType === RLM_CHILD_FAILURE_CUSTOM_TYPE ||
 			message.customType === RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE)
 	);
@@ -111,7 +111,7 @@ export class InjectedPromptMessageComponent extends Container {
 		this.content.clear();
 		this.header.setText(this.headerText());
 		this.content.addChild(this.header);
-		if (this.expanded && this.message.customType !== IPYTHON_STATE_RESTORED_CUSTOM_TYPE) {
+		if (this.expanded && this.message.customType !== RUST_STATE_RESTORED_CUSTOM_TYPE) {
 			this.content.addChild(
 				new Markdown(readCustomText(this.message), 1, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("customMessageText", text),
@@ -125,9 +125,9 @@ export class InjectedPromptMessageComponent extends Container {
 		if (this.message.customType === HEARTBEAT_PROMPT_CUSTOM_TYPE) {
 			return this.heartbeatHeaderText();
 		}
-		if (this.message.customType === IPYTHON_STATE_RESTORED_CUSTOM_TYPE) {
-			const details = this.message.details as IpythonStateRestoredDetails | undefined;
-			const label = details?.restored === false ? "Started fresh IPython kernel" : "Restored IPython kernel state";
+		if (this.message.customType === RUST_STATE_RESTORED_CUSTOM_TYPE) {
+			const details = this.message.details as RustStateRestoredDetails | undefined;
+			const label = details?.restored === false ? "Started a fresh workspace" : "Restored persistent workspace";
 			return `${theme.fg("accent", "◆")} ${theme.fg("muted", label)}`;
 		}
 		if (
