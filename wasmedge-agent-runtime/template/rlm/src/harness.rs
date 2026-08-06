@@ -247,7 +247,13 @@ impl Harness {
 
     fn save(&mut self) -> Result<()> {
         let body = serde_json::to_string_pretty(&self.state).map_err(|e| state_err(e.to_string()))?;
-        let tmp = self.file.with_extension(format!("json.tmp{}", std::process::id()));
+        // Cells run one at a time, so a time-derived suffix is unique enough;
+        // std::process::id() traps on wasm32-wasip1 (unsupported syscall).
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let tmp = self.file.with_extension(format!("json.tmp{nanos}"));
         std::fs::write(&tmp, format!("{body}\n")).map_err(|e| state_err(format!("writing harness state: {e}")))?;
         std::fs::rename(&tmp, &self.file).map_err(|e| state_err(format!("saving harness state: {e}")))?;
         self.loaded_mtime = self.disk_mtime();

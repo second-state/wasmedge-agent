@@ -53,6 +53,10 @@ export interface RunnerOptions {
 	bridge?: BridgeServer;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
 	cellEnv?: Record<string, string>;
+	/** Session-local harness state dir, preopened rw at /agent/harness. */
+	harnessDir?: string;
+	/** Global harness state dir, preopened rw at /agent/harness-global. */
+	globalHarnessDir?: string;
 }
 
 export interface PerCallOptions {

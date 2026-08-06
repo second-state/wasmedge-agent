@@ -8425,6 +8425,9 @@ export class AgentSession {
 				// Mount ALL discovered rust skills (visibility only gates the prompt),
 				// mirroring the kernel-era install-everything venv.
 				rustSkills: getRustSkillRuntimeInfo(this._resourceLoader.getSkills().skills),
+				// rlm::harness stores; shared with /refine (mtime-guarded, §4.3).
+				harnessDir: this._localHarnessStateDir(),
+				globalHarnessDir: getGlobalHarnessStateDir(this._agentDir),
 				onDiagnostic: (message) => getLogger("coding-agent.rust-cell").warn(message),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
