@@ -281,20 +281,6 @@ export function acpUpdatesForSessionEvent(
 				},
 			];
 
-		case "ipython_sent_agent_message":
-			return [
-				{
-					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({
-						agentMessage: {
-							toolCallId: event.toolCallId,
-							target: event.message.target.sessionName ?? event.message.target.sessionId,
-							deliveryStatus: event.message.deliveryStatus,
-						},
-					}),
-				},
-			];
-
 		default:
 			return [];
 	}

@@ -169,7 +169,7 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
-import type { HostRequestHandlers, KernelSentAgentMessage } from "./host-bridge/types.js";
+import type { HostRequestHandlers } from "./host-bridge/types.js";
 import type { McpManager } from "./mcp/mcp-manager.js";
 import {
 	type BashExecutionMessage,
@@ -313,11 +313,6 @@ export type CompactionReason = "manual" | "threshold" | "overflow" | "requested"
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
-	| {
-			type: "ipython_sent_agent_message";
-			toolCallId: string;
-			message: KernelSentAgentMessage;
-	  }
 	| { type: "session_action_update"; actions: SessionActionSnapshot }
 	| {
 			type: "compaction_start";
@@ -791,67 +786,6 @@ function visibleSessionActionProjection(actions: readonly QueuedSessionAction[])
 	);
 }
 
-const IPYTHON_SENT_AGENT_MESSAGE_CUSTOM_ENTRY = "ipython_sent_agent_message";
-
-interface PersistedIpythonSentAgentMessage {
-	toolCallId: string;
-	message: KernelSentAgentMessage;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parsePersistedIpythonSentAgentMessage(value: unknown): PersistedIpythonSentAgentMessage | undefined {
-	if (!isObjectRecord(value) || typeof value.toolCallId !== "string" || !isObjectRecord(value.message)) {
-		return undefined;
-	}
-	const { id, message, deliveryStatus, target } = value.message;
-	if (
-		typeof id !== "string" ||
-		typeof message !== "string" ||
-		(deliveryStatus !== "delivered" && deliveryStatus !== "queued") ||
-		!isObjectRecord(target) ||
-		typeof target.activeSessionId !== "string" ||
-		typeof target.sessionId !== "string"
-	) {
-		return undefined;
-	}
-	return {
-		toolCallId: value.toolCallId,
-		message: {
-			id,
-			message,
-			deliveryStatus,
-			target: {
-				activeSessionId: target.activeSessionId,
-				sessionId: target.sessionId,
-				...(typeof target.sessionName === "string" ? { sessionName: target.sessionName } : {}),
-			},
-		},
-	};
-}
-
-function appendSentAgentMessageToToolResult(
-	message: AgentMessage,
-	toolCallId: string,
-	sentMessage: KernelSentAgentMessage,
-): boolean {
-	if (message.role !== "toolResult" || message.toolName !== "rust" || message.toolCallId !== toolCallId) {
-		return false;
-	}
-	const details = isObjectRecord(message.details) ? message.details : {};
-	const current = Array.isArray(details.sentAgentMessages) ? details.sentAgentMessages : [];
-	if (current.some((entry) => isObjectRecord(entry) && entry.id === sentMessage.id)) {
-		return true;
-	}
-	message.details = {
-		...details,
-		sentAgentMessages: [...current, sentMessage],
-	};
-	return true;
-}
-
 function injectedMessagePreviewLabel(message: CustomMessage): string | undefined {
 	switch (message.customType) {
 		case HEARTBEAT_PROMPT_CUSTOM_TYPE:
@@ -1147,7 +1081,6 @@ export class AgentSession {
 	private _retryResolve: (() => void) | undefined = undefined;
 	private _retryAuthFailureSources: AuthSourceToken[] = [];
 	private _agentMessageOutcomes = new Map<string, AgentMessageOutcome>();
-	private _lateIpythonSentAgentMessages = new Map<string, KernelSentAgentMessage[]>();
 	/** Outcome disclosures whose session-file append failed; retained for context rebuilds. */
 	private readonly _unpersistedCompactionOutcomes: CustomMessage[] = [];
 
@@ -1340,7 +1273,6 @@ export class AgentSession {
 			// admission is unavailable mid-construction, so ride the next turn.
 			this._pendingNextTurnMessages.push(createGoalContextMessage(this._goalState, "continuation"));
 		}
-		this._restoreLateIpythonSentAgentMessages();
 		if (this._goalState.status === "active") {
 			this._goalAccountingStartedAt = Date.now();
 		}
@@ -1497,43 +1429,6 @@ export class AgentSession {
 		if (JSON.stringify(actions) === JSON.stringify(this._lastSessionActionSnapshot)) return;
 		this._lastSessionActionSnapshot = actions;
 		this._emit({ type: "session_action_update", actions });
-	}
-
-	private _restoreLateIpythonSentAgentMessages(): void {
-		this._lateIpythonSentAgentMessages.clear();
-		for (const entry of this.sessionManager.getBranch()) {
-			if (entry.type !== "custom" || entry.customType !== IPYTHON_SENT_AGENT_MESSAGE_CUSTOM_ENTRY) {
-				continue;
-			}
-			const persisted = parsePersistedIpythonSentAgentMessage(entry.data);
-			if (persisted) {
-				this._rememberLateIpythonSentAgentMessage(persisted.toolCallId, persisted.message);
-			}
-		}
-	}
-
-	private _rememberLateIpythonSentAgentMessage(toolCallId: string, message: KernelSentAgentMessage): boolean {
-		const messages = this._lateIpythonSentAgentMessages.get(toolCallId) ?? [];
-		const isNew = !messages.some((entry) => entry.id === message.id);
-		if (isNew) {
-			messages.push(message);
-			this._lateIpythonSentAgentMessages.set(toolCallId, messages);
-		}
-		for (let index = this.agent.state.messages.length - 1; index >= 0; index -= 1) {
-			if (appendSentAgentMessageToToolResult(this.agent.state.messages[index], toolCallId, message)) {
-				break;
-			}
-		}
-		return isNew;
-	}
-
-	private _applyLateIpythonSentAgentMessages(message: AgentMessage): void {
-		if (message.role !== "toolResult" || message.toolName !== "rust") {
-			return;
-		}
-		for (const sentMessage of this._lateIpythonSentAgentMessages.get(message.toolCallId) ?? []) {
-			appendSentAgentMessageToToolResult(message, message.toolCallId, sentMessage);
-		}
 	}
 
 	private _emitGoalUpdate(): void {
@@ -3407,9 +3302,6 @@ export class AgentSession {
 
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
 		let clearedDispatchEnded = false;
-		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "toolResult") {
-			this._applyLateIpythonSentAgentMessages(event.message);
-		}
 		if (event.type === "message_start" || event.type === "message_end") {
 			const cleared = this._capturingCancelledAction(event.message);
 			if (cleared?.payload.kind === "turn" && cleared.payload.captureRunMessages) {
@@ -4106,9 +3998,6 @@ export class AgentSession {
 
 	buildSessionContext(): SessionContext {
 		const context = this.sessionManager.buildSessionContext();
-		for (const message of context.messages) {
-			this._applyLateIpythonSentAgentMessages(message);
-		}
 		this._mergeUnpersistedCompactionOutcomes(context.messages);
 		return context;
 	}
@@ -7091,7 +6980,6 @@ export class AgentSession {
 		const newEntries = this.sessionManager.getEntries();
 		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
 		this._mergeUnpersistedCompactionOutcomes(this.agent.state.messages);
-		this._restoreLateIpythonSentAgentMessages();
 
 		// Get the saved compaction entry for the extension event
 		const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -10782,7 +10670,6 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this._mergeUnpersistedCompactionOutcomes(this.agent.state.messages);
-			this._restoreLateIpythonSentAgentMessages();
 			this._reloadGoalStateFromBranch();
 			this._reloadRlmMaxDepthFromBranch();
 			this._invalidateQueuedPromptPreparation();

@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type Component, Container, Image, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.js";
-import type { KernelSentAgentMessage } from "../../../core/host-bridge/types.js";
 import { createBashToolDefinition } from "../../../core/tools/bash.js";
 import { createEditToolDefinition } from "../../../core/tools/edit.js";
 import { createAllToolDefinitions } from "../../../core/tools/index.js";
@@ -89,7 +88,6 @@ export class ToolExecutionComponent extends Container {
 	private cwd: string;
 	private executionStarted = false;
 	private argsComplete = false;
-	private pendingSentAgentMessages: KernelSentAgentMessage[] = [];
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
@@ -233,33 +231,9 @@ export class ToolExecutionComponent extends Container {
 		},
 		isPartial = false,
 	): void {
-		const details =
-			typeof result.details === "object" && result.details !== null
-				? (result.details as Record<string, unknown>)
-				: {};
-		const sentAgentMessages = Array.isArray(details.sentAgentMessages) ? [...details.sentAgentMessages] : [];
-		for (const message of this.pendingSentAgentMessages) {
-			if (
-				!sentAgentMessages.some(
-					(entry) => typeof entry === "object" && entry !== null && "id" in entry && entry.id === message.id,
-				)
-			) {
-				sentAgentMessages.push(message);
-			}
-		}
-		this.result = sentAgentMessages.length > 0 ? { ...result, details: { ...details, sentAgentMessages } } : result;
+		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
-	}
-
-	appendSentAgentMessage(message: KernelSentAgentMessage): void {
-		if (this.pendingSentAgentMessages.some((entry) => entry.id === message.id)) {
-			return;
-		}
-		this.pendingSentAgentMessages.push(message);
-		if (this.result) {
-			this.updateResult(this.result, this.isPartial);
-		}
 	}
 
 	setExpanded(expanded: boolean): void {
