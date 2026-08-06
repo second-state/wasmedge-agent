@@ -21,10 +21,19 @@ import type { LibFile } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** Locate the guest workspace template: packaged dist copy first (copy-assets),
- * then the repo-root source (running from source). Mirrors the runtime-source
- * resolution the kernel bootstrap used. */
+/** Locate the guest workspace template: env override first, then the packaged
+ * dist copy (copy-assets), then the repo-root source (running from source).
+ * Mirrors the runtime-source resolution the kernel bootstrap used. */
 export function resolveTemplateDir(): string {
+	const override = process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
+	if (override) {
+		// An explicit override must point at a workspace; falling back silently
+		// would mask a misconfiguration.
+		if (!existsSync(join(override, "Cargo.toml"))) {
+			throw new Error(`WASMEDGE_AGENT_TEMPLATE_DIR is set but has no Cargo.toml: ${override}`);
+		}
+		return override;
+	}
 	const candidates = [
 		// dist layout: dist/core/rust-cell -> dist/wasmedge-agent-runtime (copy-assets)
 		resolve(HERE, "..", "..", "wasmedge-agent-runtime", "template"),
