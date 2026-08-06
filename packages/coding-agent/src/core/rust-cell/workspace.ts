@@ -15,9 +15,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * resolution the kernel bootstrap used. */
 export function resolveTemplateDir(): string {
 	const candidates = [
+		// dist layout: dist/core/rust-cell -> dist/wasmedge-agent-runtime (copy-assets)
 		resolve(HERE, "..", "..", "wasmedge-agent-runtime", "template"),
-		resolve(HERE, "..", "..", "..", "wasmedge-agent-runtime", "template"),
-		resolve(HERE, "..", "..", "..", "..", "wasmedge-agent-runtime", "template"),
+		// source layout: packages/coding-agent/src/core/rust-cell -> repo root
+		resolve(HERE, "..", "..", "..", "..", "..", "wasmedge-agent-runtime", "template"),
 	];
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "Cargo.toml"))) return candidate;
