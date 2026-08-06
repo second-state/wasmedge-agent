@@ -2,14 +2,20 @@
  * IPython kernel (DESIGN.md §2). The provisioner mirrors the lifecycle shape
  * the kernel provisioner had so AgentSession wiring stays small. */
 
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo, warmTemplate } from "./toolchain.js";
-import { ensureWorkspaceAt, listPersistentState, type PersistentStateListing } from "./workspace.js";
+import {
+	ensureWorkspaceAt,
+	listPersistentState,
+	type PersistentStateListing,
+	type RustSkillMount,
+	syncRustSkills,
+} from "./workspace.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -33,8 +39,11 @@ export {
 	ensureWorkspaceAt,
 	listPersistentState,
 	type PersistentStateListing,
+	type RustSkillMount,
 	removeWorkspace,
 	resolveTemplateDir,
+	type SyncRustSkillsResult,
+	syncRustSkills,
 } from "./workspace.js";
 
 export interface RustCellProvisionerOptions {
@@ -48,6 +57,8 @@ export interface RustCellProvisionerOptions {
 	hostHandlers?: HostRequestHandlers;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
 	cellEnv?: Record<string, string>;
+	/** Rust skill crates to mount as agent_lib::skills::* (DESIGN.md §4.1). */
+	rustSkills?: RustSkillMount[];
 	/** Sink for bridge protocol diagnostics. */
 	onDiagnostic?: (message: string) => void;
 }
@@ -112,6 +123,16 @@ export class RustCellProvisioner {
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		ensureWorkspaceAt(this.workspace);
+		const rustSkills = this.options.rustSkills ?? [];
+		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
+			onProgress?.("Mounting rust skills...");
+			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });
+			for (const failure of sync.failed) {
+				this.options.onDiagnostic?.(
+					`rust skill "${failure.name}" failed to compile and was unmounted: ${failure.message}`,
+				);
+			}
+		}
 		if (this.options.hostHandlers && !this.bridgeServer) {
 			this.bridgeServer = new BridgeServer({
 				handlers: this.options.hostHandlers,

@@ -42,6 +42,7 @@ import type {
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
+	getLogger,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	modelsAreEqual,
@@ -249,7 +250,7 @@ import {
 } from "./session-manager.js";
 import type { SessionStats } from "./session-stats.js";
 import type { SettingsManager } from "./settings-manager.js";
-import type { Skill } from "./skills.js";
+import { getRustSkillRuntimeInfo, type Skill } from "./skills.js";
 import {
 	parseRefineCommandOptions,
 	parseSessionSlashCommand,
@@ -8417,6 +8418,10 @@ export class AgentSession {
 				workspaceDir: this._rustWorkspaceDir,
 				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
+				// Mount ALL discovered rust skills (visibility only gates the prompt),
+				// mirroring the kernel-era install-everything venv.
+				rustSkills: getRustSkillRuntimeInfo(this._resourceLoader.getSkills().skills),
+				onDiagnostic: (message) => getLogger("coding-agent.rust-cell").warn(message),
 			});
 			configuredBaseToolDefinitions = createAllToolDefinitions(this._cwd, {
 				rust: {
