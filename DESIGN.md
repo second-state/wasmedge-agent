@@ -688,6 +688,8 @@ wasmedge-agent/
 
 CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test:rust-cell`；macOS + Linux runner 各跑整合層。
 
+**實作註記（WP9，2026-08-07）**：(1) 整合層失敗路徑補齊（`rust-cell-failure-paths.test.ts`）：compile_error＋診斷、壞 lib 原子回滾（workspace 恆可編譯）、panic→"error"＋stderr、排隊/執行中 abort→"aborted"、spin cell 吃盡 compile+run 共同預算→"timeout"。(2) Suite 層落地 `test/suite/rust-cell/`：faux provider 腳本回覆驅動**真** `createRustTool`（真編譯、真 WasmEdge）過 AgentSession——檔案落地、`rlm::state` 跨 cell 持久、compile error 入 toolResult 不斷 turn；與整合測試同閘（toolchain 缺即 skip），故也跑在專用 CI job。(3) `test:rust-cell` script＝`vitest --run test/rust-cell- test/suite/rust-cell/`。(4) CI 新 job `test-rust-cell`（ubuntu＋macos matrix）：rustup target、WasmEdge 官方 script 釘 0.14.1（workspace-local prefix）、cargo/template cache（key=模板 Cargo.lock）、vendor→warm→硬斷言 cell.wasm 與 wasmedge 存在（防 skip 造成的空綠）、guest crate native `cargo test --target $(host)`、最後 `test:rust-cell`；`build-check-test` 聚合閘納入。(5) 教義事實更正入文件：WASI 無 cwd，cell 以 `/workspace/...` 絕對路徑取專案（suite 測試踩出、rlm-runtime.md 已補）。驗收殘項（人工）：bench 複跑與 dogfood 需真 token／使用者參與，另行提案。
+
 ## 10. 組態與部署
 
 **Env vars**（對映現制 7 個 `PRIME_AGENT_KERNEL_*`）：

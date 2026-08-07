@@ -98,16 +98,98 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ${{ matrix.command }}
 
+  # DESIGN.md section 9 integration layer: the toolchain-gated cell tests
+  # (which skip without cargo + wasm32-wasip1 + wasmedge) run for real here,
+  # on both platforms, plus the guest crate's native tests.
+  test-rust-cell:
+    name: Cell runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      WASMEDGE_AGENT_WASMEDGE: ${{ github.workspace }}/.wasmedge/bin/wasmedge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s $(which fdfind) /usr/local/bin/fd
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkg-config cairo pango libpng jpeg giflib librsvg ripgrep fd
+
+      - name: Install the wasm32-wasip1 target
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup target add wasm32-wasip1
+
+      - name: Install WasmEdge
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh |
+            bash -s -- -v 0.14.1 -p "$GITHUB_WORKSPACE/.wasmedge"
+          "$WASMEDGE_AGENT_WASMEDGE" --version
+
+      - name: Cache cargo and the template build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            wasmedge-agent-runtime/template/vendor
+            wasmedge-agent-runtime/template/target
+          key: cell-template-${{ runner.os }}-${{ hashFiles('wasmedge-agent-runtime/template/Cargo.lock') }}
+
+      - name: Vendor and warm the template
+        working-directory: wasmedge-agent-runtime/template
+        run: |
+          test -d vendor || cargo vendor --locked vendor
+          cargo build --release -p cell
+          test -f target/wasm32-wasip1/release/cell.wasm
+
+      - name: Guest crate native tests
+        working-directory: wasmedge-agent-runtime/template/rlm
+        run: |
+          HOST_TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
+          cargo test --release --target "$HOST_TRIPLE"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Cell tests (integration + suite)
+        working-directory: packages/coding-agent
+        run: npm run test:rust-cell
+
   build-check-test:
     name: build-check-test
     if: always()
-    needs: [build-check, test]
+    needs: [build-check, test, test-rust-cell]
     runs-on: ubuntu-latest
     steps:
       - name: Verify CI results
         env:
           BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          RUST_CELL_RESULT: ${{ needs.test-rust-cell.result }}
         run: |
           test "$BUILD_CHECK_RESULT" = success
           test "$TEST_RESULT" = success
+          test "$RUST_CELL_RESULT" = success
