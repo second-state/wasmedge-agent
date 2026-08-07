@@ -2,13 +2,13 @@
  * concurrent-build gate (DESIGN.md §10). Pure host-side units — no toolchain
  * needed. */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConcurrency } from "../src/core/rust-cell/build-gate.js";
 import { collectRuntimeChecks } from "../src/core/rust-cell/doctor.js";
-import { resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
+import { ensureWorkspaceAt, resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
 
 describe("resolveTemplateDir", () => {
 	const tempDirs: string[] = [];
@@ -31,6 +31,54 @@ describe("resolveTemplateDir", () => {
 		mkdirSync(join(dir, "empty"), { recursive: true });
 		process.env.WASMEDGE_AGENT_TEMPLATE_DIR = join(dir, "empty");
 		expect(() => resolveTemplateDir()).toThrow(/WASMEDGE_AGENT_TEMPLATE_DIR/);
+	});
+});
+
+describe("ensureWorkspaceAt", () => {
+	const tempDirs: string[] = [];
+	afterEach(() => {
+		delete process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
+		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	function fakeTemplate(): string {
+		const template = mkdtempSync(join(tmpdir(), "template-fake-"));
+		tempDirs.push(template);
+		writeFileSync(join(template, "Cargo.toml"), "[workspace]\n");
+		mkdirSync(join(template, "cell"), { recursive: true });
+		writeFileSync(join(template, "cell", "marker.rs"), "// marker\n");
+		process.env.WASMEDGE_AGENT_TEMPLATE_DIR = template;
+		return template;
+	}
+
+	it("clones the template when the dir does not exist yet", () => {
+		fakeTemplate();
+		const root = mkdtempSync(join(tmpdir(), "ws-root-"));
+		tempDirs.push(root);
+		const dir = join(root, "workspace");
+		expect(ensureWorkspaceAt(dir)).toBe(dir);
+		expect(existsSync(join(dir, "Cargo.toml"))).toBe(true);
+		expect(existsSync(join(dir, "cell", "marker.rs"))).toBe(true);
+	});
+
+	it("clones the template into a pre-created empty dir (the mkdtemp fallback)", () => {
+		fakeTemplate();
+		const dir = mkdtempSync(join(tmpdir(), "ws-precreated-"));
+		tempDirs.push(dir);
+		ensureWorkspaceAt(dir);
+		expect(existsSync(join(dir, "Cargo.toml"))).toBe(true);
+		expect(existsSync(join(dir, "cell", "marker.rs"))).toBe(true);
+	});
+
+	it("preserves entries already present in the dir", () => {
+		fakeTemplate();
+		const dir = mkdtempSync(join(tmpdir(), "ws-precreated-"));
+		tempDirs.push(dir);
+		mkdirSync(join(dir, "skills"));
+		writeFileSync(join(dir, "skills", "keep.txt"), "keep\n");
+		ensureWorkspaceAt(dir);
+		expect(existsSync(join(dir, "Cargo.toml"))).toBe(true);
+		expect(readFileSync(join(dir, "skills", "keep.txt"), "utf-8")).toBe("keep\n");
 	});
 });
 

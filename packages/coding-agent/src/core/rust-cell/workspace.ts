@@ -46,16 +46,19 @@ export function resolveTemplateDir(): string {
 	throw new Error(`wasmedge-agent-runtime template not found (searched: ${candidates.join(", ")})`);
 }
 
-/** Clone the template into `dir` if it does not exist yet. clonefile on macOS
- * carries the warm target/ cache for ~free; plain copy elsewhere. */
+/** Clone the template into `dir` unless it is already provisioned. clonefile
+ * on macOS carries the warm target/ cache for ~free; plain copy elsewhere. */
 export function ensureWorkspaceAt(dir: string): string {
 	if (existsSync(join(dir, "Cargo.toml"))) return dir;
-	mkdirSync(dirname(dir), { recursive: true });
+	mkdirSync(dir, { recursive: true });
 	const template = resolveTemplateDir();
-	const clone = spawnSync("cp", ["-Rc", template, dir], { encoding: "utf-8" });
+	// Copy the template's contents (`src/.`), not the directory itself: `dir`
+	// may already exist — the provisioner's mkdtemp fallback pre-creates it,
+	// and skills may already be synced into it — and `cp src dst` onto an
+	// existing dst would nest the template inside it.
+	const clone = spawnSync("cp", ["-Rc", `${template}/.`, dir], { encoding: "utf-8" });
 	if (clone.status !== 0) {
-		rmSync(dir, { recursive: true, force: true });
-		execFileSync("cp", ["-R", template, dir]);
+		execFileSync("cp", ["-R", `${template}/.`, dir]);
 	}
 	return dir;
 }
