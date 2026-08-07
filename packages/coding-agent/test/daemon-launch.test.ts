@@ -300,6 +300,38 @@ describe("ensureInteractiveDaemonRunning", () => {
 		}
 	});
 
+	it("translates a lock-contention startup crash into shutdown --force guidance", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pa-launch-lock-held-"));
+		const entrypoint = join(dir, "crash.mjs");
+		const socketPath = join(dir, "d.sock");
+		const originalAgentDir = process.env[ENV_AGENT_DIR];
+		process.env[ENV_AGENT_DIR] = join(dir, "agent");
+		const logPath = getDaemonLogPath(socketPath);
+		mkdirSync(dirname(logPath), { recursive: true });
+		const script = `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(logPath)}, "Error: Lock file is already being held (ELOCKED): d.sock\\n"); process.exit(1);`;
+		writeFileSync(entrypoint, script);
+		const originalEntrypoint = process.argv[1]!;
+		process.argv[1] = entrypoint;
+
+		try {
+			const error: unknown = await ensureInteractiveDaemonRunning(socketPath).then(
+				() => undefined,
+				(caught: unknown) => caught,
+			);
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).name).toBe("DaemonLockHeldError");
+			expect((error as Error).message).toContain("shutdown --force");
+			expect((error as Error).message).toContain(socketPath);
+			// The raw child log (a stack trace) must not leak into the message.
+			expect((error as Error).message).not.toContain("exited during startup");
+		} finally {
+			process.argv[1] = originalEntrypoint;
+			if (originalAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
+			else process.env[ENV_AGENT_DIR] = originalAgentDir;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("names the missing daemon log when the daemon crashes before logging", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pa-launch-startup-silent-"));
 		const entrypoint = join(dir, "crash.mjs");

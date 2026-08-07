@@ -639,7 +639,18 @@ export class DaemonSupervisor {
 			if (!agentDir) {
 				throw new Error("Daemon supervisor config is missing agentDir");
 			}
-			this.socketLease = await acquireDaemonSocketPathLease(this.socketPath);
+			try {
+				this.socketLease = await acquireDaemonSocketPathLease(this.socketPath);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+					// A single readable line instead of proper-lockfile's stack: the
+					// launcher surfaces this log tail to the user on startup failure.
+					throw new Error(
+						`Daemon socket lock is already held (ELOCKED): ${this.socketPath} — another daemon is starting or wedged in shutdown`,
+					);
+				}
+				throw error;
+			}
 			await waitForDaemonStartupFence(this.socketPath);
 			this.ownership = await acquireDaemonSupervisorOwnership({
 				socketPath: this.socketPath,

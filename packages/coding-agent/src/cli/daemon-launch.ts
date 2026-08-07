@@ -168,6 +168,25 @@ export class StaleDaemonError extends Error {
 	}
 }
 
+/** Thrown when the spawned daemon dies because another launch (possibly one
+ * wedged mid-shutdown) holds the socket lock. The message is user-facing. */
+export class DaemonLockHeldError extends Error {
+	constructor(readonly socketPath: string) {
+		super(
+			`Another Prime Agent daemon launch holds the socket lock (it may be wedged mid-shutdown).\n\n` +
+				`Socket: ${socketPath}\n\nRun:\n${formatCurrentCliCommand(["shutdown", "--force"])}\n\n` +
+				`Then retry the original command.`,
+		);
+		this.name = "DaemonLockHeldError";
+	}
+}
+
+const DAEMON_LOCK_CONTENTION_SIGNATURES = ["ELOCKED", "Lock file is already being held"];
+
+function isLockContentionLog(logTail: string): boolean {
+	return DAEMON_LOCK_CONTENTION_SIGNATURES.some((signature) => logTail.includes(signature));
+}
+
 interface DaemonProcessIdentity {
 	pid: number;
 	processStartId?: string;
@@ -398,6 +417,9 @@ async function ensureDaemonRunning(socketPath: string, spawnCwd?: string): Promi
 			return;
 		}
 		const logTail = readDaemonLogTail(socketPath, logOffset);
+		if (isLockContentionLog(logTail)) {
+			throw new DaemonLockHeldError(socketPath);
+		}
 		if (childFailure.type === "error") {
 			throw new Error(`Failed to spawn Prime Agent daemon: ${childFailure.error.message}.${logTail}`);
 		}
@@ -424,9 +446,11 @@ async function ensureDaemonRunning(socketPath: string, spawnCwd?: string): Promi
 	}
 
 	throwIfFailed();
-	throw new Error(
-		`Timed out waiting for daemon to start on ${socketPath}.${readDaemonLogTail(socketPath, logOffset)}`,
-	);
+	const timeoutTail = readDaemonLogTail(socketPath, logOffset);
+	if (isLockContentionLog(timeoutTail)) {
+		throw new DaemonLockHeldError(socketPath);
+	}
+	throw new Error(`Timed out waiting for daemon to start on ${socketPath}.${timeoutTail}`);
 }
 
 function currentDaemonLogSize(socketPath: string): number {
