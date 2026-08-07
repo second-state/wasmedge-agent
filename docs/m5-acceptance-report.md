@@ -37,7 +37,7 @@
 1. **Driver 基建事故（與 fork 品質無關，零 token 損耗）**：serial one-shot 共享 per-uid daemon socket，前一 run 的 supervisor 拆除與下一 run 的 create 重疊時會留下殭屍 supervisor 毒化後續 runs；救火過程中 `pkill` 打斷 cache 寫入又毒化共享 tsx compile cache，一度全機 create 必死。修法：driver 增 run 間 settle 等待（daemon.sock 清空才起下一 run；卡 15 秒即殺持有者）；毒 cache 以清除復原。全部受害格均以修復後 driver 補跑，失敗 runs 之模型均未啟動（log 佐證），不入成績。
 2. **Fixture 環境滲漏（harness 缺陷，已修）**：M2 併入上游後 repo 根 `package.json` 帶 `"type": "module"`，results 目錄棲身 repo 內，使無 package.json 錨定的 fixture CJS 腳本被 node 當 ESM 而炸（M1 期根 package.json 尚不存在故未觸發）。受影響任務 03/05/10/12 已補 `{"type":"commonjs"}` 錨定；兩個因此誤判的格以錨定後環境補跑（皆過）。錨定前通過的 runs 中，模型多以自建 package.json 繞過——屬額外工作，只多算 F 的 token、不虛增 pass。
 3. 與 M1 同：gateway 串流不回報 input tokens（對比用 output）；cell 計數以 transcript toolName=rust 為準。
-4. M1 原始 A/B runs 仍在 `poc/bench/results/runs/`，本報告表格由 `analyze.ts` 對全集一次計算（provider 名 gateway=當時、gateway=現名，同一端點）。
+4. M1 原始 A/B runs 仍在 `poc/bench/results/runs/`（本機、不入 git），本報告表格由 `analyze.ts` 對全集一次計算（M1 期 provider 別名與現名 `gateway` 為同一端點）。
 
 ## 5. 結論
 
