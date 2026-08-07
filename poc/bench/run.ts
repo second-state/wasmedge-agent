@@ -2,17 +2,19 @@
  * Bench driver (DESIGN.md §6.2–6.3): runs (task × model × group × rep)
  * headlessly against prime-agent and records everything needed for analyze.ts.
  *
- *   node poc/bench/run.ts --tasks 01-log-stats,03-fix-bug --groups B \
- *        --models gateway/anthropic/claude-sonnet-4-6 --reps 1
+ *   node poc/bench/run.ts --tasks 01-log-stats,03-fix-bug --groups F --reps 1
  *
- * Groups: A = stock prime-agent (ipython baseline), B = PoC rust extension.
+ * Groups: A = stock upstream prime-agent (ipython baseline), B = upstream +
+ * PoC rust extension (M1), F = this fork's built-in rust runtime (M5
+ * acceptance; launched via the repo's own prime-agent.sh, no extension).
  * Each run gets an isolated PRIME_AGENT_CODING_AGENT_DIR (models.json copied
  * in) so sessions land in the run directory; the baseline kernel venv is
  * shared via PRIME_AGENT_KERNEL_VENV to avoid re-bootstrapping per run.
  */
 
-import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execSync, spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +24,7 @@ const REPO = resolve(HERE, "..", "..");
 const TASKS_DIR = join(HERE, "tasks");
 const RESULTS_DIR = join(HERE, "results");
 const PRIME_AGENT_SH = process.env.BENCH_PRIME_AGENT ?? "prime-agent";
+const FORK_PRIME_AGENT = join(REPO, "prime-agent.sh");
 const EXTENSION_DIR = join(REPO, "poc", "extension");
 const SHARED_KERNEL_VENV = join(homedir(), ".wasmedge-agent", "bench", "kernel-venv");
 const MODELS_JSON = join(homedir(), ".prime", "agent", "models.json");
@@ -37,7 +40,7 @@ interface RunMeta {
 	runId: string;
 	task: string;
 	category: string;
-	group: "A" | "B";
+	group: "A" | "B" | "F";
 	model: string;
 	variant: string;
 	rep: number;
@@ -55,7 +58,7 @@ function parseArgs(argv: string[]) {
 	const opts = {
 		tasks: [] as string[],
 		models: ["gateway/anthropic/claude-sonnet-4-6"],
-		groups: ["A", "B"] as ("A" | "B")[],
+		groups: ["A", "B"] as ("A" | "B" | "F")[],
 		reps: 1,
 		variant: "example" as "example" | "noexample" | "split",
 	};
@@ -64,7 +67,7 @@ function parseArgs(argv: string[]) {
 		const next = () => argv[++i];
 		if (arg === "--tasks") opts.tasks = next().split(",");
 		else if (arg === "--models") opts.models = next().split(",");
-		else if (arg === "--groups") opts.groups = next().split(",") as ("A" | "B")[];
+		else if (arg === "--groups") opts.groups = next().split(",") as ("A" | "B" | "F")[];
 		else if (arg === "--reps") opts.reps = Number(next());
 		else if (arg === "--variant") opts.variant = next() as typeof opts.variant;
 		else throw new Error(`unknown arg: ${arg}`);
@@ -141,7 +144,7 @@ function findSessionFile(agentDir: string): string | null {
 
 async function runOne(
 	task: TaskSpec,
-	group: "A" | "B",
+	group: "A" | "B" | "F",
 	model: string,
 	variant: string,
 	rep: number,
@@ -171,6 +174,9 @@ async function runOne(
 
 	const baseArgs = ["--model", model];
 	if (group === "B") baseArgs.push("--no-builtin-tools", "-e", EXTENSION_DIR);
+	// F: the fork's own CLI with its built-in rust runtime — no extension,
+	// prompt variant is whatever the fork ships (D17: example is the default).
+	const bin = group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH;
 
 	const timeoutMs = task.timeoutMs ?? 600_000;
 	const startedAt = new Date();
@@ -186,7 +192,7 @@ async function runOne(
 			args.push("--resume", sessionFile);
 		}
 		args.push("--print", task.turns[turn]);
-		const result = await runProcess(PRIME_AGENT_SH, args, {
+		const result = await runProcess(bin, args, {
 			cwd: projectDir,
 			env,
 			timeoutMs,
@@ -241,6 +247,31 @@ async function runOne(
 	return meta;
 }
 
+
+// Serial runs share the per-uid daemon socket; a run starting while the
+// previous one-shot's supervisor is still tearing down attaches to a dying
+// daemon (create timeouts / socket-closed crashes). Wait for the socket to
+// clear, and break a wedged leftover by killing its owners.
+const DAEMON_SOCK_DIR = join(tmpdir(), `prime-agent-${process.getuid?.() ?? "0"}`);
+async function settleDaemonSocket(): Promise<void> {
+	const sock = join(DAEMON_SOCK_DIR, "daemon.sock");
+	const deadline = Date.now() + 15_000;
+	while (existsSync(sock)) {
+		if (Date.now() > deadline) {
+			try {
+				execSync(`lsof -t ${JSON.stringify(sock)} | xargs kill -9`, { stdio: "ignore" });
+			} catch {
+				// no live owner: just a stale file
+			}
+			try {
+				execSync(`rm -rf ${JSON.stringify(DAEMON_SOCK_DIR)}`, { stdio: "ignore" });
+			} catch {}
+			return;
+		}
+		await new Promise((res) => setTimeout(res, 500));
+	}
+}
+
 const opts = parseArgs(process.argv.slice(2));
 console.log(
 	`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
@@ -256,8 +287,10 @@ for (const taskId of opts.tasks) {
 			for (let rep = 1; rep <= opts.reps; rep++) {
 				// D17 split: alternate prompt variants across reps for group B.
 				const variant =
-					group === "A"
-						? "n/a"
+					group === "A" || group === "F"
+						? group === "F"
+							? "builtin"
+							: "n/a"
 						: opts.variant === "split"
 							? rep % 2 === 1
 								? "example"
@@ -266,6 +299,7 @@ for (const taskId of opts.tasks) {
 				const label = `${taskId} ${group} ${shortModel(model)} ${variant} r${rep}`;
 				process.stdout.write(`→ ${label} ... `);
 				try {
+					await settleDaemonSocket();
 					const meta = await runOne(task, group, model, variant, rep);
 					done += 1;
 					const status = meta.timedOut
