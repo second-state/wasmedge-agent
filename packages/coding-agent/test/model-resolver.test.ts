@@ -456,6 +456,35 @@ describe("default model selection", () => {
 		expect(result.model?.id).toBe("openai/ghost-model");
 	});
 
+	test("findInitialModel prefers the saved settings default over catalog preference", async () => {
+		const gatewayModel: Model<"anthropic-messages"> = {
+			id: "anthropic/claude-sonnet-4-6",
+			name: "Claude Sonnet 4.6 (gateway)",
+			api: "anthropic-messages",
+			provider: "gateway",
+			baseUrl: "https://gateway.example",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		};
+		const registry = {
+			refreshAvailableModels: async () => [mockModels[0], gatewayModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "gateway",
+			defaultModelId: "anthropic/claude-sonnet-4-6",
+			modelRegistry: registry,
+		});
+
+		expect(result.model).toBe(gatewayModel);
+		expect(result.fallbackMessage).toBeUndefined();
+	});
+
 	test("findInitialModel uses medium as the built-in default thinking level", async () => {
 		const reasoningModel = mockModels[0];
 		const registry = {
