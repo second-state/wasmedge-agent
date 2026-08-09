@@ -6,6 +6,7 @@ wasmedge-agent-runtime/template/vendor/
 wasmedge-agent-runtime/template/vendor.tmp/
 *.log
 !poc/bench/tasks/*/fixture/*.log
+!examples/showcase/project/logs/*.log
 .DS_Store
 poc/bench/results/
 *.tsbuildinfo
