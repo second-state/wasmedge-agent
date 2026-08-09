@@ -25,6 +25,15 @@ design, decisions D1–D25), `docs/m1-measurement-report.md` (Phase 0 GO
 measurement: 146 runs, treatment passes 73/73 within the token gate),
 `poc/` (the Phase 0 extension, guest workspace template, and benchmark harness).
 
+## Try it
+
+A guided 30–45 minute session — install the toolchain, open the agent on a
+small ops-style fixture project, and run five missions that each show one
+thing the runtime swap changes (sandboxed cells, explicit persistent state,
+compile-errors-as-feedback, recursive subagents, a growable agent_lib):
+
+**[examples/showcase/README.md](examples/showcase/README.md)**
+
 ## Attribution
 
 This repository carries the full history of and is built on
