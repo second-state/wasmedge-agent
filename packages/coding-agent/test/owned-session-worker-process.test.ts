@@ -76,7 +76,8 @@ async function waitForWorkerPid(path: string): Promise<number> {
 }
 
 async function waitForReplacementWorkerPid(path: string, previousPid: number): Promise<number> {
-	const deadline = Date.now() + 10_000;
+	const started = Date.now();
+	const deadline = started + 10_000;
 	while (Date.now() < deadline) {
 		if (existsSync(path)) {
 			const pid = Number(readFileSync(path, "utf8").trim());
@@ -87,7 +88,25 @@ async function waitForReplacementWorkerPid(path: string, previousPid: number): P
 		}
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
 	}
-	throw new Error("Owned replacement worker did not publish its pid");
+	// Two very different failures end up here, and the bare message told them
+	// apart for nobody: the first worker never took the ack (so no crash, so no
+	// replacement is ever coming and more time would not help), or it crashed
+	// and the respawn is just slow. Report enough to tell which.
+	throw new Error(
+		`Owned replacement worker did not publish its pid after ${Date.now() - started}ms ` +
+			`(previous pid ${previousPid}${isAlive(previousPid) ? ", still alive" : ", gone"}; ` +
+			`crash marker ${existsSync(`${path}.crashed`) ? "written" : "absent"}; ` +
+			`pid file ${existsSync(path) ? JSON.stringify(readFileSync(path, "utf8").trim()) : "missing"})`,
+	);
+}
+
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function waitForExit(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
