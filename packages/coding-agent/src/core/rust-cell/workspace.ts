@@ -15,16 +15,51 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LibFile } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/** Where the template can sit relative to this module, in search order. Split
+ * out as a pure function of the module's own directory so each layout can be
+ * asserted without staging a dist tree: `--dist` execs dist/bundle/cli.js,
+ * where the bundler has flattened every module one level shallower than the
+ * unbundled dist layout, and getting that wrong kills the first `rust` cell of
+ * every --dist session with a "template not found" the tests never see. */
+export function templateCandidates(here: string): string[] {
+	const candidates = [
+		// bundle layout: dist/bundle -> dist/wasmedge-agent-runtime (copy-assets)
+		resolve(here, "..", "wasmedge-agent-runtime", "template"),
+		// dist layout: dist/core/rust-cell -> dist/wasmedge-agent-runtime (copy-assets)
+		resolve(here, "..", "..", "wasmedge-agent-runtime", "template"),
+	];
+	// Source layout only. Both dist entries stay inside the package, but the
+	// repo-root climb measures from this module's place in src/, so it means
+	// nothing once `here` is a dist tree — evaluated from dist/bundle it leaves
+	// the package and, on a checkout at ss/wasmedge-agent, reaches ss/, where a
+	// sibling ss/wasmedge-agent-runtime would be adopted as the guest workspace
+	// for every rust cell. Gated on the suffix rather than trimmed to a smaller
+	// climb: the depth is only knowable when the suffix is there.
+	if (here.endsWith(sep + SOURCE_SUFFIX)) {
+		// src/core/rust-cell -> packages/coding-agent -> repo root
+		const packageRoot = resolve(here, "..", "..", "..");
+		candidates.push(resolve(packageRoot, "..", "..", "wasmedge-agent-runtime", "template"));
+	}
+	return candidates;
+}
+
+const SOURCE_SUFFIX = join("src", "core", "rust-cell");
+
 /** Locate the guest workspace template: env override first, then the packaged
  * dist copy (copy-assets), then the repo-root source (running from source).
- * Mirrors the runtime-source resolution the kernel bootstrap used. */
-export function resolveTemplateDir(): string {
+ * Mirrors the runtime-source resolution the kernel bootstrap used.
+ *
+ * `here` defaults to this module's directory and exists so the search itself is
+ * testable against a staged layout: asserting templateCandidates() alone leaves
+ * the binding of the two untested, and that binding is what kills the first
+ * rust cell of a session when it breaks. */
+export function resolveTemplateDir(here: string = HERE): string {
 	const override = process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
 	if (override) {
 		// An explicit override must point at a workspace; falling back silently
@@ -34,12 +69,7 @@ export function resolveTemplateDir(): string {
 		}
 		return override;
 	}
-	const candidates = [
-		// dist layout: dist/core/rust-cell -> dist/wasmedge-agent-runtime (copy-assets)
-		resolve(HERE, "..", "..", "wasmedge-agent-runtime", "template"),
-		// source layout: packages/coding-agent/src/core/rust-cell -> repo root
-		resolve(HERE, "..", "..", "..", "..", "..", "wasmedge-agent-runtime", "template"),
-	];
+	const candidates = templateCandidates(here);
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "Cargo.toml"))) return candidate;
 	}
