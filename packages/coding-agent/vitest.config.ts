@@ -6,12 +6,23 @@ const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url))
 const aiSrcMcp = fileURLToPath(new URL("../ai/src/mcp.ts", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("../agent/src/index.ts", import.meta.url));
 const tuiSrcIndex = fileURLToPath(new URL("../tui/src/index.ts", import.meta.url));
+// Resolved against this file, not against `root`: Vitest resolves a relative
+// setupFiles entry from the cwd, so a bare "../ai/test/..." points outside the
+// repository on any run started somewhere other than this package — and a
+// missing setup file fails every test file in the project, not just one.
+const providerEnvSetup = fileURLToPath(new URL("../ai/test/setup-provider-env.ts", import.meta.url));
+const providerEnvGlobalSetup = fileURLToPath(new URL("../ai/test/global-setup-provider-env.ts", import.meta.url));
 
 export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
 		testTimeout: 30000,
+		// Scrub inherited provider credentials before any test module loads, so
+		// results do not depend on which API keys the developer has exported.
+		setupFiles: [providerEnvSetup],
+		// Reports the scrub once per run; the scrub itself stays in setupFiles.
+		globalSetup: [providerEnvGlobalSetup],
 		tags: [
 			{
 				name: "process-stress",

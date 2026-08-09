@@ -12,8 +12,12 @@
  *
  * You can run this test suite with:
  * ```bash
- * $ AWS_REGION=us-west-2 BEDROCK_EXTENSIVE_MODEL_TEST=1 AWS_PROFILE=... npm test -- ./test/bedrock-models.test.ts
+ * $ PI_TEST_INHERIT_ENV=1 AWS_REGION=us-west-2 BEDROCK_EXTENSIVE_MODEL_TEST=1 AWS_PROFILE=... npm test -- ./test/bedrock-models.test.ts
  * ```
+ * `PI_TEST_INHERIT_ENV=1` is required: test/setup-provider-env.ts scrubs the
+ * AWS credential variables before this module loads, so without it
+ * `hasBedrockCredentials()` is false and every model case skips silently —
+ * a green run that has checked no model identifier at all.
  */
 
 import { describe, expect, it } from "vitest";
