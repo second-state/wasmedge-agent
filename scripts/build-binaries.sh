@@ -126,6 +126,7 @@ for platform in "${PLATFORMS[@]}"; do
     mkdir -p binaries/$platform/assets
     cp dist/modes/interactive/assets/* binaries/$platform/assets/
     cp -r dist/core/export-html binaries/$platform/
+    cp -r dist/wasmedge-agent-runtime "binaries/$platform/"
     cp -r docs binaries/$platform/
     cp -r examples binaries/$platform/
     cp -r skills binaries/$platform/
