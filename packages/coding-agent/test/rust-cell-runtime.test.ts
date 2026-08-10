@@ -27,6 +27,24 @@ describe("templateCandidates", () => {
 		);
 	});
 
+	it.each([resolve("/$bunfs", "root", "cli"), "B:\\~BUN\\root\\cli", "B:\\%7EBUN\\root\\cli"])(
+		"looks beside the executable first from Bun's virtual filesystem at %s",
+		(here) => {
+			const executable = resolve("/release", "prime-agent");
+			expect(templateCandidates(here, executable)[0]).toBe(
+				resolve("/release", "wasmedge-agent-runtime", "template"),
+			);
+		},
+	);
+
+	it("does not search beside an ordinary Node executable", () => {
+		const here = resolve("/repo", "packages", "coding-agent", "dist", "bundle");
+		const executable = resolve("/runtime", "node");
+		expect(templateCandidates(here, executable)).not.toContain(
+			resolve("/runtime", "wasmedge-agent-runtime", "template"),
+		);
+	});
+
 	it("looks in the unbundled dist layout", () => {
 		expect(templateCandidates(resolve("/pkg", "dist", "core", "rust-cell"))[1]).toBe(
 			resolve("/pkg", "dist", "wasmedge-agent-runtime", "template"),
@@ -99,6 +117,14 @@ describe("resolveTemplateDir", () => {
 		const bundle = stageBundleLayout(dir);
 		const template = writeTemplate(join(bundle, "..", "wasmedge-agent-runtime", "template"));
 		expect(resolveTemplateDir(bundle)).toBe(resolve(template));
+	});
+
+	it("resolves a compiled Bun executable's sidecar through the real search", () => {
+		const dir = mkdtempSync(join(tmpdir(), "template-bun-binary-"));
+		tempDirs.push(dir);
+		const executable = join(dir, "prime-agent");
+		const template = writeTemplate(join(dir, "wasmedge-agent-runtime", "template"));
+		expect(resolveTemplateDir(resolve("/$bunfs", "root", "cli"), executable)).toBe(resolve(template));
 	});
 
 	// The regression behind the fixed five-level climb: with no template inside

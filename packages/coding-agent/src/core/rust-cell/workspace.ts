@@ -27,13 +27,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * where the bundler has flattened every module one level shallower than the
  * unbundled dist layout, and getting that wrong kills the first `rust` cell of
  * every --dist session with a "template not found" the tests never see. */
-export function templateCandidates(here: string): string[] {
-	const candidates = [
+export function templateCandidates(here: string, executablePath: string = process.execPath): string[] {
+	const candidates: string[] = [];
+	if (isBunVirtualPath(here)) {
+		// Compiled Bun modules live under /$bunfs, which cannot reach sidecars.
+		// Resolve those from the real executable instead.
+		candidates.push(resolve(dirname(executablePath), "wasmedge-agent-runtime", "template"));
+	}
+	candidates.push(
 		// bundle layout: dist/bundle -> dist/wasmedge-agent-runtime (copy-assets)
 		resolve(here, "..", "wasmedge-agent-runtime", "template"),
 		// dist layout: dist/core/rust-cell -> dist/wasmedge-agent-runtime (copy-assets)
 		resolve(here, "..", "..", "wasmedge-agent-runtime", "template"),
-	];
+	);
 	// Source layout only. Both dist entries stay inside the package, but the
 	// repo-root climb measures from this module's place in src/, so it means
 	// nothing once `here` is a dist tree — evaluated from dist/bundle it leaves
@@ -49,7 +55,17 @@ export function templateCandidates(here: string): string[] {
 	return candidates;
 }
 
+const BUN_VIRTUAL_ROOT = resolve(sep, "$bunfs");
 const SOURCE_SUFFIX = join("src", "core", "rust-cell");
+
+function isBunVirtualPath(path: string): boolean {
+	return (
+		path === BUN_VIRTUAL_ROOT ||
+		path.startsWith(BUN_VIRTUAL_ROOT + sep) ||
+		path.includes("~BUN") ||
+		path.includes("%7EBUN")
+	);
+}
 
 /** Locate the guest workspace template: env override first, then the packaged
  * dist copy (copy-assets), then the repo-root source (running from source).
@@ -59,7 +75,7 @@ const SOURCE_SUFFIX = join("src", "core", "rust-cell");
  * testable against a staged layout: asserting templateCandidates() alone leaves
  * the binding of the two untested, and that binding is what kills the first
  * rust cell of a session when it breaks. */
-export function resolveTemplateDir(here: string = HERE): string {
+export function resolveTemplateDir(here: string = HERE, executablePath: string = process.execPath): string {
 	const override = process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
 	if (override) {
 		// An explicit override must point at a workspace; falling back silently
@@ -69,7 +85,7 @@ export function resolveTemplateDir(here: string = HERE): string {
 		}
 		return override;
 	}
-	const candidates = templateCandidates(here);
+	const candidates = templateCandidates(here, executablePath);
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "Cargo.toml"))) return candidate;
 	}
