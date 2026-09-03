@@ -4,6 +4,18 @@
 
 - Renamed Prime Agent to WasmEdge Agent. `wasmedge-agent` is the canonical
   command; `prime-agent` keeps working for one release and warns on stderr.
+- Scope of that alias: the release package is named `wasmedge-agent` and
+  installs `prime-agent` as a second command. npm links global commands by
+  name and not by owning package, so on a machine that also has upstream's
+  `prime-agent` installed globally, installing this package overwrites that
+  command with ours, with no warning; uninstalling either package then leaves
+  the other's `prime-agent` command dangling. The alias is for users coming
+  from this fork's own pre-rename builds. If you keep upstream installed
+  alongside, use `wasmedge-agent` and expect `prime-agent` to belong to
+  whichever package was installed last. The alias is installed at an entry
+  point of its own, so it warns on Windows too: npm's `.cmd` and PowerShell
+  shims launch node with the target path, and an alias sharing the canonical
+  entry could not tell it had been invoked as the alias.
 - Configuration moved from `~/.prime/agent/` to `~/.wasmedge-agent/`,
   migrated once on startup, and by `npm install -g` before it creates
   `~/.wasmedge-agent/bin/`. When both directories exist nothing is moved, the

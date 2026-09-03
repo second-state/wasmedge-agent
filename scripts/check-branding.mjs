@@ -226,6 +226,12 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "packages/coding-agent/test/legacy-alias-invocation.test.ts",
+		allow: [/"prime-agent"/, /'prime-agent' is deprecated/, /PRIME_AGENT_CODING_AGENT_DIR/, /PRIME_AGENT_SESSION_DIR/],
+		reason:
+			"the covering test asserts the generated bin map still installs the legacy command for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable on a real install at all, and pins the alias's own entry-point path by value -- comparing the constant with itself would let a rename move the file out from under the bin entry. Only that quoted key-and-target pair and that quoted path, both of which the packer is allowed to emit, are exempt here",
+	},
+	{
+		glob: "packages/coding-agent/test/legacy-alias-invocation.test.ts",
 		allow: [
 			/"prime-agent"/,
 			/'prime-agent' is deprecated/,
@@ -384,7 +390,7 @@ const ALLOWLIST = [
 			"the packed manifest installs the legacy command as a second bin for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable at all -- without this entry the CHANGELOG's promise that prime-agent keeps working is unbacked. That command needs an entry point of its own, because Windows npm shims launch node with the target path and an alias sharing the canonical entry cannot tell it was invoked as the alias. Only that one bin-map entry, in the form naming the shared constant, and that constant's own quoted path are exempt, so the artifact names and the default package name in the same file still fail if they regress",
 		allow: [/"prime-agent": "dist\/bundle\/cli\.js"/],
 		reason:
-			"the packed manifest installs the legacy command as a second bin for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable at all -- without this entry the CHANGELOG's promise that prime-agent keeps working is unbacked. Only the bin map's quoted key-and-target pair is exempt, so the artifact names and the default package name in the same file still fail if they regress",
+			"the packed manifest installs the legacy command as a second bin for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable at all -- without this entry the CHANGELOG's promise that prime-agent keeps working is unbacked. That command needs an entry point of its own, because Windows npm shims launch node with the target path and an alias sharing the canonical entry cannot tell it was invoked as the alias. Only that one bin-map entry, in the form naming the shared constant, and that constant's own quoted path are exempt, so the artifact names and the default package name in the same file still fail if they regress",
 	},
 	{
 		glob: "poc/**",

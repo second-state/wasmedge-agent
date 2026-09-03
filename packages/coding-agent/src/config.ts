@@ -576,12 +576,32 @@ export function readLegacyEnv(name: string): string | undefined {
 	return legacy;
 }
 
+/** Set by the entry point the release installs at the legacy command name,
+ *  and consumed by warnIfLegacyAlias below.
+ *
+ *  argv[1] is not enough on its own. npm links a POSIX command by symlinking
+ *  the name at its target, so the basename there really is the name the user
+ *  typed -- but on Windows npm generates `.cmd` and PowerShell shims that
+ *  launch node with the *target* path, and the invoked name is nowhere in the
+ *  child's argv. Without this the alias runs on Windows without ever warning,
+ *  which quietly removes the one-release deprecation notice on that platform.
+ *  scripts/pack-wasmedge-agent-release.mjs writes the entry point that sets
+ *  it; its covering test asserts the two spellings match. */
+export const LEGACY_ALIAS_ENV = "WASMEDGE_AGENT_LEGACY_ALIAS";
+
 /** Deprecation notice for the legacy command name, or undefined.
  *  The caller supplies the writer: stdout is a protocol surface for
  *  --mode acp, rpc, and --json, whose contract test pins a single JSON
  *  document, so this must never reach it. */
 export function warnIfLegacyAlias(invokedAs: string, write: (message: string) => void): boolean {
-	if (basename(invokedAs) !== "prime-agent") return false;
+	// Read and delete together, before anything can decide not to warn: every
+	// child this process spawns inherits process.env -- daemon workers, owned
+	// session workers, an update relaunch -- and each of them runs this same
+	// code, so a marker left in place repeats the notice once per child for a
+	// command the user typed once.
+	const invokedThroughAliasShim = process.env[LEGACY_ALIAS_ENV] !== undefined;
+	delete process.env[LEGACY_ALIAS_ENV];
+	if (!invokedThroughAliasShim && basename(invokedAs) !== "prime-agent") return false;
 	write(
 		"warning: 'prime-agent' is deprecated; use 'wasmedge-agent'. " +
 			"The alias stops working after the next release.\n",

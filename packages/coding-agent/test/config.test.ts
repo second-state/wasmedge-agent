@@ -15,6 +15,7 @@ import {
 	getSelfUpdateUnavailableInstruction,
 	getSessionsDir,
 	getUpdateInstruction,
+	LEGACY_ALIAS_ENV,
 	LEGACY_NAME_WARNINGS,
 	readLegacyEnv,
 	warnIfLegacyAlias,
@@ -540,12 +541,46 @@ describe("legacy env fallback", () => {
 });
 
 describe("legacy command alias", () => {
+	afterEach(() => {
+		delete process.env[LEGACY_ALIAS_ENV];
+	});
+
 	it("warns when invoked through the legacy name", () => {
 		const written: string[] = [];
 		expect(warnIfLegacyAlias("/usr/local/bin/prime-agent", (m) => written.push(m))).toBe(true);
 		expect(written).toHaveLength(1);
 		expect(written[0]).toContain("wasmedge-agent");
 		expect(written[0].endsWith("\n")).toBe(true);
+	});
+
+	it("warns when the packed alias entry point marks the invocation", () => {
+		// What a Windows install looks like: npm's .cmd and PowerShell shims
+		// launch node with the target path, so argv[1] names the canonical
+		// entry and the marker is the only evidence of the invoked name.
+		const written: string[] = [];
+		process.env[LEGACY_ALIAS_ENV] = "1";
+
+		expect(warnIfLegacyAlias("C:\\node_modules\\wasmedge-agent\\dist\\bundle\\cli.js", (m) => written.push(m))).toBe(
+			true,
+		);
+
+		expect(written).toHaveLength(1);
+		expect(written[0]).toContain("wasmedge-agent");
+	});
+
+	it("consumes the marker so no child can repeat the notice", () => {
+		// Every child inherits process.env and runs this same code -- daemon
+		// workers, owned session workers, an update relaunch. A marker left
+		// behind turns one invocation into one notice per child.
+		const written: string[] = [];
+		process.env[LEGACY_ALIAS_ENV] = "1";
+
+		expect(warnIfLegacyAlias("/usr/local/bin/wasmedge-agent", (m) => written.push(m))).toBe(true);
+		expect(process.env[LEGACY_ALIAS_ENV]).toBeUndefined();
+
+		// The second call stands in for the child that would have inherited it.
+		expect(warnIfLegacyAlias("/usr/local/bin/wasmedge-agent", (m) => written.push(m))).toBe(false);
+		expect(written).toHaveLength(1);
 	});
 
 	it("says nothing under the canonical name", () => {
