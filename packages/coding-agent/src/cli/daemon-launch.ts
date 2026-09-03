@@ -8,7 +8,14 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { appendRotatingLog, expandTildePath, getClientErrorLogPath, getDaemonLogPath, VERSION } from "../config.js";
+import {
+	appendRotatingLog,
+	expandTildePath,
+	getClientErrorLogPath,
+	getDaemonLogPath,
+	LEGACY_ALIAS_ENV,
+	VERSION,
+} from "../config.js";
 import { ORPHAN_PROCESS_JOURNAL_ENV } from "../core/orphan-process-journal.js";
 import { getProcessStartId, SESSION_LEASE_OWNER_ID_ENV, SESSION_LEASES_ENABLED_ENV } from "../core/session-lease.js";
 import { DaemonClient, type DaemonHello } from "../modes/daemon/daemon-client.js";
@@ -385,6 +392,12 @@ async function ensureDaemonRunning(socketPath: string, spawnCwd?: string): Promi
 	delete env[ORPHAN_PROCESS_JOURNAL_ENV];
 	delete env[SESSION_LEASES_ENABLED_ENV];
 	delete env[SESSION_LEASE_OWNER_ID_ENV];
+	// A daemon is never "invoked as" anything, so it must not carry an
+	// invoked-as marker. warnIfLegacyAlias() deletes this from its own
+	// environment as it reads it, but this launch can happen first --
+	// cli-main.ts starts a cold daemon before main.js is even imported -- and
+	// the daemon would then repeat the alias deprecation notice into its log.
+	delete env[LEGACY_ALIAS_ENV];
 
 	const logOffset = currentDaemonLogSize(socketPath);
 	const child = spawn(
