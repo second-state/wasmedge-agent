@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- TEMPORARY 2026-09-03: this mark is still upstream's Prime Agent butterfly,
+     renamed but not redrawn. WasmEdge Agent has no replacement artwork yet;
+     this file must be redrawn before release (spec section 10). -->
 <svg
    width="178"
    height="178"

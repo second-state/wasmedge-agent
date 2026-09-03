@@ -641,6 +641,12 @@ const ALLOWLIST = [
 		allow: [/prime-agent/, /PRIME_AGENT_/, /~\/\.prime\/agent/],
 		reason: "poc/ is the Phase 0 proof of concept that runs against stock upstream prime-agent -- a different program, with its own command name, its own PRIME_AGENT_* env vars and its own config dir. Naming it is naming upstream, not naming us (rule R1). Only those three upstream literals are exempt: 'Prime Agent' as a display name still fails here, as do this fork's own group-F paths",
 	},
+	{
+		glob: "assets/brand/wasmedge-butterfly*.svg",
+		allow: [/upstream's Prime Agent butterfly/],
+		reason:
+			"TEMPORARY 2026-09-03: the brand marks are renamed but not redrawn -- the artwork is still upstream's, and each SVG carries a dated comment saying so. Only that disclosure line is exempt (rule R2). Deleting the comment makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is",
+	},
 	{ glob: "**/CHANGELOG.md", allow: [ANY_LINE], reason: "released sections; AGENTS.md forbids rewriting them" },
 	{ glob: "DESIGN.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
 	{ glob: "REPORT.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
