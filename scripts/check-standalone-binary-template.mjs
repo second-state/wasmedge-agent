@@ -78,7 +78,7 @@ function smokeCompiledBinary(bun) {
 		cpSync(preparedTemplate, template, { recursive: true });
 		const doctor = spawnSync(executable, ["doctor", "--json"], {
 			encoding: "utf8",
-			env: { ...process.env, HOME: homeDir, PRIME_AGENT_HOME: join(homeDir, ".prime") },
+			env: { ...process.env, HOME: homeDir },
 			timeout: 60000,
 		});
 		if (doctor.status !== 0) {

@@ -1,6 +1,6 @@
 # Rust Crate Skills
 
-A Rust skill is a regular markdown skill that also ships a Rust crate. Prime
+A Rust skill is a regular markdown skill that also ships a Rust crate. WasmEdge
 Agent mounts the crate into the session workspace as a member and re-exports
 it as `agent_lib::skills::<crate_name>`, so rust cells call it directly
 instead of shelling out. The crate is mounted in place (no copy): editing the
