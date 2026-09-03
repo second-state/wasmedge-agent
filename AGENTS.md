@@ -17,12 +17,16 @@ original rules remain in git history and apply when contributing upstream.
   env prefixes, and the config dir at upstream identities until M5. That rename
   has landed, so the canonical surface is now `wasmedge-agent`,
   `WASMEDGE_AGENT_*`, and `~/.wasmedge-agent`. The old spellings survive only as
-  the one-release fallbacks the CHANGELOG documents; `npm run check:branding`
-  fails the build on any other branded literal. Do not reintroduce one, and do
-  not rename ad hoc.
-- Upstream sync (SYNC strategy, DESIGN §7.3): `upstream` remote points at
-  PrimeIntellect-ai/prime-agent. Our exclusive dirs: `core/rust-cell/`,
-  `poc/`, `docs/`, `DESIGN.md`, `REPORT.md`, root `README.md`, this file.
+  the one-release fallbacks the CHANGELOG documents. `npm run check:branding`
+  fails the build on any literal in its FORBIDDEN list that is not allowlisted
+  with a reason; that list is what it knows about and nothing more, so a
+  branded spelling it has never seen has to be added to it. Do not reintroduce
+  one, and do not rename ad hoc.
+- Upstream sync (SYNC strategy, DESIGN §7.3): the sync source is
+  PrimeIntellect-ai/prime-agent. Check `git remote -v` before fetching -- the
+  `upstream` remote name is not reserved for it. Our exclusive dirs:
+  `core/rust-cell/`, `poc/`, `docs/`, `DESIGN.md`, `REPORT.md`, root
+  `README.md`, this file.
 - The Python/IPython runtime is being removed (WP1); do not add new references
   to `core/kernel/`, `tools/ipython*`, or `prime-agent-runtime/`.
 

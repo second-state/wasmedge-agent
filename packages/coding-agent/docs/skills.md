@@ -161,7 +161,7 @@ For `web-search`, WasmEdge Agent exposes `agent_lib::skills::web_search` in cell
 ```rust
 use agent_lib::skills::web_search;
 
-let summary = web_search::run("prime agent skills")?;
+let summary = web_search::run("WasmEdge Agent skills")?;
 ```
 
 At session start (and on `/reload`) the skill directory is linked into the workspace as `skills/<crate>` and added to the cargo workspace, so edits to the skill source take effect on the next cell compile — there is no install step. When the mounted set or a manifest changes, each skill gets a probe build; a skill that fails to compile is unmounted with a diagnostic while every other skill and cells keep working.
