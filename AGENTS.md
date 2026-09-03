@@ -13,8 +13,12 @@ original rules remain in git history and apply when contributing upstream.
 
 - Design authority: `DESIGN.md` (decisions D1–D25) and `REPORT.md`. Consult the
   decision log before re-deciding anything.
-- Incubation naming (D25): binary, package names, `piConfig.name`, env prefixes
-  (`PRIME_AGENT_*`), and the config dir keep upstream identities until M5. Do
+- Naming (D25, executed): D25 held the binary, package names, `piConfig.name`,
+  env prefixes, and the config dir at upstream identities until M5. That rename
+  has landed, so the canonical surface is now `wasmedge-agent`,
+  `WASMEDGE_AGENT_*`, and `~/.wasmedge-agent`. The old spellings survive only as
+  the one-release fallbacks the CHANGELOG documents; `npm run check:branding`
+  fails the build on any other branded literal. Do not reintroduce one, and do
   not rename ad hoc.
 - Upstream sync (SYNC strategy, DESIGN §7.3): `upstream` remote points at
   PrimeIntellect-ai/prime-agent. Our exclusive dirs: `core/rust-cell/`,

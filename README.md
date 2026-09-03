@@ -2,10 +2,12 @@
 
 **A runtime-swap fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent): the model writes Rust instead of Python, and every cell runs sandboxed in [WasmEdge](https://github.com/WasmEdge/WasmEdge).**
 
-Status: **incubation (Phase 1)**. The runtime surgery is in progress; during this
-phase the binary, package names, env prefixes (`PRIME_AGENT_*`), and config
-directory intentionally keep their upstream identities (see `DESIGN.md` D25) —
-only this README carries the fork's identity.
+Status: **incubation (Phase 1)**. The runtime surgery is in progress. The public
+surface is the fork's own: the command is `wasmedge-agent`, the environment
+prefix is `WASMEDGE_AGENT_*`, and configuration lives in `~/.wasmedge-agent`.
+`DESIGN.md` D25 held those at upstream identities until M5; that rename has
+since landed. The inherited npm workspace identifiers in the source tree are
+implementation details, not the public install path.
 
 ## What changes, what stays
 
