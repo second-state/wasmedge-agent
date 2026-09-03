@@ -13,15 +13,15 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { execFile } from "child_process";
-import { PRIME_BUTTERFLY_LOGO } from "../../../themes/prime-logo.js";
+import { WASMEDGE_BUTTERFLY_LOGO } from "../../../themes/wasmedge-logo.js";
 import { theme } from "../theme/theme.js";
 import { keyHint } from "./keybinding-hints.js";
 import { MenuPanel, MenuSearchInput } from "./menu-panel.js";
 import { shouldTreatAsBack } from "./modal-back.js";
 
 const PRIME_INFERENCE_PROVIDER_ID = "prime-inference";
-const PRIME_LOGO_LINES = PRIME_BUTTERFLY_LOGO.split("\n");
-const PRIME_LOGO_WIDTH = PRIME_LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
+const WASMEDGE_LOGO_LINES = WASMEDGE_BUTTERFLY_LOGO.split("\n");
+const WASMEDGE_LOGO_WIDTH = WASMEDGE_LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 
 function centeredLine(text: string, width: number): string {
 	const safeWidth = Math.max(1, width);
@@ -38,9 +38,9 @@ class PrimeLoginHeader implements Component {
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
-		const logoWidth = Math.min(PRIME_LOGO_WIDTH, safeWidth);
-		const logoLines = PRIME_LOGO_LINES.map((line) => {
-			const paddedLogoLine = line + " ".repeat(Math.max(0, PRIME_LOGO_WIDTH - visibleWidth(line)));
+		const logoWidth = Math.min(WASMEDGE_LOGO_WIDTH, safeWidth);
+		const logoLines = WASMEDGE_LOGO_LINES.map((line) => {
+			const paddedLogoLine = line + " ".repeat(Math.max(0, WASMEDGE_LOGO_WIDTH - visibleWidth(line)));
 			return centeredLine(theme.fg("text", truncateToWidth(paddedLogoLine, logoWidth, "")), safeWidth);
 		});
 		return [
