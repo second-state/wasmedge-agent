@@ -172,6 +172,13 @@ function isTermuxSession(): boolean {
 	return Boolean(process.env.TERMUX_VERSION);
 }
 
+/** Diagnostics live wherever the host says. This centralises the path so
+ *  both call sites agree on it; the debug site below creates its directory
+ *  before appending, the same way the crash site always has. */
+export function tuiLogPath(file: string): string {
+	return path.join(process.env.PI_TUI_LOG_DIR || os.tmpdir(), file);
+}
+
 /**
  * Options for overlay positioning and sizing.
  * Values can be absolute numbers or percentage strings (e.g., "50%").
@@ -1611,8 +1618,9 @@ export class TUI extends Container {
 		const debugRedraw = process.env.PI_DEBUG_REDRAW === "1";
 		const logRedraw = (reason: string): void => {
 			if (!debugRedraw) return;
-			const logPath = path.join(os.homedir(), ".prime", "agent", "pi-debug.log");
+			const logPath = tuiLogPath("pi-debug.log");
 			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.previousLines.length}, new=${newLines.length}, height=${height})\n`;
+			fs.mkdirSync(path.dirname(logPath), { recursive: true });
 			fs.appendFileSync(logPath, msg);
 		};
 
@@ -1793,7 +1801,7 @@ export class TUI extends Container {
 			const isImage = isImageLine(line);
 			if (!isImage && visibleWidth(line) > width) {
 				// Log all lines to crash file for debugging
-				const crashLogPath = path.join(os.homedir(), ".prime", "agent", "pi-crash.log");
+				const crashLogPath = tuiLogPath("pi-crash.log");
 				const crashData = [
 					`Crash at ${new Date().toISOString()}`,
 					`Terminal width: ${width}`,

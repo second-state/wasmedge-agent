@@ -33,7 +33,7 @@ import {
 	SessionSelectorError,
 	SessionSelectorNotFoundError,
 } from "./cli/session-resolver.js";
-import { APP_NAME, expandTildePath, getAgentDir, getSessionDirEnvOverride, VERSION } from "./config.js";
+import { APP_NAME, expandTildePath, getAgentDir, getLogsDir, getSessionDirEnvOverride, VERSION } from "./config.js";
 import {
 	type AgentSessionRuntimeConfig,
 	mergeAgentSessionRuntimeConfig,
@@ -1025,6 +1025,9 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	// packages/tui cannot import our config (the dependency runs the other
+	// way), so the host hands it the diagnostics directory.
+	process.env.PI_TUI_LOG_DIR ??= getLogsDir();
 	if (isDaemonWorkerProcess()) {
 		waitForDaemonWorkerStartupGate();
 	}
