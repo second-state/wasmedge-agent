@@ -17,7 +17,7 @@ pkg update && pkg upgrade
 pkg install nodejs termux-api git ripgrep
 
 # Clone and install WasmEdge Agent from source
-git clone https://github.com/PrimeIntellect-ai/wasmedge-agent.git
+git clone https://github.com/hydai/wasmedge-agent.git
 cd wasmedge-agent
 npm ci
 

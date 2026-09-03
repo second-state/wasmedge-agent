@@ -7,7 +7,7 @@ See the repository [AGENTS.md](../../../AGENTS.md) for the current contribution 
 WasmEdge Agent requires Node.js 22.8.0 or newer.
 
 ```bash
-git clone https://github.com/PrimeIntellect-ai/wasmedge-agent
+git clone https://github.com/hydai/wasmedge-agent
 cd wasmedge-agent
 npm ci
 ```

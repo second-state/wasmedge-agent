@@ -45,15 +45,8 @@ WasmEdge Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-
 
 ## Quick Start
 
-```bash
-curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh
-```
-
-To install the beta built from the latest commit on `main`:
-
-```bash
-curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh -s -- beta
-```
+> Installation arrives with the first WasmEdge Agent release. Until then,
+> build from source: see [docs/development.md](docs/development.md).
 
 Authenticate with an API key:
 

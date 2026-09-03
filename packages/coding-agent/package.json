@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.7.0",
-	"description": "Coding agent CLI with IPython-backed tools and session management",
+	"description": "Coding agent CLI whose cells are Rust sandboxed in WasmEdge, with tools and session management",
 	"type": "module",
 	"piConfig": {
 		"name": "wasmedge-agent",
@@ -103,7 +103,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/PrimeIntellect-ai/wasmedge-agent.git",
+		"url": "git+https://github.com/hydai/wasmedge-agent.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

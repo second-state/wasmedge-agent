@@ -4,37 +4,26 @@ This page gets you from install to a useful first WasmEdge Agent session.
 
 ## Install
 
-Install the latest stable release on Linux or macOS:
+> Installation arrives with the first WasmEdge Agent release. Until then,
+> build from source: see [development.md](development.md).
+
+To run a source checkout, use Node.js 22.8.0 or newer:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh
-```
-
-To try the latest beta built from `main`:
-
-```bash
-curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh -s -- beta
-```
-
-Both commands fetch versioned WasmEdge Agent release artifacts and install the `wasmedge-agent` command. The inherited npm workspace identifiers in the source tree are not the public install path.
-
-Then start WasmEdge Agent in the project directory you want it to work on:
-
-```bash
-cd /path/to/project
-wasmedge-agent
-```
-
-To run a source checkout instead, use Node.js 22.8.0 or newer:
-
-```bash
-git clone https://github.com/PrimeIntellect-ai/wasmedge-agent
+git clone https://github.com/hydai/wasmedge-agent
 cd wasmedge-agent
 npm ci
 ./wasmedge-agent.sh
 ```
 
 The source runner preserves the directory from which it is invoked, so you can also call `/path/to/wasmedge-agent/wasmedge-agent.sh` from another project.
+
+The release will install the `wasmedge-agent` command; the inherited npm workspace identifiers in the source tree are not the public install path. Once it is installed, start WasmEdge Agent in the project directory you want it to work on:
+
+```bash
+cd /path/to/project
+wasmedge-agent
+```
 
 ## Authenticate
 

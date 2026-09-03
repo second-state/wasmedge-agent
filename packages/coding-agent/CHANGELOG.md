@@ -19,9 +19,12 @@
   unchanged; they belong to the provider, not to the agent.
 - Values that leave the process keep their names, because a rename would only
   break the things that read them back: the `prime-agent-traces` provider id,
-  the `ai.primeintellect.prime-agent` ACP `_meta` namespace, and the
-  `prime-agent.refinement` session entry type that `/refine` history is stored
-  under.
+  the `ai.primeintellect.prime-agent` ACP `_meta` namespace, the
+  `prime-agent-bash` ACP tool-call prefix, the `prime-agent.daemon` local
+  daemon protocol name, and the `prime-agent.refinement`,
+  `prime-agent.worker_recovery`, `prime-agent.update_restart` and
+  `prime-agent.update_complete` session entry types that `/refine` history,
+  worker recovery and update restarts are stored under.
 - The in-app update check no longer has a built-in release host. The renamed
   constant still held upstream's release bucket, so a WasmEdge Agent build
   offered upstream's version as an update and `/update` installed upstream's

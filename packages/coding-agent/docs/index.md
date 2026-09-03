@@ -4,13 +4,10 @@ WasmEdge Agent is an RLM-native coding and research harness built around sandbox
 
 ## Quick Start
 
-Install the latest stable release on Linux or macOS:
+> Installation arrives with the first WasmEdge Agent release. Until then,
+> build from source: see [development.md](development.md).
 
-```bash
-curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh
-```
-
-Then run it in a project directory:
+Once it is installed, run it in a project directory:
 
 ```bash
 cd /path/to/project
@@ -19,7 +16,7 @@ wasmedge-agent
 
 Authenticate with `/login` for subscription or stored API-key providers, or set an environment variable such as `ANTHROPIC_API_KEY` before launch. See the [Quickstart](quickstart.md) for the complete first-run flow.
 
-Public releases are currently installed from versioned release artifacts. The inherited npm workspace names in the source tree are implementation details, not the public install path.
+Public releases will be installed from versioned release artifacts. The inherited npm workspace names in the source tree are implementation details, not the public install path.
 
 ## Start Here
 
