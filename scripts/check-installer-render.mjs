@@ -152,8 +152,76 @@ try {
 	check(compactRows.meta.first.visible === "1", "expected the initial tall render to show the logo");
 	check(compactRows.meta.second.compact === "1", "expected shrink below frozen splash height to use compact mode");
 	check(compactRows.meta.second.visible === "0", "expected compact row mode to hide the logo");
+
+	checkNodeFloor();
 } finally {
 	rmSync(tempDir, { recursive: true, force: true });
+}
+
+/** The installer's Node floor, against the one the package actually requires.
+ *
+ *  They were 20.6.0 and 22.8.0. Every machine in between passed installer
+ *  preflight, npm installed the package with nothing louder than an engine
+ *  warning, and the command exited on first launch -- the one outcome an
+ *  installer exists to prevent. Nothing held the two numbers together, so
+ *  raising the package's engines moved only half of it.
+ *
+ *  Checked three ways, because the installer states the floor three ways: the
+ *  message a user reads, the `node -e` comparison that gates an install when
+ *  node is already present, and the shell comparison that decides whether a
+ *  package manager's candidate is worth installing. A drift in any one of them
+ *  is the same bug. */
+function checkNodeFloor() {
+	const engines = JSON.parse(readFileSync("packages/coding-agent/package.json", "utf-8")).engines?.node ?? "";
+	const floor = engines.replace(/^\D*/, "");
+	if (!/^\d+\.\d+\.\d+$/.test(floor)) {
+		check(false, `expected engines.node to name an exact floor, found ${JSON.stringify(engines)}`);
+		return;
+	}
+	const [major, minor] = floor.split(".").map(Number);
+
+	for (const [, mentioned] of installerSource.matchAll(/Node\.js (\d+\.\d+\.\d+)/g)) {
+		check(mentioned === floor, `installer tells the user Node.js ${mentioned}, but the package requires ${floor}`);
+	}
+
+	const inline = installerSource.match(/major > (\d+) \|\| \(major === (\d+) && \(minor > (\d+)/);
+	check(inline !== null, "could not find the installer's node -e version comparison");
+	if (inline) {
+		check(
+			Number(inline[1]) === major && Number(inline[2]) === major && Number(inline[3]) === minor,
+			`installer's node -e comparison gates on ${inline[1]}.${inline[3]}, but the package requires ${floor}`,
+		);
+	}
+
+	const probes = [
+		["20.6.0", false],
+		[`${major}.${minor - 1}.99`, false],
+		[floor, true],
+		[`${major + 1}.0.0`, true],
+	];
+	const probePath = join(tempDir, "node-floor.sh");
+	writeFileSync(
+		probePath,
+		`${installerSource.slice(0, mainCallIndex)}\nfor candidate in ${probes.map(([version]) => version).join(" ")}; do\n\tif node_version_string_is_new_enough "$candidate"; then printf '%s yes\\n' "$candidate"; else printf '%s no\\n' "$candidate"; fi\ndone\n`,
+		"utf-8",
+	);
+	const probed = spawnSync("sh", [probePath], { encoding: "utf-8" });
+	if (probed.status !== 0) {
+		check(false, `node floor probe exited ${probed.status}: ${probed.stderr}`);
+		return;
+	}
+	const verdicts = new Map(
+		probed.stdout
+			.split("\n")
+			.filter((line) => line.trim() !== "")
+			.map((line) => line.split(" ")),
+	);
+	for (const [version, accepted] of probes) {
+		check(
+			verdicts.get(version) === (accepted ? "yes" : "no"),
+			`installer ${accepted ? "rejects" : "accepts"} Node.js ${version} against a ${floor} floor`,
+		);
+	}
 }
 
 if (failures.length > 0) {
