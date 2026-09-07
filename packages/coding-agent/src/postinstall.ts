@@ -1,6 +1,6 @@
-import { readLegacyEnv } from "./config.js";
+import { LEGACY_NAME_WARNINGS, readLegacyEnv } from "./config.js";
 import { ensureTemplateReady, resolveToolchain } from "./core/rust-cell/index.js";
-import { migrateAgentDirIfNeeded } from "./migrations.js";
+import { migrateAgentDirIfNeeded, reportDeprecationWarningsNonInteractively } from "./migrations.js";
 import { ensureTool } from "./utils/tools-manager.js";
 
 // First statement, before anything here can create the agent directory.
@@ -18,8 +18,32 @@ import { ensureTool } from "./utils/tools-manager.js";
 // than before anything reads the path.
 const agentDirMigration = migrateAgentDirIfNeeded();
 
+/**
+ * Writes the deprecation warnings queued so far to stderr, and empties the
+ * queue so a second call cannot repeat one.
+ *
+ * This process never reaches main(), so main()'s reporter never runs for it,
+ * yet everything above queues into the same list: migrateAgentDirIfNeeded()
+ * can record that both agent directories exist, and readLegacyEnv() below
+ * records a legacy variable name it fell back to. Without this the fallback
+ * works and the notice is never printed -- and `npm install -g` is exactly
+ * the situation that creates the both-directories state, so this is the
+ * common case rather than a corner one.
+ *
+ * stderr, not stdout: npm shows both, and a package manager's stdout is not
+ * a place to put diagnostics.
+ */
+function reportPostinstallWarnings(): void {
+	reportDeprecationWarningsNonInteractively(LEGACY_NAME_WARNINGS.splice(0), (message) =>
+		process.stderr.write(message),
+	);
+}
+
 const bootstrapRuntime = readLegacyEnv("WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL") === "1";
 const bootstrapTools = readLegacyEnv("WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL") === "1";
+
+// Before the early exit below, which is the path most installs take.
+reportPostinstallWarnings();
 
 if (!bootstrapRuntime && !bootstrapTools) {
 	process.exit(0);
@@ -62,3 +86,7 @@ try {
 } catch (error) {
 	console.error(`wasmedge-agent: postinstall setup skipped: ${oneLine(errorMessage(error))}`);
 }
+
+// Again, for anything the bootstrap work queued. The queue was emptied above,
+// so nothing already reported can repeat.
+reportPostinstallWarnings();

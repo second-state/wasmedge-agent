@@ -22,7 +22,7 @@ import {
 	shutdownDaemonAndWait,
 } from "./cli/daemon-launch.js";
 import { confirmDaemonSessionLoss, type DaemonSessionLossCopy, pluralizeSessions } from "./cli/daemon-stop-confirm.js";
-import { processFileArguments } from "./cli/file-processor.js";
+import { FileArgumentError, processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { installOwnedSessionRecoveryTracking, isOwnedSessionWorkerProcess } from "./cli/owned-session-worker.js";
@@ -81,10 +81,13 @@ import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import {
+	drainLegacyNameWarnings,
 	migrateAgentDirIfNeeded,
-	reportDeprecationWarningsNonInteractively,
+	reportStartupWarnings,
+	resetReportedLegacyWarnings,
 	runMigrations,
 	showDeprecationWarnings,
+	writeStderrSync,
 } from "./migrations.js";
 import { isDaemonCatalogProcess, runDaemonCatalogProcess } from "./modes/daemon/daemon-catalog-process.js";
 import { deserializeDaemonError } from "./modes/daemon/daemon-errors.js";
@@ -328,9 +331,18 @@ export async function findActiveDaemonSessionSummaryForInteractiveStartup(
 	}
 }
 
+/** Reads the `@file` arguments into the first message, and ends the run
+ *  through the warning-aware exit if one of them cannot be read.
+ *
+ *  Takes the runMigrations() snapshot for that exit alone. Every caller sits
+ *  below the point where interactive mode decides to hold its warnings back
+ *  for the TUI, and a bad `@file` means the TUI never appears -- so without
+ *  this the run ends having collected the both-directories warning and
+ *  reported none of it. */
 async function prepareInitialMessage(
 	parsed: Args,
 	autoResizeImages: boolean,
+	deprecationWarnings: readonly string[],
 	stdinContent?: string,
 ): Promise<{
 	initialMessage?: string;
@@ -340,7 +352,16 @@ async function prepareInitialMessage(
 		return buildInitialMessage({ parsed, stdinContent });
 	}
 
-	const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages });
+	let text: string;
+	let images: ImageContent[];
+	try {
+		({ text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages }));
+	} catch (error) {
+		if (error instanceof FileArgumentError) {
+			exitWithStartupErrorAfterMigrations(deprecationWarnings, `Error: ${error.message}`);
+		}
+		throw error;
+	}
 	return buildInitialMessage({
 		parsed,
 		fileText: text,
@@ -380,10 +401,26 @@ const STARTUP_SESSION_LOSS_COPY: DaemonSessionLossCopy = {
 // survives `await` (which would otherwise flatten a returned Promise to void).
 type DaemonReadyResult = { ready: Promise<void> | undefined };
 
+/** How a takeover that cannot proceed ends. The messages are written by the
+ *  code below; this is only the exit, so that a startup which has not
+ *  reported its migration warnings yet can report them before it goes.
+ *
+ *  Supplied by the caller rather than always reporting: two of the four call
+ *  sites run after interactive mode has already shown that whole set in the
+ *  TUI, and reporting there would print every warning a second time. */
+type StaleDaemonExit = () => never;
+
+function exitStaleDaemonTakeover(): never {
+	process.exit(1);
+}
+
 // A stale-version daemon couldn't be taken over automatically (busy or stuck).
 // Offer to stop it (default No) and start a fresh daemon, or exit. Returns the
 // fresh ready promise so callers stop re-handling the original rejection.
-async function takeOverStaleDaemonOrExit(socketPath: string): Promise<DaemonReadyResult> {
+async function takeOverStaleDaemonOrExit(
+	socketPath: string,
+	exitOnFailure: StaleDaemonExit = exitStaleDaemonTakeover,
+): Promise<DaemonReadyResult> {
 	const probe = await probeRunningDaemonSessions(socketPath);
 	const confirmed = await confirmDaemonSessionLoss(probe, { force: false, copy: STARTUP_SESSION_LOSS_COPY });
 	if (!confirmed) {
@@ -391,13 +428,13 @@ async function takeOverStaleDaemonOrExit(socketPath: string): Promise<DaemonRead
 		if (process.stdin.isTTY) {
 			console.error(chalk.dim("Cancelled."));
 		}
-		process.exit(1);
+		exitOnFailure();
 	}
 	if (!(await shutdownDaemonAndWait(socketPath))) {
 		console.error(
 			chalk.red(`Could not stop the background service on ${socketPath}. Run "wasmedge-agent shutdown" and retry.`),
 		);
-		process.exit(1);
+		exitOnFailure();
 	}
 	const ready = ensureInteractiveDaemonRunning(socketPath);
 	try {
@@ -405,7 +442,7 @@ async function takeOverStaleDaemonOrExit(socketPath: string): Promise<DaemonRead
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		console.error(chalk.red(`Could not start the background service: ${message}`));
-		process.exit(1);
+		exitOnFailure();
 	}
 	return { ready };
 }
@@ -413,7 +450,10 @@ async function takeOverStaleDaemonOrExit(socketPath: string): Promise<DaemonRead
 // Resolves the daemon-ready promise, returning the promise to keep (the same
 // one on success, or the fresh one from a stale-daemon takeover) so repeat
 // calls don't re-handle the original rejection.
-async function awaitDaemonReady(daemonReady: Promise<void> | undefined): Promise<DaemonReadyResult> {
+async function awaitDaemonReady(
+	daemonReady: Promise<void> | undefined,
+	exitOnFailure?: StaleDaemonExit,
+): Promise<DaemonReadyResult> {
 	if (!daemonReady) {
 		return { ready: daemonReady };
 	}
@@ -422,7 +462,7 @@ async function awaitDaemonReady(daemonReady: Promise<void> | undefined): Promise
 		return { ready: daemonReady };
 	} catch (error) {
 		if (error instanceof StaleDaemonError) {
-			return takeOverStaleDaemonOrExit(error.socketPath);
+			return takeOverStaleDaemonOrExit(error.socketPath, exitOnFailure);
 		}
 		throw error;
 	}
@@ -438,18 +478,22 @@ function validateForkFlags(parsed: Args): void {
 	].filter((flag): flag is string => flag !== undefined);
 
 	if (conflictingFlags.length > 0) {
-		console.error(chalk.red(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`));
-		process.exit(1);
+		exitWithStartupError(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`);
 	}
 }
 
-function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string): SessionManager {
+function forkSessionOrExit(
+	sourcePath: string,
+	cwd: string,
+	sessionDir: string | undefined,
+	exitOnFailure: StartupExitWithCode,
+): SessionManager {
 	try {
 		return SessionManager.forkFrom(sourcePath, cwd, sessionDir);
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : String(error);
 		console.error(chalk.red(`Error: ${message}`));
-		process.exit(1);
+		exitOnFailure(1);
 	}
 }
 
@@ -461,6 +505,9 @@ export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	sessionDir: string | undefined,
+	/** See StartupExitWithCode: main() reports what startup collected before
+	 *  the process ends; every other caller keeps the bare exit. */
+	exitOnFailure: StartupExitWithCode = exitWithoutReporting,
 ): Promise<SessionManager> {
 	const explicitCwdOverride = parsed.cwd ? cwd : undefined;
 
@@ -475,7 +522,7 @@ export async function createSessionManager(
 			case "path":
 			case "local":
 			case "global":
-				return forkSessionOrExit(resolved.path, cwd, sessionDir);
+				return forkSessionOrExit(resolved.path, cwd, sessionDir, exitOnFailure);
 		}
 	}
 
@@ -493,9 +540,10 @@ export async function createSessionManager(
 				const shouldFork = await promptConfirm("Fork this session into current directory?");
 				if (!shouldFork) {
 					console.log(chalk.dim("Aborted."));
-					process.exit(0);
+					// A cancellation, so status 0 -- but the warnings still go out.
+					exitOnFailure(0);
 				}
-				return forkSessionOrExit(resolved.path, cwd, sessionDir);
+				return forkSessionOrExit(resolved.path, cwd, sessionDir, exitOnFailure);
 			}
 		}
 	}
@@ -1038,12 +1086,128 @@ export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
 }
 
+/**
+ * Writes every deprecation warning collected so far to stderr.
+ *
+ * The one-time directory move and the legacy env-name fallbacks run at the top
+ * of main(), but the reporter that shows what they collected sits well below
+ * the commands that return early -- public commands, `config`, `--version`,
+ * `--help`, `--export`. Each of those exited having said nothing, and the
+ * worst case is silent: the both-directories warning means the user's
+ * configuration, credentials and sessions are all in the legacy tree while the
+ * command just run read an empty new one.
+ *
+ * The reporter itself lives in migrations.ts, next to the deprecation channel
+ * it writes through, because the config command exits the process from inside
+ * itself and has to drain through the same run-level bookkeeping this does.
+ *
+ * stderr, never stdout: stdout is a protocol surface for acp, rpc and --json,
+ * and doctor --json's contract test pins a single JSON document.
+ */
+const drainStartupWarnings = drainLegacyNameWarnings;
+
+/**
+ * Ends a run that cannot continue, after reporting what startup collected.
+ *
+ * Every error exit above the mode-level reporter needs this, and there are
+ * seven of them -- argument diagnostics, a non-interactive attach, a bare
+ * --resume, an export failure, @file arguments in a stream mode, an unusable
+ * --cwd, and conflicting --fork flags. Draining at each one by hand is how the
+ * eighth gets added without a drain, which is the shape of the bug this
+ * replaces: the both-directories warning means the user's configuration,
+ * credentials and sessions are all in the legacy tree, and it was discarded by
+ * every one of these paths.
+ *
+ * The message goes out first and the warnings after it, so the answer to what
+ * the user asked for stays at the top. Both on stderr; stdout is a protocol
+ * surface. Repeats are impossible: the drain shares the run-level record of
+ * what has already been written, so an error path firing after a successful
+ * drain adds only what is new.
+ */
+function exitWithStartupError(message?: string): never {
+	if (message !== undefined) {
+		console.error(chalk.red(message));
+	}
+	drainStartupWarnings();
+	process.exit(1);
+}
+
+/**
+ * Ends a run that cannot continue, after reporting what startup collected --
+ * exitWithStartupError's job, for the failures that happen after
+ * runMigrations() has produced its snapshot.
+ *
+ * Below that point there are two sources of warnings and reporting one is not
+ * enough. LEGACY_NAME_WARNINGS is what exitWithStartupError drains; the
+ * snapshot runMigrations() returned also carries the extension-directory
+ * warnings, and interactive mode deliberately skips the mode-level reporter
+ * for it because it means to show the whole set inside the TUI. Several
+ * failures exit between that decision and the TUI ever appearing -- an active
+ * agent that cannot be looked up, no agent matching --attach, an invalid
+ * --resume selector, a stale background service that cannot be taken over --
+ * and each of them used to take both sets to the grave. The user this hurts
+ * is the one the reporting exists for: the both-directories warning means
+ * their configuration, credentials and sessions are all in the legacy tree.
+ *
+ * withCurrentLegacyWarnings() composes exactly the payload the TUI display
+ * path uses, so the two cannot disagree about what a run collected.
+ *
+ * Separate from exitWithStartupError rather than merged with it: the sites
+ * above runMigrations() have no snapshot to pass, and one helper with an
+ * optional snapshot would read as if passing it were a choice. Repeats are
+ * impossible for the same reason they are in exitWithStartupError -- the
+ * report shares the run-level record of what has already been written.
+ */
+function exitWithStartupErrorAfterMigrations(deprecationWarnings: readonly string[], message?: string): never {
+	if (message !== undefined) {
+		console.error(chalk.red(message));
+	}
+	exitAfterMigrations(deprecationWarnings, 1);
+}
+
+/**
+ * Reports what startup collected -- the same payload
+ * exitWithStartupErrorAfterMigrations sends, composed by
+ * withCurrentLegacyWarnings() -- for a run that ends without being an error.
+ *
+ * Two of these exits are cancellations and end with status 0: declining to
+ * fork a session from another project, and cancelling the missing-working-
+ * directory prompt. A user who cancels still needs to hear that their
+ * configuration, credentials and sessions are all in the legacy tree -- that
+ * warning is about the state of their machine, not about why this run is
+ * ending -- and making a cancel exit 1 to reuse the error helper would be
+ * lying to a shell about what happened.
+ */
+function exitAfterMigrations(deprecationWarnings: readonly string[], exitCode: number): never {
+	reportStartupWarnings(withCurrentLegacyWarnings(deprecationWarnings));
+	process.exit(exitCode);
+}
+
+/**
+ * How a startup that cannot continue ends, for the two exits that live inside
+ * the exported createSessionManager().
+ *
+ * Passed in rather than reached for, because that function is exported and its
+ * other callers -- the covering tests -- must keep seeing exactly the exit they
+ * see today. The default is the bare exit those callers already get; main()
+ * supplies the one that reports what startup collected first.
+ */
+type StartupExitWithCode = (exitCode: number) => never;
+
+function exitWithoutReporting(exitCode: number): never {
+	process.exit(exitCode);
+}
+
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	resetReportedLegacyWarnings();
 	// Must precede every getAgentDir() consumer, including the log sink below,
 	// and must not sit behind the early return at isDaemonCatalogProcess().
 	migrateAgentDirIfNeeded();
-	warnIfLegacyAlias(process.argv[1] ?? "", (message) => process.stderr.write(message));
+	// Through the synchronous writer, not the stream: --version, --help and
+	// --export print and call process.exit() directly, and a stream write left
+	// buffered is discarded by that exit wherever stderr is asynchronous.
+	warnIfLegacyAlias(process.argv[1] ?? "", writeStderrSync);
 	// packages/tui cannot import our config (the dependency runs the other
 	// way), so the host hands it the diagnostics directory.
 	process.env.PI_TUI_LOG_DIR ??= getLogsDir();
@@ -1065,11 +1229,16 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const publicCommand = await handlePublicCommand(args);
 	if (publicCommand.handled) {
+		// After the command, not before it: a public command can be the thing
+		// that consumes a legacy name -- `update` reads the download base url --
+		// so draining first would report the fallback that had not happened yet.
+		drainStartupWarnings();
 		return;
 	}
 	args = publicCommand.args;
 
 	if (await handleConfigCommand(args)) {
+		drainStartupWarnings();
 		return;
 	}
 
@@ -1082,21 +1251,19 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(color(`${d.type === "error" ? "Error" : "Warning"}: ${d.message}`));
 		}
 		if (parsed.diagnostics.some((d) => d.type === "error")) {
-			process.exit(1);
+			exitWithStartupError();
 		}
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
 
 	if (shouldRejectNonInteractiveAttach(publicCommand.attachAgent, appMode)) {
-		console.error(chalk.red("Error: attach requires an interactive terminal"));
-		process.exit(1);
+		exitWithStartupError("Error: attach requires an interactive terminal");
 	}
 	if (shouldRejectBareResume(parsed.resume)) {
-		console.error(
-			chalk.red("Error: --resume requires a session id or path; browse sessions with left-arrow from a chat"),
+		exitWithStartupError(
+			"Error: --resume requires a session id or path; browse sessions with left-arrow from a chat",
 		);
-		process.exit(1);
 	}
 	setLogContext({ mode: appMode });
 	const shouldTakeOverStdout = appMode !== "interactive";
@@ -1105,10 +1272,12 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (parsed.version) {
+		drainStartupWarnings();
 		console.log(VERSION);
 		process.exit(0);
 	}
 	if (parsed.help) {
+		drainStartupWarnings();
 		console.log(formatTopLevelHelp());
 		process.exit(0);
 	}
@@ -1120,16 +1289,15 @@ export async function main(args: string[], options?: MainOptions) {
 			result = await exportFromFile(parsed.export, outputPath);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
-			console.error(chalk.red(`Error: ${message}`));
-			process.exit(1);
+			exitWithStartupError(`Error: ${message}`);
 		}
+		drainStartupWarnings();
 		console.log(`Exported to: ${result}`);
 		process.exit(0);
 	}
 
 	if ((parsed.mode === "rpc" || parsed.mode === "daemon") && parsed.fileArgs.length > 0) {
-		console.error(chalk.red("Error: @file arguments are not supported in RPC or daemon mode"));
-		process.exit(1);
+		exitWithStartupError("Error: @file arguments are not supported in RPC or daemon mode");
 	}
 
 	validateForkFlags(parsed);
@@ -1140,8 +1308,7 @@ export async function main(args: string[], options?: MainOptions) {
 			process.chdir(cwd);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			console.error(chalk.red(`Error: Cannot use cwd ${cwd}: ${message}`));
-			process.exit(1);
+			exitWithStartupError(`Error: Cannot use cwd ${cwd}: ${message}`);
 		}
 	}
 
@@ -1161,7 +1328,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// counterpart instead, or a legacy env var's fallback would be silently
 	// correct but never flagged as deprecated.
 	if (appMode !== "interactive") {
-		reportDeprecationWarningsNonInteractively(deprecationWarnings, (message) => process.stderr.write(message));
+		reportStartupWarnings(deprecationWarnings);
 	}
 	// The interactive display below runs much later than this snapshot -- see
 	// withCurrentLegacyWarnings()'s doc comment in config.ts for why it, not
@@ -1212,7 +1379,13 @@ export async function main(args: string[], options?: MainOptions) {
 		explicitAttach: publicCommand.attachAgent !== undefined,
 	});
 	if (shouldLookupDaemonActiveSession && daemonReady) {
-		daemonReady = (await awaitDaemonReady(daemonReady)).ready;
+		// The only one of the four await sites that runs before anything has
+		// reported this run's warnings: the three below sit past the TUI
+		// display and past the non-interactive reporter. A takeover that gives
+		// up here would otherwise discard the lot.
+		daemonReady = (
+			await awaitDaemonReady(daemonReady, () => exitWithStartupErrorAfterMigrations(deprecationWarnings))
+		).ready;
 	}
 	let activeDaemonSessionSummary: SessionSummary | undefined;
 	if (shouldLookupDaemonActiveSession && resumeSelector) {
@@ -1224,13 +1397,17 @@ export async function main(args: string[], options?: MainOptions) {
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			console.error(chalk.red(`Error: Could not look up active agent '${resumeSelector}': ${message}`));
-			process.exit(1);
+			exitWithStartupErrorAfterMigrations(
+				deprecationWarnings,
+				`Error: Could not look up active agent '${resumeSelector}': ${message}`,
+			);
 		}
 	}
 	if (publicCommand.attachAgent && !activeDaemonSessionSummary) {
-		console.error(chalk.red(`Error: No active agent found matching '${publicCommand.attachAgent}'`));
-		process.exit(1);
+		exitWithStartupErrorAfterMigrations(
+			deprecationWarnings,
+			`Error: No active agent found matching '${publicCommand.attachAgent}'`,
+		);
 	}
 	let sessionManager: SessionManager;
 	if (activeDaemonSessionSummary) {
@@ -1246,7 +1423,9 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager = SessionManager.inMemory(cwd);
 	} else {
 		try {
-			sessionManager = await createSessionManager(parsed, cwd, sessionDir);
+			sessionManager = await createSessionManager(parsed, cwd, sessionDir, (exitCode) =>
+				exitAfterMigrations(deprecationWarnings, exitCode),
+			);
 		} catch (error) {
 			if (!(error instanceof SessionSelectorError)) {
 				throw error;
@@ -1257,7 +1436,9 @@ export async function main(args: string[], options?: MainOptions) {
 					: "";
 			console.error(chalk.red(`Error: ${error.message}.${suggestion}`));
 			console.error(chalk.dim(`Open ${APP_NAME} and press left-arrow to browse sessions.`));
-			process.exit(1);
+			// The message is already out, in two parts; this only adds the
+			// warnings and exits.
+			exitWithStartupErrorAfterMigrations(deprecationWarnings);
 		}
 	}
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
@@ -1265,12 +1446,22 @@ export async function main(args: string[], options?: MainOptions) {
 		if (appMode === "interactive") {
 			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager);
 			if (!selectedCwd) {
-				process.exit(0);
+				// Cancelled, so status 0. This is the one interactive path that
+				// ends here on purpose, and it still owes the user the warnings
+				// the TUI was going to show -- interactive mode skipped the
+				// terse reporter, and the display this was heading for never
+				// opens now.
+				exitAfterMigrations(deprecationWarnings, 0);
 			}
 			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
-			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
-			process.exit(1);
+			// Non-interactive, so the mode-level reporter has already run and
+			// this adds nothing; routed through the same exit anyway so the
+			// branch above is not the only one that reports.
+			exitWithStartupErrorAfterMigrations(
+				deprecationWarnings,
+				new MissingSessionCwdError(missingSessionCwdIssue).message,
+			);
 		}
 	}
 	time("createSessionManager");
@@ -1375,6 +1566,7 @@ export async function main(args: string[], options?: MainOptions) {
 		const { initialMessage, initialImages } = await prepareInitialMessage(
 			parsed,
 			settingsManager.getImageAutoResize(),
+			deprecationWarnings,
 			stdinContent,
 		);
 		time("prepareInitialMessage");
@@ -1540,13 +1732,34 @@ export async function main(args: string[], options?: MainOptions) {
 		const { initialMessage, initialImages } = await prepareInitialMessage(
 			parsed,
 			settingsManager.getImageAutoResize(),
+			deprecationWarnings,
 			stdinContent,
 		);
 		time("prepareInitialMessage");
 		initTheme(settingsManager.getTheme(), false);
 		time("initTheme");
+		// A settings file naming a renamed theme is not resolved until here, so
+		// its deprecation is queued after the report above already ran.
+		// Interactive mode has a second pass of its own; these modes had none.
+		if (appMode !== "interactive") {
+			drainStartupWarnings();
+		}
 
-		daemonReady = (await awaitDaemonReady(daemonReady)).ready;
+		// Reported here, unlike the two await sites in the branch above. Those
+		// two sit past showDeprecationWarnings(), which writes with console.log
+		// and records nothing, so reporting again would print every warning
+		// twice; this branch's only display is downstream of it, so reporting
+		// can only be right.
+		//
+		// On today's control flow the guard above always passes here --
+		// useDaemonInteractive is `useDaemonClient && appMode === "interactive"`
+		// and its branch above always returns, so reaching this one means
+		// appMode is not "interactive" -- which makes this report nothing new.
+		// It is passed anyway so that a takeover giving up here can never
+		// become the exit that swallows the lot if that ever stops holding.
+		daemonReady = (
+			await awaitDaemonReady(daemonReady, () => exitWithStartupErrorAfterMigrations(deprecationWarnings))
+		).ready;
 		let connection: DaemonAgentConnection;
 		let summary: SessionSummary;
 		try {
@@ -1561,8 +1774,7 @@ export async function main(args: string[], options?: MainOptions) {
 			}));
 		} catch (error) {
 			if (error instanceof SessionAlreadyActiveError) {
-				console.error(chalk.red(`Error: ${error.message}`));
-				process.exit(1);
+				exitWithStartupErrorAfterMigrations(deprecationWarnings, `Error: ${error.message}`);
 			}
 			throw error;
 		}
@@ -1609,8 +1821,9 @@ export async function main(args: string[], options?: MainOptions) {
 		});
 	} catch (error) {
 		if (error instanceof SessionAlreadyActiveError) {
-			console.error(chalk.red(`Error: ${error.message}`));
-			process.exit(1);
+			// The local interactive path reaches here with every startup warning
+			// still queued for a TUI that this failure means never opens.
+			exitWithStartupErrorAfterMigrations(deprecationWarnings, `Error: ${error.message}`);
 		}
 		throw error;
 	}
@@ -1621,7 +1834,14 @@ export async function main(args: string[], options?: MainOptions) {
 	if (parsed.listModels !== undefined) {
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRegistry, searchPattern);
-		process.exit(0);
+		// Through the reporting exit, not a bare one. In a terminal this
+		// command runs with appMode "interactive", so the terse reporter above
+		// was skipped for it -- interactive mode holds its warnings back to
+		// show them inside the TUI -- and this returns before the TUI is ever
+		// reached. A listing command has no alternate screen and no keypress to
+		// block on, so it takes the stderr channel every other non-TUI exit
+		// takes, leaving stdout to the listing.
+		exitAfterMigrations(deprecationWarnings, 0);
 	}
 
 	// Read piped stdin content (if any) - skip for RPC/daemon modes which use other transports
@@ -1637,6 +1857,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
+		deprecationWarnings,
 		stdinContent,
 	);
 	time("prepareInitialMessage");
@@ -1649,6 +1870,12 @@ export async function main(args: string[], options?: MainOptions) {
 		if (freshDeprecationWarnings.length > 0) {
 			await showDeprecationWarnings(freshDeprecationWarnings);
 		}
+	} else {
+		// A settings file naming a renamed theme is not resolved until initTheme
+		// runs, so its deprecation is queued after this mode's one report already
+		// went out -- the same reason the useDaemonClient branch drains after its
+		// own initTheme call.
+		drainStartupWarnings();
 	}
 
 	const scopedModels = [...session.scopedModels];

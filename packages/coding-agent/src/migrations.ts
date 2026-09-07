@@ -16,6 +16,7 @@ import {
 	rmSync,
 	statSync,
 	writeFileSync,
+	writeSync,
 } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
@@ -434,6 +435,88 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
  * --mode acp, rpc, and --json, whose contract test pins a single JSON
  * document, so this must never reach it.
  */
+/** Deprecation warnings already written to stderr in this run.
+ *
+ *  LEGACY_NAME_WARNINGS dedups by exact string on push, so it never holds a
+ *  duplicate -- but that says nothing about reading it twice, and the drains
+ *  below run at several points in one run: an early-return command, theme
+ *  initialisation, and each of the config command's two exits. Without this
+ *  set the second drain would reprint everything the first one wrote.
+ *
+ *  Lives here rather than in main() because the config command exits the
+ *  process itself, from two places, and has to drain through the same
+ *  bookkeeping main() uses. */
+const reportedLegacyWarnings = new Set<string>();
+
+/** Per run of main(), matching resetTimings(): an embedder calling main()
+ *  twice gets the reporting two processes would. */
+export function resetReportedLegacyWarnings(): void {
+	reportedLegacyWarnings.clear();
+}
+
+/** Writes the warnings this run has not written yet, to stderr. */
+/** How many EAGAIN retries a startup warning is worth.
+ *
+ *  Reached only when stderr is a non-blocking descriptor whose reader has
+ *  stopped consuming, and the whole payload is a few short lines against a
+ *  pipe buffer of tens of kilobytes -- so this is a bound on a case that does
+ *  not arise rather than a retry policy anything relies on. Bounded anyway,
+ *  because the alternative is a startup that spins instead of ending. */
+const STDERR_RETRY_LIMIT = 1000;
+
+/** Writes to stderr in a way that survives the process.exit() that follows it.
+ *
+ *  process.stderr is a stream, and Node only promises its writes are
+ *  synchronous for some combinations of platform and destination: a pipe is
+ *  synchronous on Linux but asynchronous on macOS, and a TTY is the other way
+ *  round on Windows. process.exit() does not drain what is still buffered, so
+ *  on the asynchronous combinations the startup exits that call this lost some
+ *  or all of the deprecation warnings they exist to deliver -- and lost them
+ *  exactly when the output was redirected or captured, which is the case least
+ *  able to notice and most likely to be a script someone is relying on.
+ *
+ *  A write on the descriptor bypasses the stream, so the bytes are gone before
+ *  the call returns and there is nothing left for the exit to abandon. It can
+ *  write short, and on a non-blocking descriptor it can fail with EAGAIN, so
+ *  it loops on both. The descriptor is read off process.stderr rather than
+ *  hardcoded as 2, so a caller that has redirected the stream is still writing
+ *  where the stream points.
+ *
+ *  Anything else falls back to the stream: a warning that might not survive an
+ *  immediate exit still beats no warning at all.
+ *
+ *  Exported because the legacy-command notice has the same problem from a
+ *  different writer: warnIfLegacyAlias takes the writer it is given, and the
+ *  early-return commands print and exit the same way the startup exits do. */
+export function writeStderrSync(message: string): void {
+	const bytes = Buffer.from(message, "utf8");
+	let written = 0;
+	let retries = 0;
+	while (written < bytes.length) {
+		try {
+			written += writeSync(process.stderr.fd, bytes, written);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EAGAIN" && retries++ < STDERR_RETRY_LIMIT) continue;
+			process.stderr.write(bytes.subarray(written).toString("utf8"));
+			return;
+		}
+	}
+}
+
+export function reportStartupWarnings(warnings: readonly string[]): void {
+	const pending = warnings.filter((warning) => !reportedLegacyWarnings.has(warning));
+	for (const warning of pending) reportedLegacyWarnings.add(warning);
+	reportDeprecationWarningsNonInteractively(pending, writeStderrSync);
+}
+
+/** Reports every legacy-name warning collected so far, wherever a command is
+ *  about to end without reaching the mode-level reporter. Derived from
+ *  LEGACY_NAME_WARNINGS at the moment of the call rather than from a snapshot,
+ *  so a name the command itself consumed while running is included. */
+export function drainLegacyNameWarnings(): void {
+	reportStartupWarnings(withCurrentLegacyWarnings([]));
+}
+
 export function reportDeprecationWarningsNonInteractively(
 	warnings: readonly string[],
 	write: (message: string) => void,

@@ -27,6 +27,37 @@ describe("main() startup order", () => {
 		expect(migrate).toBeLessThan(catalogReturn);
 	});
 
+	it("reports what startup collected before the model-listing exit", () => {
+		// Structural, and honest about it: reproducing this needs a terminal,
+		// because the bug is that appMode "interactive" skips the terse
+		// reporter and this exit returns before the TUI the warnings were being
+		// held for. What it pins is the thing that was wrong -- the exit went
+		// through process.exit directly, so `model list` in a terminal was the
+		// one command that could say nothing about a legacy daemon, a legacy
+		// fallback, or two agent directories.
+		const listModels = source.indexOf("await listModels(modelRegistry, searchPattern);");
+		expect(listModels).toBeGreaterThan(-1);
+
+		const block = source.slice(listModels, listModels + 800);
+		expect(block).toContain("exitAfterMigrations(deprecationWarnings, 0)");
+		// ...and nothing ends the run before it does.
+		expect(block.slice(0, block.indexOf("exitAfterMigrations"))).not.toContain("process.exit(");
+	});
+
+	it("reports what startup collected when the missing-directory prompt is cancelled", () => {
+		// Structural for the same reason the model-listing guard is: the exit
+		// only happens in interactive mode, after a prompt. It is the one
+		// interactive path that ends at status 0 on purpose, and the comment
+		// above it already said it owed the user the warnings -- while the call
+		// beneath the comment was a bare process.exit.
+		const cancelled = source.indexOf("if (!selectedCwd) {");
+		expect(cancelled).toBeGreaterThan(-1);
+
+		const block = source.slice(cancelled, cancelled + 600);
+		expect(block).toContain("exitAfterMigrations(deprecationWarnings, 0)");
+		expect(block.slice(0, block.indexOf("exitAfterMigrations"))).not.toContain("process.exit(");
+	});
+
 	it("resolves legacy-aware env and project-dir getters before runMigrations snapshots their warnings", () => {
 		// getSessionDirEnvOverride() has no early caller of its own the way
 		// getAgentDir() gets one for free from migrateAgentDirIfNeeded(), and
@@ -42,6 +73,14 @@ describe("main() startup order", () => {
 		expect(resolveEarly).toBeGreaterThan(-1);
 		expect(runMigrationsCall).toBeGreaterThan(-1);
 		expect(resolveEarly).toBeLessThan(runMigrationsCall);
+	});
+
+	it("hands the legacy-alias notice the writer that survives an exit", () => {
+		// The notice takes whatever writer main() passes, and the commands that
+		// print it hardest -- --version, --help, --export -- exit immediately
+		// after printing. A stream closure here would put it back in a buffer
+		// process.exit() abandons on macOS and Windows.
+		expect(source).toContain('warnIfLegacyAlias(process.argv[1] ?? "", writeStderrSync)');
 	});
 });
 
