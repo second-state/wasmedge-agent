@@ -4,8 +4,10 @@
 
 import chalk from "chalk";
 import {
+	cpSync,
 	type Dirent,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -17,9 +19,22 @@ import {
 } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
-import { CONFIG_DIR_NAME, getAgentDir, getBinDir, getSessionsDir } from "./config.js";
+import {
+	APP_NAME,
+	getAgentDir,
+	getBinDir,
+	getProjectConfigDir,
+	getSessionsDir,
+	LEGACY_NAME_WARNINGS,
+	withCurrentLegacyWarnings,
+} from "./config.js";
 import { migrateKeybindingsConfig } from "./core/keybindings.js";
+import { legacyDaemonEndpoint } from "./modes/daemon/daemon-socket-dir.js";
 import { readFirstLineSync } from "./utils/file-lines.js";
+
+/** Windows lists its named pipes as a directory. Not a path we construct
+ *  anything under -- it is only ever enumerated. */
+const WINDOWS_PIPE_DIR = "\\\\.\\pipe\\";
 
 const MIGRATION_GUIDE_URL =
 	"https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
@@ -364,7 +379,7 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
  */
 function migrateExtensionSystem(cwd: string): string[] {
 	const agentDir = getAgentDir();
-	const projectDir = join(cwd, CONFIG_DIR_NAME);
+	const projectDir = getProjectConfigDir(cwd);
 
 	// Migrate commands/ to prompts/
 	migrateCommandsToPrompts(agentDir, "Global");
@@ -406,6 +421,313 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
 }
 
 /**
+ * Terse, non-blocking counterpart to showDeprecationWarnings for
+ * non-interactive modes (--print, --json, rpc, acp, daemon). The interactive
+ * channel above blocks on a keypress inside the TUI's alternate screen; a
+ * scripted invocation has no keypress to wait for and no alternate screen to
+ * write into, so without this a user running any non-interactive mode with a
+ * legacy env var set gets the correct fallback but is never told it is
+ * deprecated -- exactly the population most likely to have set one, and
+ * exactly the population least likely to notice removal until it breaks.
+ *
+ * The caller supplies the writer: stdout is a protocol surface for
+ * --mode acp, rpc, and --json, whose contract test pins a single JSON
+ * document, so this must never reach it.
+ */
+export function reportDeprecationWarningsNonInteractively(
+	warnings: readonly string[],
+	write: (message: string) => void,
+): void {
+	for (const warning of warnings) {
+		write(`Warning: ${warning}\n`);
+	}
+}
+
+/**
+ * Move ~/.prime/agent to ~/.wasmedge-agent exactly once.
+ *
+ * Takes both paths as parameters rather than reading homedir() internally: a
+ * test can redirect the destination through ENV_AGENT_DIR, but redirecting
+ * the source would otherwise mean mutating $HOME and relying on Node's POSIX
+ * os.homedir() consulting it -- a load-bearing detail buried in a test.
+ *
+ * Never merges and never clobbers. When both directories exist the user has
+ * already migrated or deliberately created the new one, so the legacy tree is
+ * left exactly as found; no data can be lost to a wrong guess.
+ *
+ * That case is reported as `bothPresent`, distinct from the plain "nothing to
+ * do" of a missing legacy directory. The two are not interchangeable: a user
+ * whose configuration, credentials and sessions all live in the legacy tree
+ * while the agent silently reads an empty new one sees a first-run experience
+ * with no explanation, and the caller can only say so if this function tells
+ * it which of the two happened. The installer manufactures exactly that state
+ * -- `npm install -g` runs postinstall, which creates the managed-binaries
+ * directory under the new path -- so it is the common case, not a corner one.
+ */
+export interface AgentDirMigrationResult {
+	moved: boolean;
+	from?: string;
+	/** Both directories exist, so nothing was moved and `targetDir` is in use. */
+	bothPresent?: boolean;
+	/** The move was attempted and threw, so the legacy tree still holds the
+	 *  configuration and `targetDir` does not exist yet.
+	 *
+	 *  Distinct from a plain `{ moved: false }`, which means there was nothing
+	 *  to move. Only after a failure does creating `targetDir` cost anything,
+	 *  and only the caller knows whether the work it is about to do is worth
+	 *  that cost -- see migrateAgentDirIfNeeded's catch block. */
+	failed?: boolean;
+}
+
+export function migrateAgentDirToWasmEdge(legacyDir: string, targetDir: string): AgentDirMigrationResult {
+	if (legacyDir === targetDir) return { moved: false };
+	if (!existsSync(legacyDir)) return { moved: false };
+	if (existsSync(targetDir)) return { moved: false, bothPresent: true };
+
+	mkdirSync(dirname(targetDir), { recursive: true });
+	try {
+		renameSync(legacyDir, targetDir);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" && !existsSync(legacyDir) && existsSync(targetDir)) {
+			// Another process moved it between our check and this call. Every
+			// spawned daemon worker runs this, so the race is routine, and the
+			// check-then-act is not atomic -- it must not pretend to be.
+			//
+			// Only this state counts as that race, and it is checked rather
+			// than assumed: the source gone and the target present is what a
+			// completed move leaves behind. ENOENT also means a component of
+			// either path was unreachable -- an unmounted parent, a home
+			// directory pulled out from under us -- and there nothing moved
+			// while the legacy tree still holds the user's configuration,
+			// credentials and sessions. Reporting that as "nothing to do"
+			// starts the agent on an empty directory in silence, which is the
+			// one outcome the caller's warning exists to prevent, so it falls
+			// through to the throw below and the caller retries next launch.
+			return { moved: false };
+		}
+		if (code === "EXDEV") {
+			// Different filesystems. Copy first and only remove the source once
+			// the copy is verified, so an interrupted move loses nothing.
+			//
+			// The copy lands in a sibling staging directory and is renamed into
+			// place, rather than being written straight into targetDir. cpSync
+			// can fail part way through -- ENOSPC, one unreadable file -- and a
+			// half-written targetDir would then satisfy the existsSync(targetDir)
+			// early return above on every later launch: the caller warns once,
+			// and the retry that warning promises can never happen again while
+			// the preserved legacy tree goes unread forever. Staging keeps the
+			// failure retryable, and the final rename is same-directory, so it
+			// cannot itself hit EXDEV.
+			//
+			// verbatimSymlinks, because this copy is one half of a move: it has
+			// to reproduce the tree as it is, not as it resolves from a place
+			// that is about to stop existing. Node's default resolves a relative
+			// symlink target against the source and writes it back as an
+			// absolute path, so a link pointing inside the tree comes out
+			// pointing into the legacy directory -- which the rmSync below then
+			// deletes, leaving every such link in the migrated tree dangling.
+			// These links are not hypothetical: migrateCommandsToPrompts renames
+			// commands/ to prompts/ and documents that it works on symlinks,
+			// because users link extension directories into a checked-out
+			// repository.
+			const stagingDir = `${targetDir}.migrating-${process.pid}`;
+			rmSync(stagingDir, { recursive: true, force: true });
+			try {
+				cpSync(legacyDir, stagingDir, { recursive: true, verbatimSymlinks: true });
+				renameSync(stagingDir, targetDir);
+			} catch (copyError) {
+				rmSync(stagingDir, { recursive: true, force: true });
+				throw copyError;
+			}
+			if (!existsSync(targetDir)) return { moved: false };
+			rmSync(legacyDir, { recursive: true, force: true });
+			return { moved: true, from: legacyDir };
+		}
+		throw error;
+	}
+	return { moved: true, from: legacyDir };
+}
+
+/** Removes the legacy directory's parent once the agent directory has moved
+ *  out of it, so an upgraded machine is not left with an empty ~/.prime next
+ *  to the ~/.wasmedge-agent that replaced it.
+ *
+ *  Only when it is genuinely empty. ~/.prime is not ours: Prime Inference
+ *  keeps its own credentials in ~/.prime/config.json, at exactly this path,
+ *  and that file is the provider's and survives the rebrand untouched. Any
+ *  entry at all -- that one included -- means the directory still has an
+ *  owner, so it stays. */
+function removeLegacyParentIfEmpty(legacyParentDir: string): void {
+	try {
+		if (readdirSync(legacyParentDir).length > 0) return;
+		rmdirSync(legacyParentDir);
+	} catch {
+		// Gone already, or not ours to remove. An empty directory left behind
+		// is untidy, never harmful, so nothing here is worth failing over.
+	}
+}
+
+/** True when a daemon from the release before the rename may still be holding
+ *  `endpoint`.
+ *
+ *  Presence, not liveness -- and it cannot become liveness here.
+ *  migrateAgentDirIfNeeded() runs synchronously at process entry, in
+ *  cli-main.ts, postinstall.ts and main.ts, before anything may resolve the
+ *  agent directory, and Node has no synchronous connect for a unix socket. So
+ *  a socket file left behind by an unclean shutdown is indistinguishable from
+ *  a live daemon. Do not read the result as a liveness check.
+ *
+ *  Windows is the exception, and is stronger rather than weaker: a named pipe
+ *  has no file to stat, but it appears in the pipe directory listing only
+ *  while a server holds it open, so there the check is closer to liveness than
+ *  to presence.
+ *
+ *  Both branches degrade to false. A directory listing is not guaranteed on
+ *  every Windows configuration, and neither branch may throw: this runs before
+ *  the application has started, and a failure to look must cost a warning, not
+ *  the process.
+ *
+ *  `platform` and `pipeDir` are parameters so both branches can be covered
+ *  from either host. Nothing passes them outside the tests. */
+export function legacyDaemonEndpointPresent(
+	endpoint: string,
+	platform: NodeJS.Platform = process.platform,
+	pipeDir: string = WINDOWS_PIPE_DIR,
+): boolean {
+	if (platform === "win32") {
+		// Split on the separator rather than using basename(): a test drives
+		// this branch from a POSIX host, where basename() does not treat a
+		// backslash as one and would compare the whole endpoint.
+		const pipeName = endpoint.slice(endpoint.lastIndexOf("\\") + 1).toLowerCase();
+		try {
+			return readdirSync(pipeDir).some((entry) => entry.toLowerCase() === pipeName);
+		} catch {
+			return false;
+		}
+	}
+	try {
+		return lstatSync(endpoint).isSocket();
+	} catch {
+		// Nothing there, or nothing we may look at.
+		return false;
+	}
+}
+
+/** Queues the warning for a daemon left over from the release before the
+ *  rename, given what the move ended up doing.
+ *
+ *  Why this matters. That daemon holds absolute paths under the legacy agent
+ *  directory, and this build cannot reach it: the endpoint moved with the
+ *  name, so the new client looks somewhere else and starts a daemon of its
+ *  own. The old one's next write then repopulates the legacy directory with
+ *  session state nothing here will read again.
+ *
+ *  Why the migration still happens, which is settled and should not be
+ *  reopened:
+ *
+ *  - The check above is presence, not liveness, and cannot become liveness at
+ *    process entry. A socket file left by an unclean shutdown looks exactly
+ *    like a running daemon.
+ *  - So refusing to migrate turns that false positive into a hard failure. In
+ *    the CLI the agent would refuse to start, and the remedy would be deleting
+ *    a socket file the user does not know exists. In postinstall.ts,
+ *    `npm install -g` would fail outright. Both are worse than the divergence
+ *    they prevent, and both are reachable by accident.
+ *  - The failure mode as it stands is bounded and reported: nothing is
+ *    destroyed, the legacy tree keeps whatever the old daemon writes next, and
+ *    the next launch finds both directories and says so.
+ *
+ *  Stopping the daemon is not this code's to do either. It is a process the
+ *  user owns, and one of the three callers is a package postinstall script.
+ *
+ *  The text describes the state as it is once this returns, because that is
+ *  when a human can read it: the queue is drained by a reporter much later,
+ *  well after the move. Promising a window to act before the move would be a
+ *  window that does not exist.
+ *
+ *  Routed through LEGACY_NAME_WARNINGS for the same reason the
+ *  both-directories warning is: it is the one deprecation channel every mode
+ *  already drains, and it never reaches stdout, which is a protocol surface
+ *  for --mode acp, rpc and --json. */
+function queueLegacyDaemonWarning(endpoint: string, legacyDir: string, targetDir: string, moved: boolean): void {
+	const state = moved
+		? `Your configuration has moved to ${targetDir}.`
+		: `${targetDir} is the configuration directory in use now.`;
+	const warning =
+		`${state} A daemon from the previous release may still be running on ${endpoint}, ` +
+		`and this build cannot reach it; until you stop it, it can write session state into ` +
+		`${legacyDir}, which is no longer read. Stop it and start ${APP_NAME} again.`;
+	if (!LEGACY_NAME_WARNINGS.includes(warning)) LEGACY_NAME_WARNINGS.push(warning);
+}
+
+/** Wire-up for the one-time config directory move. Separate from
+ *  runMigrations because it must precede the logger, which resolves the agent
+ *  directory lazily on its first write. */
+export function migrateAgentDirIfNeeded(): AgentDirMigrationResult {
+	const legacyDir = join(homedir(), ".prime", "agent");
+	const targetDir = getAgentDir();
+	// Read before the move, because the move is what makes the old daemon's
+	// paths stale: this has to record the endpoint as it was when the process
+	// started, not as it looks once this function has already changed what the
+	// old daemon is pointing at. The warning itself is composed afterwards, so
+	// it can describe what actually happened -- nobody reads it before then,
+	// because the queue is drained by a reporter much later.
+	const legacyEndpoint = legacyDaemonEndpoint();
+	const legacyDaemonPresent = legacyDaemonEndpointPresent(legacyEndpoint);
+	try {
+		const result = migrateAgentDirToWasmEdge(legacyDir, targetDir);
+		if (result.bothPresent) {
+			// The never-clobber rule is correct but silent, and silence here reads
+			// as data loss: the legacy tree still holds the user's auth, sessions
+			// and settings while the agent starts from an empty new directory.
+			// Routed through LEGACY_NAME_WARNINGS rather than a console write of
+			// its own so it drains through the one deprecation channel every mode
+			// already renders -- the blocking interactive one and the terse
+			// stderr counterpart alike -- and never onto stdout, which is a
+			// protocol surface for --mode acp, rpc and --json.
+			const warning =
+				`${legacyDir} and ${targetDir} both exist, so nothing was migrated. ` +
+				`${targetDir} is the one in use; ${legacyDir} is ignored. ` +
+				`Move anything you still need out of ${legacyDir} and delete it.`;
+			if (!LEGACY_NAME_WARNINGS.includes(warning)) LEGACY_NAME_WARNINGS.push(warning);
+		}
+		if (result.moved) removeLegacyParentIfEmpty(dirname(legacyDir));
+		if (legacyDaemonPresent) queueLegacyDaemonWarning(legacyEndpoint, legacyDir, targetDir, result.moved);
+		return result;
+	} catch (error) {
+		// The move runs as the first statement of main(), so an error that
+		// propagated from here would stop the application from starting at all --
+		// a file the old daemon still holds open on Windows (EPERM) or an
+		// unreadable directory (EACCES) is enough. Absorb it here rather than
+		// weakening migrateAgentDirToWasmEdge, whose selective catch is the point:
+		// the legacy tree is left exactly as it was, and the move is idempotent,
+		// so the next launch retries it. A warning plus a fresh config directory
+		// beats a binary that will not run.
+		//
+		// That retry has one condition, and reporting `failed` rather than
+		// folding it into the plain `{ moved: false }` is what lets a caller
+		// honour it: the retry survives only while targetDir stays absent,
+		// because the never-clobber rule refuses the move once both directories
+		// exist. Whatever creates targetDir first therefore decides that the
+		// legacy tree is never read again. postinstall.ts is the caller that can
+		// create it with no user watching -- `npm install -g` with the
+		// installer's tool bootstrap enabled -- so it reads this flag and stops
+		// before its bootstrap work.
+		//
+		// stderr, not stdout: stdout is a protocol surface for --mode acp, rpc
+		// and --json, and a warning written there would corrupt the stream.
+		console.error(
+			chalk.yellow(
+				`Warning: could not move ${legacyDir} to ${targetDir}: ${error instanceof Error ? error.message : error}\n` +
+					`Continuing with ${targetDir}. Your existing configuration is untouched in ${legacyDir}, and the move is retried on the next launch -- but only for as long as ${targetDir} does not exist. Once it does, move what you still need out of ${legacyDir} yourself.`,
+			),
+		);
+		return { moved: false, failed: true };
+	}
+}
+
+/**
  * Run all migrations. Called once on startup.
  *
  * @returns Object with migration results and deprecation warnings
@@ -419,6 +741,14 @@ export function runMigrations(cwd: string): {
 	migrateLegacySessionDirsToSessionRoot();
 	migrateToolsToBin();
 	migrateKeybindingsConfigFile();
-	const deprecationWarnings = migrateExtensionSystem(cwd);
+	// migrateExtensionSystem() must run, and its return value must be captured,
+	// before LEGACY_NAME_WARNINGS is spread below: it calls getProjectConfigDir(cwd)
+	// internally, which can push a fresh warning. Array-literal spread elements
+	// evaluate left to right, so inlining the call as the second spread operand
+	// -- [...LEGACY_NAME_WARNINGS, ...migrateExtensionSystem(cwd)] -- would read
+	// LEGACY_NAME_WARNINGS before that push ever happens and silently drop the
+	// warning. This bit the session-dir warning once already (commit 51696c37).
+	const extensionWarnings = migrateExtensionSystem(cwd);
+	const deprecationWarnings = [...LEGACY_NAME_WARNINGS, ...extensionWarnings];
 	return { migratedAuthProviders, deprecationWarnings };
 }

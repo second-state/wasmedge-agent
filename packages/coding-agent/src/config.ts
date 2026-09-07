@@ -508,11 +508,14 @@ export const ENV_LEGACY_SESSION_DIR = `${envPrefix}_CODING_AGENT_SESSION_DIR`;
  *  Internal (*_INTERNAL_*) and test (*_TEST_*) variables are renamed
  *  outright, following the WP8 precedent: no user sets them.
  *  WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE is renamed outright for the same
- *  reason despite not matching that naming pattern: it is a same-process
- *  relaunch signal that interactive-mode.ts writes into a child's env and
- *  package-manager-cli.ts/public-command.ts read back in that same child,
- *  always the current build on both ends -- there is no history-spanning
- *  scenario in which an old binary's name needs to be honored by a new one.
+ *  reason despite not matching that naming pattern, and this is deliberate
+ *  rather than an oversight: it is a relaunch signal that interactive-mode.ts
+ *  writes into the environment of a child it spawns from process.execPath and
+ *  the current entrypoint, and that package-manager-cli.ts and
+ *  public-command.ts read back inside that child. Both ends are the same
+ *  build by construction, so no old binary's name is ever presented to a new
+ *  one and a fallback here could never fire. Adding one back would be dead
+ *  code, not compatibility.
  *  PRIME_API_KEY is absent on purpose -- it belongs to Prime Inference, not
  *  to us. */
 const LEGACY_ENV_NAMES: ReadonlyArray<string> = [
@@ -606,11 +609,29 @@ export function getShareViewerUrl(gistId: string): string {
 
 /** Get the agent config directory (e.g., ~/.wasmedge-agent/) */
 export function getAgentDir(): string {
-	const envDir = process.env[ENV_AGENT_DIR];
+	const envDir = readLegacyEnv(ENV_AGENT_DIR);
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
 	return join(homedir(), CONFIG_DIR_NAME);
+}
+
+/** Project-local config directory, with a one-release fallback to the legacy
+ *  name. Project directories live inside users' own repositories, so unlike
+ *  the home directory we cannot migrate them -- we can only keep reading
+ *  them. Resolved per call rather than cached: cwd changes between sessions
+ *  and the directory can appear while the process runs. */
+export function getProjectConfigDir(cwd: string): string {
+	const current = join(cwd, CONFIG_DIR_NAME);
+	if (existsSync(current)) return current;
+
+	const legacy = join(cwd, ".prime", "agent");
+	if (existsSync(legacy)) {
+		const warning = `${legacy} is deprecated; rename it to ${CONFIG_DIR_NAME}. The old name stops working after the next release.`;
+		if (!LEGACY_NAME_WARNINGS.includes(warning)) LEGACY_NAME_WARNINGS.push(warning);
+		return legacy;
+	}
+	return current;
 }
 
 /** Get path to user's custom themes directory */
@@ -727,9 +748,60 @@ export function getSessionsDir(agentDir: string = getAgentDir()): string {
 	return join(agentDir, "sessions");
 }
 
+/** The session root from the environment, if any variable names one.
+ *
+ *  Both current names resolve before either compatibility fallback, and that
+ *  ordering is the whole point. Resolving each pair in turn -- the short name
+ *  and its PRIME_AGENT_* fallback, then the long name and its own -- put
+ *  PRIME_AGENT_SESSION_DIR ahead of WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR,
+ *  so an upgraded environment that still exported the old short name went on
+ *  using the old directory after the user had set a current variable and had
+ *  every reason to think it took effect. A name we are asking people to stop
+ *  using cannot outrank one we are asking them to use.
+ *
+ *  Within each half the short name still wins, which is the precedence that
+ *  predates the rebrand and is not what changed here. */
 export function getSessionDirEnvOverride(): string | undefined {
-	const envDir = process.env[ENV_SESSION_DIR] ?? process.env[ENV_LEGACY_SESSION_DIR];
+	const envDir =
+		process.env[ENV_SESSION_DIR] ??
+		process.env[ENV_LEGACY_SESSION_DIR] ??
+		readLegacyEnv(ENV_SESSION_DIR) ??
+		readLegacyEnv(ENV_LEGACY_SESSION_DIR);
 	return envDir ? expandTildePath(envDir) : undefined;
+}
+
+/**
+ * Forces every legacy-aware getter -- env vars and the project-local config
+ * directory alike -- to resolve once, so any PRIME_AGENT_* or legacy
+ * project-directory fallback it finds lands in LEGACY_NAME_WARNINGS before
+ * runMigrations snapshots that array into deprecationWarnings.
+ *
+ * getAgentDir() already runs this early via migrateAgentDirIfNeeded(), and
+ * migration steps inside runMigrations happen to call getSessionDirEnvOverride()
+ * (via getSessionsDir(), for an unrelated reason: finding legacy per-cwd
+ * session directories to migrate) and getProjectConfigDir(cwd) (via
+ * migrateExtensionSystem(), for the unrelated commands->prompts migration)
+ * too -- but relying on either incidental call is exactly the kind of
+ * accident this compatibility window must not depend on. A refactor of
+ * either migration step that skips or reorders its call would silently stop
+ * that warning from ever reaching deprecationWarnings, in every mode, with
+ * nothing to catch it. (This is not hypothetical: runMigrations' own
+ * deprecationWarnings assembly once read LEGACY_NAME_WARNINGS via array
+ * spread -- `[...LEGACY_NAME_WARNINGS, ...migrateExtensionSystem(cwd)]` --
+ * which evaluates left to right and so drained the array before
+ * migrateExtensionSystem's call could push into it.)
+ *
+ * Requires cwd, so call this once cwd is known -- immediately before
+ * runMigrations(cwd) -- rather than at the very top of main() the way the
+ * env-only version of this function once was; nothing before that point
+ * depends on the warning having already landed. Its return value is
+ * intentionally unused: it exists only for the LEGACY_NAME_WARNINGS side
+ * effect, which is also why it looks deletable and must not be deleted.
+ */
+export function resolveLegacyNameWarningsEarly(cwd: string): void {
+	getAgentDir();
+	getSessionDirEnvOverride();
+	getProjectConfigDir(cwd);
 }
 
 /** Get path to debug log file */

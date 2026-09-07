@@ -188,9 +188,9 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "packages/coding-agent/src/config.ts",
-		allow: [/PRIME_AGENT_\*/, /`PRIME_AGENT_\$\{suffix\}`/],
+		allow: [/PRIME_AGENT_\*/, /`PRIME_AGENT_\$\{suffix\}`/, /PRIME_AGENT_SESSION_DIR/],
 		reason:
-			"the one-release env-name compatibility window cannot read or document a PRIME_AGENT_* fallback without naming the prefix it falls back to (rule R3); only the doc-comment's literal asterisked prefix and readLegacyEnv's template literal are exempt, so a bare PRIME_AGENT_ added anywhere else here still fails",
+			"the one-release env-name compatibility window cannot read or document a PRIME_AGENT_* fallback without naming the prefix it falls back to (rule R3), and getSessionDirEnvOverride's ordering comment cannot describe the collision it fixes without naming the one variable that used to outrank a current name; only the doc-comment's literal asterisked prefix, readLegacyEnv's template literal and that one name are exempt, so a bare PRIME_AGENT_ added anywhere else here still fails",
 	},
 	{
 		glob: "packages/coding-agent/src/config.ts",
@@ -291,12 +291,14 @@ const ALLOWLIST = [
 	{
 		glob: "packages/coding-agent/test/config.test.ts",
 		allow: [
+			/PRIME_AGENT_CODING_AGENT_SESSION_DIR/,
 			/PRIME_AGENT_CODING_AGENT_DIR/,
 			/PRIME_AGENT_INTERNAL_DAEMON_WORKER/,
+			/PRIME_AGENT_SESSION_DIR/,
 			/"\/usr\/local\/bin\/prime-agent"/,
 		],
 		reason:
-			"the covering test for the one-release compatibility window must set and assert the exact legacy names readLegacyEnv and warnIfLegacyAlias fall back to (rule R3); only these three literal values are exempt -- a bare PRIME_AGENT_ or prime-agent added anywhere else in this file still fails",
+			"the covering test for the one-release compatibility window must set and assert the exact legacy names readLegacyEnv and warnIfLegacyAlias fall back to (rule R3); the two session-dir names are the pair whose precedence against the current names is the whole point of those tests; only these five literal values are exempt -- a bare PRIME_AGENT_ or prime-agent added anywhere else in this file still fails",
 	},
 	{
 		glob: "packages/coding-agent/test/migrations.test.ts",

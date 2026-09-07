@@ -3,6 +3,7 @@
  * result formatting, and truncation are ported from the kernel-era Python
  * websearch skill so transcripts read identically. */
 
+import { readLegacyEnv } from "../config.js";
 import type { HostRequestHandler } from "./host-bridge/types.js";
 
 const SERPER_ENDPOINT = "https://google.serper.dev/search";
@@ -26,7 +27,7 @@ function asTrimmedString(value: unknown): string {
 }
 
 function envInt(name: string, fallback: number): number {
-	const parsed = Number.parseInt(process.env[name] ?? "", 10);
+	const parsed = Number.parseInt(readLegacyEnv(name) ?? "", 10);
 	return Number.isFinite(parsed) ? parsed : fallback;
 }
 

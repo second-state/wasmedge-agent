@@ -14,6 +14,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { OAuthAuthInfo } from "@earendil-works/pi-ai";
+import { readLegacyEnv } from "../config.js";
 
 export const PRIME_INFERENCE_PROVIDER_ID = "prime-inference";
 export const PRIME_INFERENCE_PROVIDER_NAME = "Prime Inference";
@@ -108,7 +109,7 @@ function stringField(data: Record<string, unknown>, key: string): string | undef
 }
 
 function stringEnv(name: string): string | undefined {
-	const value = process.env[name];
+	const value = readLegacyEnv(name);
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 

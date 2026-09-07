@@ -1,8 +1,15 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
+import { defaultDaemonSocketDir } from "./daemon-socket-dir.js";
+
+// Re-exported so every consumer keeps importing socket paths from the module
+// that owns them. The name itself lives in a leaf with no third-party imports,
+// because the config-directory migration needs its legacy counterpart at
+// process entry and must not pull this module's lockfile dependency in with
+// it.
+export { defaultDaemonSocketDir };
 
 const DAEMON_SOCKET_MODE = 0o600;
 const DAEMON_SOCKET_DIR_MODE = 0o700;
@@ -35,7 +42,7 @@ export interface DaemonSocketIdentity {
 
 export function defaultDaemonSocketPath(): string {
 	if (process.platform === "win32") {
-		return "\\\\.\\pipe\\prime-agent-daemon";
+		return "\\\\.\\pipe\\wasmedge-agent-daemon";
 	}
 	return join(defaultDaemonSocketDir(), "daemon.sock");
 }
@@ -209,11 +216,6 @@ function assertSocketLease(socketPath: string, lease: DaemonSocketPathLease): vo
 	if (lease.socketPath !== socketPath) {
 		throw new Error(`Daemon socket lease does not match ${socketPath}`);
 	}
-}
-
-export function defaultDaemonSocketDir(): string {
-	const suffix = typeof process.getuid === "function" ? String(process.getuid()) : "user";
-	return join(tmpdir(), `prime-agent-${suffix}`);
 }
 
 function ensureDefaultDaemonSocketDir(socketPath: string): void {

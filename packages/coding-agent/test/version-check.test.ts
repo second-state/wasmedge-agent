@@ -63,6 +63,16 @@ describe("version checks", () => {
 		);
 	});
 
+	it("falls back to PRIME_AGENT_DOWNLOAD_BASE_URL for one release when the current name is unset", async () => {
+		delete process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
+		process.env.PRIME_AGENT_DOWNLOAD_BASE_URL = "https://legacy.example.test";
+		const fetchMock = vi.fn(async () => Response.json({ version: "v1.2.4" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
+		expect(fetchMock).toHaveBeenCalledWith("https://legacy.example.test/latest.json", expect.any(Object));
+	});
+
 	it("keeps beta installations on the beta release manifest", async () => {
 		const fetchMock = vi.fn(async () => Response.json({ version: "v1.2.4-beta.124.1.abcdef0" }));
 		vi.stubGlobal("fetch", fetchMock);

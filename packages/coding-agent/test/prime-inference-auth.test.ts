@@ -67,13 +67,16 @@ describe("Prime Inference auth", () => {
 	let tempDir: string;
 	let configPath: string;
 	let originalTraceBaseUrl: string | undefined;
+	let originalLegacyTraceBaseUrl: string | undefined;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-prime-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		configPath = join(tempDir, "config.json");
 		originalTraceBaseUrl = process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
+		originalLegacyTraceBaseUrl = process.env.PRIME_AGENT_TRACES_BASE_URL;
 		delete process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
+		delete process.env.PRIME_AGENT_TRACES_BASE_URL;
 	});
 
 	afterEach(() => {
@@ -81,6 +84,11 @@ describe("Prime Inference auth", () => {
 			delete process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
 		} else {
 			process.env.WASMEDGE_AGENT_TRACES_BASE_URL = originalTraceBaseUrl;
+		}
+		if (originalLegacyTraceBaseUrl === undefined) {
+			delete process.env.PRIME_AGENT_TRACES_BASE_URL;
+		} else {
+			process.env.PRIME_AGENT_TRACES_BASE_URL = originalLegacyTraceBaseUrl;
 		}
 		if (existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });

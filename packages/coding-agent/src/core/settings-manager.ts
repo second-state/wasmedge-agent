@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { getAgentDir, getProjectConfigDir } from "../config.js";
 
 const RECENT_MODELS_LIMIT = 20;
 export const DEFAULT_IDLE_EVICTION_MINUTES = 90;
@@ -222,7 +222,7 @@ export class FileSettingsStorage implements SettingsStorage {
 
 	constructor(cwd: string, agentDir: string) {
 		this.globalSettingsPath = join(agentDir, "settings.json");
-		this.projectSettingsPath = join(cwd, CONFIG_DIR_NAME, "settings.json");
+		this.projectSettingsPath = join(getProjectConfigDir(cwd), "settings.json");
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {

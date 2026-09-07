@@ -77,4 +77,34 @@ describe("websearch.run host handler", () => {
 
 		await expect(handler({ query: "  " })).rejects.toThrow("non-empty query");
 	});
+
+	it("falls back to PRIME_AGENT_WEBSEARCH_TIMEOUT/NUM_RESULTS for one release when the current names are unset", async () => {
+		const originalTimeout = process.env.WASMEDGE_AGENT_WEBSEARCH_TIMEOUT;
+		const originalNumResults = process.env.WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS;
+		delete process.env.WASMEDGE_AGENT_WEBSEARCH_TIMEOUT;
+		delete process.env.WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS;
+		process.env.PRIME_AGENT_WEBSEARCH_TIMEOUT = "7";
+		process.env.PRIME_AGENT_WEBSEARCH_NUM_RESULTS = "2";
+		try {
+			const seen: unknown[] = [];
+			const handler = createWebsearchHostHandler({
+				resolveApiKey: () => "key-1",
+				fetchImpl: async (_query, _apiKey, timeoutSeconds, numResults) => {
+					seen.push([timeoutSeconds, numResults]);
+					return "RESULTS";
+				},
+			});
+
+			// No explicit timeout/num_results in the payload, so the handler must
+			// fall through to the legacy-aware env defaults.
+			await handler({ query: "rust wasi" });
+
+			expect(seen[0]).toEqual([7, 2]);
+		} finally {
+			delete process.env.PRIME_AGENT_WEBSEARCH_TIMEOUT;
+			delete process.env.PRIME_AGENT_WEBSEARCH_NUM_RESULTS;
+			if (originalTimeout !== undefined) process.env.WASMEDGE_AGENT_WEBSEARCH_TIMEOUT = originalTimeout;
+			if (originalNumResults !== undefined) process.env.WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS = originalNumResults;
+		}
+	});
 });
