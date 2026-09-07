@@ -25,6 +25,12 @@ export interface LatestPiRelease {
 	version: string;
 	packageName?: string;
 	installSpec?: string;
+	/** The manifest's SHA-256 for the tarball `installSpec` names, when it
+	 *  names one. Set only for a hex digest of the right length -- a field the
+	 *  host filled in with something else is no better than a missing one, and
+	 *  the caller has to be able to tell "the host did not say" apart from
+	 *  "the host said something unusable". */
+	installSha256?: string;
 }
 
 interface ParsedVersion {
@@ -159,6 +165,7 @@ export async function getLatestPiRelease(
 		package?: unknown;
 		packageName?: unknown;
 		tarball?: unknown;
+		tarballs?: unknown;
 		version?: unknown;
 	};
 	if (typeof data.version !== "string" || !data.version.trim()) {
@@ -177,8 +184,34 @@ export async function getLatestPiRelease(
 	}
 	if (installSpec) {
 		release.installSpec = installSpec;
+		const sha256 = findTarballSha256(data.tarballs, data.tarball);
+		if (sha256) {
+			release.installSha256 = sha256;
+		}
 	}
 	return release;
+}
+
+/** The manifest's SHA-256 for one tarball, matched on the file name that the
+ *  `tarball` path ends with.
+ *
+ *  The manifest carries both: `tarball` is the path to install, and `tarballs`
+ *  is every artifact in the release with its digest, which is also what
+ *  SHA256SUMS is generated from. They are matched by file name rather than by
+ *  package, because `tarball` is a path and the package field beside it names
+ *  the package the release publishes rather than the file. */
+function findTarballSha256(tarballs: unknown, tarballPath: unknown): string | undefined {
+	if (!Array.isArray(tarballs) || typeof tarballPath !== "string") return undefined;
+	const file = tarballPath.trim().split("/").pop();
+	if (!file) return undefined;
+	for (const entry of tarballs) {
+		if (!entry || typeof entry !== "object") continue;
+		const candidate = entry as { file?: unknown; sha256?: unknown };
+		if (candidate.file !== file || typeof candidate.sha256 !== "string") continue;
+		const sha256 = candidate.sha256.trim().toLowerCase();
+		if (/^[0-9a-f]{64}$/.test(sha256)) return sha256;
+	}
+	return undefined;
 }
 
 export async function getLatestPiVersion(

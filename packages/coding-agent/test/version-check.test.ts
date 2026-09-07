@@ -104,6 +104,55 @@ describe("version checks", () => {
 		});
 	});
 
+	it("carries the manifest's checksum for the tarball it names", async () => {
+		const sha256 = "a".repeat(64);
+		const fetchMock = vi.fn(async () =>
+			Response.json({
+				package: "wasmedge-agent",
+				tarball: "releases/v1.2.4/wasmedge-agent-1.2.4.tgz",
+				tarballs: [
+					{ package: "@earendil-works/pi-ai", file: "pi-ai-1.2.4.tgz", sha256: "b".repeat(64) },
+					{ package: "wasmedge-agent", file: "wasmedge-agent-1.2.4.tgz", sha256 },
+				],
+				version: "v1.2.4",
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		// Matched on the file name the tarball path ends with, not on the
+		// package field beside it -- that names what the release publishes,
+		// which is not the same question.
+		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
+			installSha256: sha256,
+			installSpec: `${configuredDownloadBaseUrl}/releases/v1.2.4/wasmedge-agent-1.2.4.tgz`,
+			packageName: "wasmedge-agent",
+			version: "1.2.4",
+		});
+	});
+
+	it.each([
+		["the entry is for another file", [{ file: "wasmedge-agent-9.9.9.tgz", sha256: "a".repeat(64) }]],
+		["the digest is the wrong length", [{ file: "wasmedge-agent-1.2.4.tgz", sha256: "abc123" }]],
+		["the digest is not hex", [{ file: "wasmedge-agent-1.2.4.tgz", sha256: "z".repeat(64) }]],
+		["the digest is not a string", [{ file: "wasmedge-agent-1.2.4.tgz", sha256: 42 }]],
+		["there is no tarballs list at all", undefined],
+	])("reports no checksum when %s", async (_label, tarballs) => {
+		// The caller has to be able to tell "the host did not say" from "the
+		// host said something unusable", because it refuses the update either
+		// way and a half-read field would look like the first.
+		const fetchMock = vi.fn(async () =>
+			Response.json({
+				package: "wasmedge-agent",
+				tarball: "releases/v1.2.4/wasmedge-agent-1.2.4.tgz",
+				tarballs,
+				version: "v1.2.4",
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getLatestPiRelease("1.2.3")).resolves.not.toHaveProperty("installSha256");
+	});
+
 	it("refuses to run the update check when no release host is configured", async () => {
 		// The value this replaced was upstream's release bucket. Left in place,
 		// every interactive startup asked upstream for the latest version, and
