@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	checkForNewPiVersion,
 	comparePackageVersions,
@@ -7,7 +7,9 @@ import {
 	isNewerPackageVersion,
 } from "../src/utils/version-check.js";
 
-const defaultPrimeAgentDownloadBaseUrl = "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev";
+// There is no compiled-in release host any more, so every test that expects a
+// fetch has to say which host it expects one against.
+const configuredDownloadBaseUrl = "https://releases.example.test";
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 const originalOffline = process.env.PI_OFFLINE;
 const originalWasmEdgeAgentDownloadBaseUrl = process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
@@ -20,6 +22,10 @@ function restoreEnv(name: string, value: string | undefined): void {
 	}
 	process.env[name] = value;
 }
+
+beforeEach(() => {
+	process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = configuredDownloadBaseUrl;
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -53,7 +59,7 @@ describe("version checks", () => {
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledWith(
-			`${defaultPrimeAgentDownloadBaseUrl}/latest.json`,
+			`${configuredDownloadBaseUrl}/latest.json`,
 			expect.objectContaining({
 				headers: expect.objectContaining({
 					"User-Agent": expect.stringMatching(/^wasmedge-agent\/1\.2\.3 /),
@@ -78,7 +84,7 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.4-beta.123.1.1234567")).resolves.toBe("1.2.4-beta.124.1.abcdef0");
-		expect(fetchMock).toHaveBeenCalledWith(`${defaultPrimeAgentDownloadBaseUrl}/beta.json`, expect.any(Object));
+		expect(fetchMock).toHaveBeenCalledWith(`${configuredDownloadBaseUrl}/beta.json`, expect.any(Object));
 	});
 
 	it("returns the active package and tarball install spec from the release manifest", async () => {
@@ -92,10 +98,30 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
-			installSpec: `${defaultPrimeAgentDownloadBaseUrl}/releases/v1.2.4/wasmedge-agent-1.2.4.tgz`,
+			installSpec: `${configuredDownloadBaseUrl}/releases/v1.2.4/wasmedge-agent-1.2.4.tgz`,
 			packageName: "wasmedge-agent",
 			version: "1.2.4",
 		});
+	});
+
+	it("refuses to run the update check when no release host is configured", async () => {
+		// The value this replaced was upstream's release bucket. Left in place,
+		// every interactive startup asked upstream for the latest version, and
+		// /update would have installed upstream's own release tarball over this
+		// build, because package-manager-cli takes the package name and the
+		// install spec straight out of that manifest.
+		delete process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
+		delete process.env.PRIME_AGENT_DOWNLOAD_BASE_URL;
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		// Loud where a caller can act on it: the message names the variable to
+		// set and says why there is no default.
+		await expect(getLatestPiRelease("1.2.3")).rejects.toThrow(/WASMEDGE_AGENT_DOWNLOAD_BASE_URL/);
+		// Quiet where it would only be noise: startup self-disables instead.
+		await expect(checkForNewPiVersion("1.2.3")).resolves.toBeUndefined();
+		// Either way, nothing is fetched from a host we do not own.
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("skips api calls when version checks are disabled", async () => {

@@ -429,6 +429,10 @@ interface SelfUpdatePlan {
 	packageName: string;
 	shouldRun: boolean;
 	targetVersion?: string;
+	/** Why the release check could not run at all. Set means "report this and
+	 *  stop"; it is not the same as `shouldRun: false`, which means the check
+	 *  ran and found nothing newer. */
+	blockedReason?: string;
 }
 
 function setSelfUpdateNoChangeExitCode(): void {
@@ -439,19 +443,80 @@ function setSelfUpdateNoChangeExitCode(): void {
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	try {
 		const latestRelease = await getLatestPiRelease(VERSION);
-		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
-		const installSpec = latestRelease?.installSpec ?? packageName;
-		const packageRenameRequiresUpdate = !latestRelease?.installSpec && packageName !== PACKAGE_NAME;
-		if (
-			force ||
-			!latestRelease ||
-			packageRenameRequiresUpdate ||
-			isNewerPackageVersion(latestRelease.version, VERSION)
-		) {
-			return { installSpec, packageName, shouldRun: true, targetVersion: latestRelease?.version };
+		if (!latestRelease) {
+			// No release was identified, so there is nothing to install and no
+			// name to install it under except PACKAGE_NAME -- our own, which
+			// nothing on a registry publishes on our behalf. An install spec is
+			// only trustworthy when it came from the configured release host.
+			//
+			// getLatestPiRelease returns undefined rather than throwing for the
+			// ordinary reasons: PI_OFFLINE or PI_SKIP_VERSION_CHECK is set, the
+			// host answered with an error status, or the manifest carried no
+			// usable version. None of those is evidence that an update exists,
+			// and each used to end in a global install of our own package name.
+			//
+			// force does not reach past this. It exists to bypass the version
+			// comparison -- install the release even though it is not newer --
+			// and there is no release here to install. Forcing an update to an
+			// unidentified artifact is not something a user can ask for.
+			return {
+				installSpec: PACKAGE_NAME,
+				packageName: PACKAGE_NAME,
+				shouldRun: false,
+				blockedReason:
+					"The update check found no release to install, so nothing was updated. " +
+					"Set WASMEDGE_AGENT_DOWNLOAD_BASE_URL to the WasmEdge Agent release base URL if it is unset, " +
+					"clear PI_OFFLINE and PI_SKIP_VERSION_CHECK if either is set, " +
+					"and check that the release host serves a manifest for this version.",
+			};
 		}
-	} catch {
-		return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: true };
+		if (!latestRelease.installSpec && !latestRelease.packageName) {
+			// A version and nothing else. The manifest identified no artifact
+			// and no package, so the only spec left is PACKAGE_NAME -- our own
+			// constant, which the host never confirmed and which nothing on a
+			// registry publishes on our behalf. A stale or malformed manifest
+			// answering is not evidence that a package under our name is ours.
+			//
+			// The release is actionable only when the host named something to
+			// install: a tarball URL, or a package name. Neither here, so this
+			// stops for the same reason a missing release does, and before the
+			// version comparison rather than after it -- a host that cannot
+			// describe an install is misconfigured whether or not it happens to
+			// be advertising a newer version this minute.
+			return {
+				installSpec: PACKAGE_NAME,
+				packageName: PACKAGE_NAME,
+				shouldRun: false,
+				blockedReason:
+					`The release manifest names version ${latestRelease.version} but neither a tarball nor a ` +
+					"package, so there is nothing identified to install and nothing was updated. " +
+					"A manifest must carry a tarball URL or a package name for the update to run.",
+			};
+		}
+		const packageName = latestRelease.packageName ?? PACKAGE_NAME;
+		const installSpec = latestRelease.installSpec ?? packageName;
+		// The manifest named a package but no artifact: install that name and
+		// remove ours. The name came from the release host, so it is as
+		// trustworthy as a tarball URL from the same manifest would be.
+		const packageRenameRequiresUpdate = !latestRelease.installSpec && packageName !== PACKAGE_NAME;
+		if (force || packageRenameRequiresUpdate || isNewerPackageVersion(latestRelease.version, VERSION)) {
+			return { installSpec, packageName, shouldRun: true, targetVersion: latestRelease.version };
+		}
+	} catch (error) {
+		// A failed release check is not a licence to install from a registry.
+		// PACKAGE_NAME is this build's own package name, and the release ships
+		// tarballs under it -- nothing published under that name on a registry
+		// is ours. Falling back to `install -g <PACKAGE_NAME>` would hand the
+		// user's agent directory to whoever owns that name upstream of us, on
+		// the strength of an error. Report the reason and stop; for the common
+		// case, the reason getLatestPiRelease throws already names
+		// WASMEDGE_AGENT_DOWNLOAD_BASE_URL, which is the actual remedy.
+		return {
+			installSpec: PACKAGE_NAME,
+			packageName: PACKAGE_NAME,
+			shouldRun: false,
+			blockedReason: error instanceof Error ? error.message : String(error),
+		};
 	}
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
@@ -1568,6 +1633,11 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 				}
 				if (updateTargetIncludesSelf(target)) {
 					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
+					if (selfUpdatePlan.blockedReason) {
+						console.error(chalk.red(`Error: ${selfUpdatePlan.blockedReason}`));
+						process.exitCode = 1;
+						return true;
+					}
 					if (!selfUpdatePlan.shouldRun) {
 						setSelfUpdateNoChangeExitCode();
 						return true;

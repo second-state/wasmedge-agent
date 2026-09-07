@@ -252,7 +252,7 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ### Update checks
 
-WasmEdge Agent stable builds fetch `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json` to check whether a newer version exists. Beta builds fetch `beta.json` and remain on the beta channel. Override the base URL with `WASMEDGE_AGENT_DOWNLOAD_BASE_URL`. Disable version checks with `PI_SKIP_VERSION_CHECK=1`.
+WasmEdge Agent has no release host yet, so the update check is off by default: with no base URL configured it makes no request at all. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to enable it. Stable builds then fetch `latest.json` under that base URL; beta builds fetch `beta.json` and remain on the beta channel. Disable version checks outright with `PI_SKIP_VERSION_CHECK=1`.
 
 Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -655,7 +655,7 @@ wasmedge-agent --thinking high "Solve this complex problem"
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
 | `PI_SKIP_VERSION_CHECK` | Skip the WasmEdge Agent version update check at startup. This prevents the release manifest request |
-| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Override the WasmEdge Agent release manifest and tarball base URL |
+| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Base URL for the WasmEdge Agent release manifest and tarballs. Unset by default, which disables the update check |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
 | `WASMEDGE_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |

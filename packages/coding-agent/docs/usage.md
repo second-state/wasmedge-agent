@@ -352,7 +352,7 @@ wasmedge-agent --tools rust -p "Review the code"
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
 | `PI_SKIP_VERSION_CHECK` | Skip the WasmEdge Agent version update check at startup. This prevents the release manifest request |
-| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Override the WasmEdge Agent release manifest and tarball base URL |
+| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Base URL for the WasmEdge Agent release manifest and tarballs. Unset by default, which disables the update check |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing when it has `agent_traces` scope |
 | `WASMEDGE_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |

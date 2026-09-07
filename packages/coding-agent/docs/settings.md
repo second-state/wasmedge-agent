@@ -48,7 +48,7 @@ Edit directly or use `/settings` for common options.
 
 ### Update Checks
 
-Stable builds fetch the release manifest at `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json`. Beta builds fetch `beta.json` and continue following beta updates. Override the base URL with `WASMEDGE_AGENT_DOWNLOAD_BASE_URL`.
+The release manifest has no default host: set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` or no update check runs. Stable builds then fetch `latest.json` under that base URL, and beta builds fetch `beta.json` and continue following beta updates.
 
 Set `PI_SKIP_VERSION_CHECK=1` to disable the WasmEdge Agent version update check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
