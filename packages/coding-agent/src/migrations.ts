@@ -22,6 +22,7 @@ import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import {
 	APP_NAME,
+	forgetLegacyNameWarnings,
 	getAgentDir,
 	getBinDir,
 	getProjectConfigDir,
@@ -397,11 +398,20 @@ function migrateExtensionSystem(cwd: string): string[] {
 
 /**
  * Print deprecation warnings and wait for keypress.
+ *
+ * Records what it showed, in the same set the terse counterpart records into.
+ * That set is the run's delivery log, and it is what resetReportedLegacyWarnings
+ * consults to decide which warnings belong to a run that has finished -- so a
+ * warning delivered only through this channel, and never written down, survived
+ * into an embedder's next call to main() and was shown again with the condition
+ * that caused it already gone. It also stops this channel and a later drain in
+ * the same run from saying the same thing twice.
  */
 export async function showDeprecationWarnings(warnings: string[]): Promise<void> {
 	if (warnings.length === 0) return;
 
 	for (const warning of warnings) {
+		reportedLegacyWarnings.add(warning);
 		console.log(chalk.yellow(`Warning: ${warning}`));
 	}
 	console.log(chalk.yellow(`\nMove your extensions to the extensions/ directory.`));
@@ -449,8 +459,16 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
 const reportedLegacyWarnings = new Set<string>();
 
 /** Per run of main(), matching resetTimings(): an embedder calling main()
- *  twice gets the reporting two processes would. */
+ *  twice gets the reporting two processes would.
+ *
+ *  Both halves of the bookkeeping, because they are one fact split in two.
+ *  Forgetting that a warning was written, while leaving the warning itself in
+ *  a collection that outlives the run, is what made the second run reprint the
+ *  first run's warnings with nothing left to justify them. Only the delivered
+ *  ones go: see forgetLegacyNameWarnings() for the warning that the process
+ *  entry point collects before main() exists and nothing can re-derive. */
 export function resetReportedLegacyWarnings(): void {
+	forgetLegacyNameWarnings(reportedLegacyWarnings);
 	reportedLegacyWarnings.clear();
 }
 
