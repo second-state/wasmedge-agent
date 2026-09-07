@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import type { ImageContent, TextContent, UserMessage } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { readFileSync, rmSync, statSync } from "fs";
-import { resolve, sep } from "path";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { join, resolve, sep } from "path";
 import { selectConfig } from "./cli/config-selector.js";
 import {
 	ensureInteractiveDaemonRunning,
@@ -430,6 +432,10 @@ interface SelfUpdatePlan {
 	packageName: string;
 	shouldRun: boolean;
 	targetVersion?: string;
+	/** The manifest's digest for installSpec, when installSpec is a tarball
+	 *  URL. Absent for a package-name install, where the registry client does
+	 *  its own integrity check. */
+	installSha256?: string;
 	/** Why the release check could not run at all. Set means "report this and
 	 *  stop"; it is not the same as `shouldRun: false`, which means the check
 	 *  ran and found nothing newer. */
@@ -501,7 +507,13 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 		// trustworthy as a tarball URL from the same manifest would be.
 		const packageRenameRequiresUpdate = !latestRelease.installSpec && packageName !== PACKAGE_NAME;
 		if (force || packageRenameRequiresUpdate || isNewerPackageVersion(latestRelease.version, VERSION)) {
-			return { installSpec, packageName, shouldRun: true, targetVersion: latestRelease.version };
+			return {
+				installSpec,
+				packageName,
+				shouldRun: true,
+				targetVersion: latestRelease.version,
+				...(latestRelease.installSha256 ? { installSha256: latestRelease.installSha256 } : {}),
+			};
 		}
 	} catch (error) {
 		// A failed release check is not a licence to install from a registry.
@@ -522,6 +534,55 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
 	return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: false };
+}
+
+const SELF_UPDATE_DOWNLOAD_TIMEOUT_MS = 120_000;
+
+/** True for an install spec that is a URL we fetch ourselves.
+ *
+ *  The other shape a plan can carry is a package name, which the package
+ *  manager resolves against a registry and checks against that registry's own
+ *  integrity metadata. This is the shape nothing checks. */
+function isRemoteTarballSpec(installSpec: string): boolean {
+	return /^https?:\/\//i.test(installSpec);
+}
+
+/** Fetches a release tarball, verifies it against the manifest's digest, and
+ *  writes it where the package manager can install it from.
+ *
+ *  The install command used to receive the URL and hand it straight to
+ *  `npm install -g`, which downloads it, unpacks it and runs its postinstall
+ *  script. Nothing between the release host and that script ever compared the
+ *  bytes to anything -- and the manifest has carried their digest all along,
+ *  which is the same digest SHA256SUMS is generated from and the same one
+ *  install.sh already verifies before it unpacks anything. The two install
+ *  paths now check the same thing.
+ *
+ *  Buffered rather than streamed to disk: the check has to happen before any
+ *  of it reaches the package manager, so a partial file on disk would be a
+ *  file something else could pick up. A release tarball is a few tens of
+ *  megabytes at most. */
+async function downloadVerifiedTarball(
+	url: string,
+	expectedSha256: string,
+): Promise<{ path: string; cleanup: () => void }> {
+	const response = await fetch(url, { signal: AbortSignal.timeout(SELF_UPDATE_DOWNLOAD_TIMEOUT_MS) });
+	if (!response.ok) {
+		throw new Error(`Downloading ${url} failed with HTTP ${response.status}.`);
+	}
+	const bytes = Buffer.from(await response.arrayBuffer());
+	const actual = createHash("sha256").update(bytes).digest("hex");
+	if (actual !== expectedSha256) {
+		throw new Error(
+			`The downloaded release does not match the checksum the manifest published for it. ` +
+				`Expected ${expectedSha256}, got ${actual}. Nothing was installed.`,
+		);
+	}
+	const dir = mkdtempSync(join(tmpdir(), "wasmedge-agent-update-"));
+	const name = url.split("/").pop() || "package.tgz";
+	const path = join(dir, name);
+	writeFileSync(path, bytes);
+	return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -1651,61 +1712,105 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 						setSelfUpdateNoChangeExitCode();
 						return true;
 					}
-					const selfUpdateCommand = getSelfUpdateCommand(
-						PACKAGE_NAME,
-						selfUpdateNpmCommand,
-						selfUpdatePlan.installSpec,
-						selfUpdatePlan.packageName,
-					);
-					if (!selfUpdateCommand) {
-						printSelfUpdateUnavailable(
+					// A tarball URL is the one install spec nothing else checks:
+					// the package manager fetches it, unpacks it and runs its
+					// postinstall script, with no registry integrity metadata
+					// behind it. The manifest publishes its digest, so verify
+					// before the package manager ever sees the bytes -- and
+					// refuse a manifest that names a tarball without one, the
+					// way install.sh refuses a release whose SHA256SUMS it
+					// cannot check the tarball against.
+					let verifiedTarball: { path: string; cleanup: () => void } | undefined;
+					if (isRemoteTarballSpec(selfUpdatePlan.installSpec)) {
+						if (!selfUpdatePlan.installSha256) {
+							console.error(
+								chalk.red(
+									`Error: the release manifest names ${selfUpdatePlan.installSpec} to install but no ` +
+										"SHA-256 for it, so the download cannot be verified and nothing was updated. " +
+										"A manifest that names a tarball must publish its checksum alongside it.",
+								),
+							);
+							process.exitCode = 1;
+							return true;
+						}
+						try {
+							verifiedTarball = await downloadVerifiedTarball(
+								selfUpdatePlan.installSpec,
+								selfUpdatePlan.installSha256,
+							);
+						} catch (error: unknown) {
+							console.error(chalk.red(`Error: ${formatUnknownError(error)}`));
+							process.exitCode = 1;
+							return true;
+						}
+					}
+					try {
+						const installSpec = verifiedTarball?.path ?? selfUpdatePlan.installSpec;
+						const selfUpdateCommand = getSelfUpdateCommand(
+							PACKAGE_NAME,
 							selfUpdateNpmCommand,
-							selfUpdatePlan.installSpec,
+							installSpec,
 							selfUpdatePlan.packageName,
 						);
-						process.exitCode = 1;
-						return true;
-					}
-					// Confirm before the install, since upgrading the daemon afterward stops and resumes busy work.
-					const daemonSocketPath = resolveUpdateDaemonSocketPath(options.daemonSocketPath);
-					const daemonProbe = await probeRunningDaemonSessions(daemonSocketPath);
-					if (!(await confirmDaemonSessionLossBeforeUpdate(daemonProbe, options.force))) {
-						if (process.stdin.isTTY) {
-							console.log(chalk.dim("Update cancelled."));
+						if (!selfUpdateCommand) {
+							// Reported against the spec the manifest named, not the
+							// temporary file it was verified into: the instruction
+							// is for a human to run later, and that path is gone by
+							// then.
+							printSelfUpdateUnavailable(
+								selfUpdateNpmCommand,
+								selfUpdatePlan.installSpec,
+								selfUpdatePlan.packageName,
+							);
+							process.exitCode = 1;
+							return true;
 						}
-						process.exitCode = 1;
-						return true;
-					}
-					try {
-						await runSelfUpdate(selfUpdateCommand);
-					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : "Unknown package command error";
-						console.error(chalk.red(`Error: ${message}`));
-						printSelfUpdateFallback(selfUpdateCommand);
-						process.exitCode = 1;
-						return true;
-					}
-					const versionChange = selfUpdatePlan.targetVersion
-						? ` from v${VERSION} to v${selfUpdatePlan.targetVersion}`
-						: "";
-					console.log(chalk.green(`Updated ${APP_NAME}${versionChange}`));
-					if (process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] === "1") {
-						return true;
-					}
-					try {
-						const status = await launchDaemonUpdateRestartCoordinator({
-							socketPath: daemonSocketPath,
-							agentDir,
-							cwd,
-							originActiveSessionId: process.env[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV],
-						});
-						reportDaemonUpdateRestartStatus(status);
-					} catch (error: unknown) {
-						console.error(
-							chalk.yellow(
-								`Warning: updated, but could not coordinate the daemon restart (${formatUnknownError(error)}).`,
-							),
-						);
+						// Confirm before the install, since upgrading the daemon afterward stops and resumes busy work.
+						const daemonSocketPath = resolveUpdateDaemonSocketPath(options.daemonSocketPath);
+						const daemonProbe = await probeRunningDaemonSessions(daemonSocketPath);
+						if (!(await confirmDaemonSessionLossBeforeUpdate(daemonProbe, options.force))) {
+							if (process.stdin.isTTY) {
+								console.log(chalk.dim("Update cancelled."));
+							}
+							process.exitCode = 1;
+							return true;
+						}
+						try {
+							await runSelfUpdate(selfUpdateCommand);
+						} catch (error: unknown) {
+							const message = error instanceof Error ? error.message : "Unknown package command error";
+							console.error(chalk.red(`Error: ${message}`));
+							printSelfUpdateFallback(selfUpdateCommand);
+							process.exitCode = 1;
+							return true;
+						}
+						const versionChange = selfUpdatePlan.targetVersion
+							? ` from v${VERSION} to v${selfUpdatePlan.targetVersion}`
+							: "";
+						console.log(chalk.green(`Updated ${APP_NAME}${versionChange}`));
+						if (process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] === "1") {
+							return true;
+						}
+						try {
+							const status = await launchDaemonUpdateRestartCoordinator({
+								socketPath: daemonSocketPath,
+								agentDir,
+								cwd,
+								originActiveSessionId: process.env[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV],
+							});
+							reportDaemonUpdateRestartStatus(status);
+						} catch (error: unknown) {
+							console.error(
+								chalk.yellow(
+									`Warning: updated, but could not coordinate the daemon restart (${formatUnknownError(error)}).`,
+								),
+							);
+						}
+					} finally {
+						// Every exit above leaves through here, including the
+						// early returns: the verified copy is ours and lives
+						// only for the length of the install.
+						verifiedTarball?.cleanup();
 					}
 				}
 				return true;

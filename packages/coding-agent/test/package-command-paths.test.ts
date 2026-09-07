@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -214,7 +215,24 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const fetchMock = vi.fn(async () => Response.json({ tarball: tarballUrl, version: VERSION }));
+		// The manifest has to carry the tarball's digest now: the update path
+		// verifies the bytes before the package manager sees them, so the stub
+		// answers the artifact request as well as the manifest one.
+		const tarballBytes = Buffer.from("a release tarball");
+		const fetchMock = vi.fn(async (input: string) =>
+			String(input).endsWith(".tgz")
+				? new Response(tarballBytes)
+				: Response.json({
+						tarball: tarballUrl,
+						tarballs: [
+							{
+								file: "wasmedge-agent-current.tgz",
+								sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+							},
+						],
+						version: VERSION,
+					}),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -225,11 +243,14 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 
 			expect(process.exitCode).toBeUndefined();
 			expect(errorSpy).not.toHaveBeenCalled();
-			expect(fetchMock).toHaveBeenCalledOnce();
+			// The manifest, then the artifact it names.
+			expect(fetchMock).toHaveBeenCalledTimes(2);
 			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
 			expect(recordedArgs).toContain(globalPrefix);
-			expect(recordedArgs).toContain(tarballUrl);
 			expect(recordedArgs).not.toContain(projectPrefix);
+			// The verified copy, not the URL: npm never fetches this itself.
+			expect(recordedArgs).not.toContain(tarballUrl);
+			expect(recordedArgs.some((arg) => arg.endsWith("wasmedge-agent-current.tgz"))).toBe(true);
 		} finally {
 			logSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -364,9 +385,24 @@ else {
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
+		const tarballBytes = Buffer.from("a release tarball");
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ package: "wasmedge-agent", tarball: tarballPath, version: "0.73.0" })),
+			vi.fn(async (input: string) =>
+				String(input).endsWith(".tgz")
+					? new Response(tarballBytes)
+					: Response.json({
+							package: "wasmedge-agent",
+							tarball: tarballPath,
+							tarballs: [
+								{
+									file: "wasmedge-agent-0.73.0.tgz",
+									sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+								},
+							],
+							version: "0.73.0",
+						}),
+			),
 		);
 
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -378,10 +414,14 @@ else {
 			expect(process.exitCode).toBeUndefined();
 			expect(errorSpy).not.toHaveBeenCalled();
 			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
-			expect(recordedCalls).toEqual([
-				expect.arrayContaining(["install", "-g", `${baseUrl}/${tarballPath}`]),
-				expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-			]);
+			// Installed from the verified copy this process wrote, not from the
+			// manifest's URL -- which is what the package manager used to be
+			// handed and fetch for itself.
+			expect(recordedCalls).toHaveLength(2);
+			expect(recordedCalls[0]).toEqual(expect.arrayContaining(["install", "-g"]));
+			expect(recordedCalls[0]).not.toContain(`${baseUrl}/${tarballPath}`);
+			expect(recordedCalls[0]?.some((arg) => arg.endsWith("wasmedge-agent-0.73.0.tgz"))).toBe(true);
+			expect(recordedCalls[1]).toEqual(expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]));
 		} finally {
 			logSpy.mockRestore();
 			errorSpy.mockRestore();

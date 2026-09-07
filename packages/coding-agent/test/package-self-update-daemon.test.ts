@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -674,9 +675,23 @@ describe("self-update daemon restart", () => {
 	it("still updates when the manifest names only a tarball", async () => {
 		// The other half of the actionable rule: no package name, but the host
 		// named the artifact, so the spec came from the host and not from us.
+		// What gets installed is the verified copy -- see the verification
+		// suite below -- but the release is still actionable without a package
+		// name, which is what this pins.
+		const body = Buffer.from("a release tarball");
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ tarball: "releases/current/wasmedge-agent.tgz", version: "999.0.0" })),
+			vi.fn(async (input: string) =>
+				String(input).endsWith(".tgz")
+					? new Response(body)
+					: Response.json({
+							tarball: "releases/current/wasmedge-agent.tgz",
+							tarballs: [
+								{ file: "wasmedge-agent.tgz", sha256: createHash("sha256").update(body).digest("hex") },
+							],
+							version: "999.0.0",
+						}),
+			),
 		);
 
 		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
@@ -705,6 +720,97 @@ describe("self-update daemon restart", () => {
 		} finally {
 			errorSpy.mockRestore();
 		}
+	});
+
+	describe("release tarball verification", () => {
+		const TARBALL_BYTES = Buffer.from("a release tarball");
+		const TARBALL_SHA256 = createHash("sha256").update(TARBALL_BYTES).digest("hex");
+
+		/** Answers the manifest request and the tarball request from one stub,
+		 *  which is what the update path actually makes: the manifest names an
+		 *  artifact, and the artifact is fetched separately. */
+		function stubRelease(options: { tarballs?: unknown; body?: Buffer } = {}) {
+			return vi.fn(async (input: string) => {
+				if (String(input).endsWith(".tgz")) {
+					return new Response(options.body ?? TARBALL_BYTES);
+				}
+				return Response.json({
+					package: PACKAGE_NAME,
+					tarball: "releases/v99.0.0/wasmedge-agent-99.0.0.tgz",
+					tarballs: options.tarballs,
+					version: "99.0.0",
+				});
+			});
+		}
+
+		it("installs the verified copy rather than the URL", async () => {
+			// The property that matters: what reaches the package manager is a
+			// local file this process wrote after checking it, never a URL for
+			// npm to fetch, unpack and run a postinstall script from unchecked.
+			vi.stubGlobal(
+				"fetch",
+				stubRelease({ tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", sha256: TARBALL_SHA256 }] }),
+			);
+
+			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+			const install = mockState.calls.find((call) => call.startsWith("spawn:npm install -g"));
+			expect(install).toBeDefined();
+			expect(install).not.toContain("https://");
+			expect(install).toContain("wasmedge-agent-99.0.0.tgz");
+		});
+
+		it("refuses a manifest that names a tarball without a checksum", async () => {
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			vi.stubGlobal("fetch", stubRelease());
+
+			try {
+				await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+				expect(process.exitCode).toBe(1);
+				expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+				expect(errorSpy.mock.calls.map((call) => call.join(" ")).join("\n")).toContain("SHA-256");
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+
+		it("refuses bytes that do not match the published checksum", async () => {
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			vi.stubGlobal(
+				"fetch",
+				stubRelease({
+					tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", sha256: TARBALL_SHA256 }],
+					body: Buffer.from("something else entirely"),
+				}),
+			);
+
+			try {
+				await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+				expect(process.exitCode).toBe(1);
+				// Nothing was installed, and the package manager never saw the
+				// bytes at all.
+				expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+				expect(errorSpy.mock.calls.map((call) => call.join(" ")).join("\n")).toContain("does not match");
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+
+		it("leaves a package-name install alone", async () => {
+			// No tarball, so nothing to verify: the registry client does its own
+			// integrity check and this path must not start demanding a digest.
+			const renamed = PACKAGE_NAME === "renamed-agent" ? "renamed-agent-2" : "renamed-agent";
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => Response.json({ packageName: renamed, version: "99.0.0" })),
+			);
+
+			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+			expect(mockState.calls.some((call) => call.startsWith(`spawn:npm install -g ${renamed}`))).toBe(true);
+		});
 	});
 
 	it("still updates when the manifest renames the package without shipping an artifact", async () => {
