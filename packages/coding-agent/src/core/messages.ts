@@ -34,6 +34,26 @@ export const COMPACTION_OUTCOME_CUSTOM_TYPE = "compaction_outcome";
 export const RLM_CHILD_FAILURE_CUSTOM_TYPE = "rlm_child_failure";
 export const RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE = "rlm_child_terminal_notice";
 
+/** Session-entry types that keep the pre-rename product prefix.
+ *
+ *  Wire values under rule R1, on the same footing as REFINEMENT_CUSTOM_TYPE:
+ *  each is written into session JSONL, and it is what a reload, an export, or
+ *  an external consumer classifies the record by. Rebranding one splits a
+ *  single record type into two spellings that no reader can match with one
+ *  value, and orphans every record already on disk -- while renaming nothing
+ *  a user ever sees, because none of the three is display text. The product
+ *  name shown to a user lives in each record's content, which did rebrand.
+ *
+ *  Nothing in this repository reads them back today. That is not a licence to
+ *  rename them: a persisted value's readers are the sessions and the tools we
+ *  cannot see. Do not rebrand these.
+ *
+ *  They are named here, rather than left inline at their three write sites,
+ *  so the value has one home a test can pin -- again like REFINEMENT_CUSTOM_TYPE. */
+export const WORKER_RECOVERY_CUSTOM_TYPE = "prime-agent.worker_recovery";
+export const UPDATE_RESTART_CUSTOM_TYPE = "prime-agent.update_restart";
+export const UPDATE_COMPLETE_CUSTOM_TYPE = "prime-agent.update_complete";
+
 export interface SessionSlashCommandDetails {
 	command: SessionSlashCommand;
 	commandEntryId?: string;

@@ -8,7 +8,7 @@
  * Modes:
  *   ungated     direct `python -m ipykernel_launcher`, no boot gate
  *   gated       direct spawn through the boot-gate semaphore (today's default)
- *   forkserver  fork each kernel from the pre-imported template (PRIME_AGENT_KERNEL_FORKSERVER=1)
+ *   forkserver  fork each kernel from the pre-imported template (WASMEDGE_AGENT_KERNEL_FORKSERVER=1)
  *
  * Also asserts a forked kernel is a real, reachable kernel (runs code over ZMQ)
  * and that namespaces are isolated (a var set in kernel A is absent in kernel B).
@@ -33,7 +33,7 @@ const mode = arg("mode", "gated");
 const n = Number(arg("n", 50)) || 50;
 
 // Pin per-mode so the default-on forkserver doesn't leak into the direct-spawn modes.
-process.env.PRIME_AGENT_KERNEL_FORKSERVER = mode === "forkserver" ? "1" : "0";
+process.env.WASMEDGE_AGENT_KERNEL_FORKSERVER = mode === "forkserver" ? "1" : "0";
 
 const { KernelManager } = await import(kernelMod);
 const { ensureKernelPython } = await import(bootstrapMod);

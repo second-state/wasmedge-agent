@@ -7,7 +7,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../../src/config.js";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.js";
-import { PRIME_AGENT_META_NAMESPACE } from "../../src/modes/acp/acp-meta.js";
+import { WASMEDGE_AGENT_META_NAMESPACE } from "../../src/modes/acp/acp-meta.js";
 import { runAcpModeWithConnection } from "../../src/modes/acp/index.js";
 import { InProcessAgentConnection } from "../../src/modes/agent-connection/in-process-agent-connection.js";
 import { createHarness, type Harness } from "./harness.js";
@@ -78,7 +78,7 @@ async function connectAcp(harness: Harness, existing?: InProcessAgentConnection)
 		sessionId: session.sessionId,
 		metaOf: (key: string) =>
 			updates
-				.map((u) => u.update?._meta?.[PRIME_AGENT_META_NAMESPACE]?.[key])
+				.map((u) => u.update?._meta?.[WASMEDGE_AGENT_META_NAMESPACE]?.[key])
 				.filter((value) => value !== undefined),
 	};
 }
@@ -143,7 +143,7 @@ function rematerialize(messages: AgentMessage[]): AgentMessage[] {
 	return JSON.parse(JSON.stringify(messages));
 }
 
-describe("ACP mode preserves prime-agent features", () => {
+describe("ACP mode preserves wasmedge-agent features", () => {
 	it("streams rust-cell execution as an execute tool call with its cell source", async () => {
 		const harness = await createHarness({ tools: [rustCellTool as never] });
 		harness.setResponses([
@@ -246,7 +246,7 @@ describe("ACP mode preserves prime-agent features", () => {
 		await (connection as any).emit({ type: "heartbeats_changed" });
 		const flags = () =>
 			updates
-				.map((u) => u.update?._meta?.[PRIME_AGENT_META_NAMESPACE]?.heartbeatsChanged)
+				.map((u) => u.update?._meta?.[WASMEDGE_AGENT_META_NAMESPACE]?.heartbeatsChanged)
 				.filter((value) => value !== undefined);
 		await waitFor(() => flags().includes(true));
 		expect(flags(), "heartbeat changes must reach the ACP client").toContain(true);
@@ -300,7 +300,7 @@ describe("ACP mode preserves prime-agent features", () => {
 			mcpServers: [],
 		});
 		expect(created.sessionId).toBeTruthy();
-		const cwdMeta = (created._meta?.[PRIME_AGENT_META_NAMESPACE] as { cwd?: unknown } | undefined)?.cwd;
+		const cwdMeta = (created._meta?.[WASMEDGE_AGENT_META_NAMESPACE] as { cwd?: unknown } | undefined)?.cwd;
 		expect(cwdMeta).toMatchObject({ requested: "/definitely/not/the/agent/cwd" });
 		harness.cleanup();
 	}, 30_000);
@@ -411,7 +411,7 @@ describe("ACP mode preserves prime-agent features", () => {
 
 	it("surfaces a real /refine outcome to the ACP client", async () => {
 		// Global refinement writes under the agent dir. Use the real env var name
-		// (derived from package piConfig, so PRIME_AGENT_CODING_AGENT_DIR) rather
+		// (derived from package piConfig, so WASMEDGE_AGENT_CODING_AGENT_DIR) rather
 		// than a hardcoded guess, and set it before the session exists: this test
 		// must never touch the developer's real harness state.
 		const previousAgentDir = process.env[ENV_AGENT_DIR];
@@ -707,7 +707,7 @@ describe("ACP mode preserves prime-agent features", () => {
 			`a failed turn must not report a clean stop reason (got ${JSON.stringify(failure)})`,
 		).toBe(true);
 		// The client must be told the turn failed, not handed a bare protocol error.
-		expect(JSON.stringify(failure)).toContain("prime-agent turn failed");
+		expect(JSON.stringify(failure)).toContain("wasmedge-agent turn failed");
 
 		// The point of the test: a pre-turn count watermark would have skipped the
 		// failure, because after the rebuild it sits below that count.
@@ -747,7 +747,7 @@ describe("ACP mode preserves prime-agent features", () => {
 		harness.cleanup();
 	}, 30_000);
 
-	it("advertises prime-agent capabilities without polluting the ACP object root", async () => {
+	it("advertises wasmedge-agent capabilities without polluting the ACP object root", async () => {
 		const harness = await createHarness();
 		const connection = new InProcessAgentConnection(runtimeHostFor(harness.session));
 		const toAgent = new TransformStream<Uint8Array, Uint8Array>();
@@ -761,10 +761,10 @@ describe("ACP mode preserves prime-agent features", () => {
 			clientCapabilities: {},
 		});
 
-		expect(init.agentInfo).toMatchObject({ name: "prime-agent" });
+		expect(init.agentInfo).toMatchObject({ name: "wasmedge-agent" });
 		expect(typeof init.agentInfo?.version).toBe("string");
 		// Namespaced only: unknown root keys are reserved for future ACP fields.
-		expect(init._meta).toHaveProperty(PRIME_AGENT_META_NAMESPACE);
+		expect(init._meta).toHaveProperty(WASMEDGE_AGENT_META_NAMESPACE);
 		expect(Object.keys(init.agentCapabilities ?? {})).not.toContain("subagents");
 		// close is advertised, so a client knows it may release the session slot.
 		expect(init.agentCapabilities?.sessionCapabilities?.close).toBeDefined();

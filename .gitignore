@@ -43,6 +43,9 @@ out.html
 packages/coding-agent/binaries/
 todo.md
 plans/
+.wasmedge-agent/
+# Kept until project-local config migration lands: a developer's pre-rebrand
+# project directory must not show up as untracked in the meantime.
 .prime/agent/
 collect.sh
 .kernel-venv/

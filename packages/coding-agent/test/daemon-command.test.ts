@@ -155,7 +155,7 @@ describe("daemon command", () => {
 
 	it("cleans prompt listeners when the prompt request fails", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "prompt", "active-1", "hello"]),
+			handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "prompt", "active-1", "hello"]),
 		).resolves.toBe(true);
 
 		const client = daemonClientMock.instances[0];
@@ -172,7 +172,7 @@ describe("daemon command", () => {
 		const command = handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent.sock",
+			"/tmp/wasmedge-agent.sock",
 			"prompt",
 			"active-1",
 			"hello",
@@ -202,7 +202,7 @@ describe("daemon command", () => {
 		const command = handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent.sock",
+			"/tmp/wasmedge-agent.sock",
 			"--json",
 			"attach",
 			"active-1",
@@ -224,7 +224,7 @@ describe("daemon command", () => {
 		const unsafeIntegerName = "9007199254740992";
 		daemonClientMock.behavior.sessions = [makeSessionSummary("active-1", "session-1", unsafeIntegerName)];
 
-		await expect(handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock"])).resolves.toBe(true);
+		await expect(handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock"])).resolves.toBe(true);
 
 		const client = daemonClientMock.instances[1];
 		expect(client?.requests[0]).toEqual({ type: "list", all: true });
@@ -234,7 +234,14 @@ describe("daemon command", () => {
 
 	it("keeps create session name after an unknown boolean extension flag", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "create", "--unknown-typo", "my-session"]),
+			handleDaemonCommand([
+				"daemon",
+				"--socket",
+				"/tmp/wasmedge-agent.sock",
+				"create",
+				"--unknown-typo",
+				"my-session",
+			]),
 		).resolves.toBe(true);
 
 		const client = daemonClientMock.instances[0];
@@ -253,7 +260,14 @@ describe("daemon command", () => {
 
 	it("parses extension flag values with equals without consuming the create name", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "create", "--ticket=123", "my-session"]),
+			handleDaemonCommand([
+				"daemon",
+				"--socket",
+				"/tmp/wasmedge-agent.sock",
+				"create",
+				"--ticket=123",
+				"my-session",
+			]),
 		).resolves.toBe(true);
 
 		const client = daemonClientMock.instances[0];
@@ -272,7 +286,7 @@ describe("daemon command", () => {
 
 	it("keeps bare --resume values as session id selectors", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "create", "--resume", "abc123"]),
+			handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "create", "--resume", "abc123"]),
 		).resolves.toBe(true);
 
 		const client = daemonClientMock.instances[0];
@@ -284,7 +298,7 @@ describe("daemon command", () => {
 
 	it("rejects unknown send options instead of folding them into the message", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "send", "worker", "--bogus", "hello"]),
+			handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "send", "worker", "--bogus", "hello"]),
 		).resolves.toBe(true);
 
 		expect(daemonClientMock.instances[0]?.requests).toEqual([]);
@@ -300,7 +314,7 @@ describe("daemon command", () => {
 			handleDaemonCommand([
 				"daemon",
 				"--socket",
-				"/tmp/prime-agent.sock",
+				"/tmp/wasmedge-agent.sock",
 				"send",
 				"worker",
 				"--",
@@ -324,7 +338,7 @@ describe("daemon command", () => {
 			handleDaemonCommand([
 				"daemon",
 				"--socket",
-				"/tmp/prime-agent.sock",
+				"/tmp/wasmedge-agent.sock",
 				"send",
 				"--",
 				"--target-like",
@@ -343,7 +357,7 @@ describe("daemon command", () => {
 
 	it("rejects extra agent-messages status arguments", async () => {
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "agent-messages", "pause", "active-1"]),
+			handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "agent-messages", "pause", "active-1"]),
 		).resolves.toBe(true);
 
 		expect(daemonClientMock.instances[0]?.requests).toEqual([]);
@@ -359,7 +373,7 @@ describe("daemon command", () => {
 			handleDaemonCommand([
 				"daemon",
 				"--socket",
-				"/tmp/prime-agent.sock",
+				"/tmp/wasmedge-agent.sock",
 				"send",
 				"--from",
 				"planner",
@@ -383,7 +397,7 @@ describe("daemon command", () => {
 			handleDaemonCommand([
 				"daemon",
 				"--socket",
-				"/tmp/prime-agent.sock",
+				"/tmp/wasmedge-agent.sock",
 				"cron",
 				"add",
 				"active-1",
@@ -406,7 +420,7 @@ describe("daemon command", () => {
 		daemonClientMock.behavior.sessions = [makeSessionSummary("active-1", "session-1", "alpha")];
 
 		await expect(
-			handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "--json", "cron", "list", "alpha"]),
+			handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "--json", "cron", "list", "alpha"]),
 		).resolves.toBe(true);
 
 		expect(daemonClientMock.instances[0]?.requests).toEqual([
@@ -420,7 +434,7 @@ describe("daemon command", () => {
 			handleDaemonCommand([
 				"daemon",
 				"--socket",
-				"/tmp/prime-agent.sock",
+				"/tmp/wasmedge-agent.sock",
 				"create",
 				"--goal",
 				"Write tests",
@@ -443,7 +457,7 @@ describe("daemon command", () => {
 		await handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent.sock",
+			"/tmp/wasmedge-agent.sock",
 			"create",
 			"--goal",
 			"  ",
@@ -459,7 +473,7 @@ describe("daemon command", () => {
 		await handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent.sock",
+			"/tmp/wasmedge-agent.sock",
 			"create",
 			"--goal-token-budget",
 			"50000",
@@ -482,7 +496,7 @@ describe("daemon command", () => {
 		await handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent-goal-leak-test.sock",
+			"/tmp/wasmedge-agent-goal-leak-test.sock",
 			"start",
 			"--goal",
 			"Leak test goal",
@@ -504,7 +518,7 @@ describe("daemon command", () => {
 		await handleDaemonCommand([
 			"daemon",
 			"--socket",
-			"/tmp/prime-agent.sock",
+			"/tmp/wasmedge-agent.sock",
 			"create",
 			"--goal",
 			"Write tests",
@@ -518,7 +532,7 @@ describe("daemon command", () => {
 		});
 
 		// Second create without goal — config must NOT have initialGoal.
-		await handleDaemonCommand(["daemon", "--socket", "/tmp/prime-agent.sock", "create", "second"]);
+		await handleDaemonCommand(["daemon", "--socket", "/tmp/wasmedge-agent.sock", "create", "second"]);
 		const secondConfig = daemonClientMock.instances.at(-1)?.requests[0]?.config;
 		expect(secondConfig?.initialGoal).toBeUndefined();
 	});

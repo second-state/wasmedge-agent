@@ -8,10 +8,10 @@ export {
 	acpToolKind,
 	acpUpdatesForSessionEvent,
 	bashToolCallId,
-	PRIME_AGENT_META_NAMESPACE,
-	primeAgentMeta,
 	runAcpMode,
 	runAcpModeWithConnection,
+	WASMEDGE_AGENT_META_NAMESPACE,
+	wasmEdgeAgentMeta,
 } from "./acp/index.js";
 export type {
 	AgentConnection,

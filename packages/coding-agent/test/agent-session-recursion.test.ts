@@ -2855,14 +2855,14 @@ describe("AgentSession RLM session dir", () => {
 		const root = createSession(SessionManager.inMemory(tempDir));
 		const inspectable = root as unknown as InspectableRlmDirSession;
 
-		const before = readdirSync(tmpdir()).filter((name) => name.startsWith("prime-agent-rlm-"));
+		const before = readdirSync(tmpdir()).filter((name) => name.startsWith("wasmedge-agent-rlm-"));
 
 		expect(inspectable._ensureRlmSessionDir()).toBeUndefined();
 		// WP3 sandbox hygiene: cells get depth counters only — no host paths,
 		// no credentials (harness-dir mounts land in WP7, keys stay host-side).
 		expect(inspectable._rustCellEnv()).toEqual({ RLM_DEPTH: "0", RLM_MAX_DEPTH: expect.any(String) });
 
-		const after = readdirSync(tmpdir()).filter((name) => name.startsWith("prime-agent-rlm-"));
+		const after = readdirSync(tmpdir()).filter((name) => name.startsWith("wasmedge-agent-rlm-"));
 		expect(after).toEqual(before);
 	});
 
@@ -2941,7 +2941,7 @@ describe("AgentSession RLM session dir", () => {
 		const agentDir = join(tempDir, "custom-agent-dir");
 		const root = createSession(SessionManager.inMemory(tempDir), agentDir, "stored-key", true);
 		const env = (root as unknown as InspectableRlmDirSession)._rustCellEnv();
-		expect(env.PRIME_AGENT_CODING_AGENT_DIR).toBeUndefined();
+		expect(env.WASMEDGE_AGENT_CODING_AGENT_DIR).toBeUndefined();
 		expect(env.SERPER_API_KEY).toBeUndefined();
 	});
 

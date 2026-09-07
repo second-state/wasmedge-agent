@@ -565,7 +565,7 @@ export class DaemonAgentConnection implements AgentConnection {
 		action: AgentHeartbeatManagementAction,
 	): Promise<AgentCronJob> {
 		if (!this.client.supportsServerCapability("heartbeat_management")) {
-			throw new Error("Heartbeat management requires a newer Prime Agent daemon.");
+			throw new Error("Heartbeat management requires a newer WasmEdge Agent daemon.");
 		}
 		try {
 			const data = await this.requestData<{ heartbeat: AgentCronJob }>({
@@ -577,7 +577,7 @@ export class DaemonAgentConnection implements AgentConnection {
 			return data.heartbeat;
 		} catch (error) {
 			if (isUnknownDaemonCommandError(error, "heartbeat_manage")) {
-				throw new Error("Heartbeat management requires a newer Prime Agent daemon.");
+				throw new Error("Heartbeat management requires a newer WasmEdge Agent daemon.");
 			}
 			throw error;
 		}
@@ -1563,23 +1563,23 @@ export class DaemonAgentConnection implements AgentConnection {
 			killed:
 				"The daemon stopped this agent session. Its transcript remains saved and can be reopened from Agents View.",
 			shutdown:
-				"The Prime Agent daemon shut down while this window was attached. The session transcript remains saved; restart Prime Agent and reopen it from Agents View.",
+				"The WasmEdge Agent daemon shut down while this window was attached. The session transcript remains saved; restart WasmEdge Agent and reopen it from Agents View.",
 			completed:
 				"The daemon closed this agent session after it completed. Its transcript remains available from Agents View.",
 			replaced:
 				"The daemon replaced this agent session with another session. Reopen the current session from Agents View.",
 			update:
-				"The Prime Agent daemon restarted for an update, but this window did not restore automatically. The session transcript remains saved; restart Prime Agent and reopen it from Agents View.",
+				"The WasmEdge Agent daemon restarted for an update, but this window did not restore automatically. The session transcript remains saved; restart WasmEdge Agent and reopen it from Agents View.",
 		};
 		return `${explanation[reason]} ${this.formatDaemonDiagnosticContext()}`;
 	}
 
 	private formatDaemonConnectionClosedError(error: Error): string {
-		return `Lost connection to the Prime Agent daemon. Cause: ${formatErrorSentence(error)} The session transcript remains saved; restart Prime Agent or reopen the session from Agents View. ${this.formatDaemonDiagnosticContext()}`;
+		return `Lost connection to the WasmEdge Agent daemon. Cause: ${formatErrorSentence(error)} The session transcript remains saved; restart WasmEdge Agent or reopen the session from Agents View. ${this.formatDaemonDiagnosticContext()}`;
 	}
 
 	private formatUpdateReconnectError(error: unknown): string {
-		return `The Prime Agent daemon restarted for an update, but this window could not reconnect to its restored session before the recovery timeout expired. Last error: ${formatErrorSentence(error)} The session transcript remains saved; restart Prime Agent and reopen it from Agents View. ${this.formatDaemonDiagnosticContext()}`;
+		return `The WasmEdge Agent daemon restarted for an update, but this window could not reconnect to its restored session before the recovery timeout expired. Last error: ${formatErrorSentence(error)} The session transcript remains saved; restart WasmEdge Agent and reopen it from Agents View. ${this.formatDaemonDiagnosticContext()}`;
 	}
 
 	private formatDaemonDiagnosticContext(): string {
@@ -1601,7 +1601,7 @@ export class DaemonAgentConnection implements AgentConnection {
 		void this.emit({
 			type: "connection_status",
 			status: "reconnecting",
-			error: "The Prime Agent daemon is restarting for an update.",
+			error: "The WasmEdge Agent daemon is restarting for an update.",
 		});
 		const reconnectPromise = reconnectDaemonTransportAfterUpdate(this.client)
 			.then(() => this.restoreConnectionAfterUpdate())

@@ -34,7 +34,7 @@ export const isBunBinary =
 /** Detect if Bun is the runtime (compiled binary or bun run) */
 export const isBunRuntime = !!process.versions.bun;
 
-export const SELF_UPDATE_INTERACTIVE_CHILD_ENV = "PRIME_AGENT_INTERACTIVE_SELF_UPDATE";
+export const SELF_UPDATE_INTERACTIVE_CHILD_ENV = "WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE";
 export const SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE = 75;
 
 // =============================================================================
@@ -317,7 +317,7 @@ export function getSelfUpdateUnavailableInstruction(
 ): string {
 	const method = detectInstallMethod();
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/PrimeIntellect-ai/prime-agent/releases/latest`;
+		return `Download from: https://github.com/hydai/wasmedge-agent/releases/latest`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, updateSpec, npmCommand, updatePackageName);
 	if (command) {
@@ -494,10 +494,97 @@ export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".prime/agent";
 export const VERSION: string = pkg.version || "0.0.0";
 
-// e.g., PI_CODING_AGENT_DIR or PRIME_AGENT_CODING_AGENT_DIR
+// e.g., PI_CODING_AGENT_DIR or WASMEDGE_AGENT_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${envPrefix}_CODING_AGENT_DIR`;
 export const ENV_SESSION_DIR = `${envPrefix}_SESSION_DIR`;
 export const ENV_LEGACY_SESSION_DIR = `${envPrefix}_CODING_AGENT_SESSION_DIR`;
+
+/** User-facing variables that keep a PRIME_AGENT_* fallback for one release.
+ *  Every name here has a real call site routed through readLegacyEnv (or,
+ *  for install.sh's own copies, the shell-side fallback next to
+ *  wasmedge_agent_warn_if_legacy_env) -- this table is a contract, not a wish
+ *  list, so a name with no reachable reader does not belong here.
+ *
+ *  Internal (*_INTERNAL_*) and test (*_TEST_*) variables are renamed
+ *  outright, following the WP8 precedent: no user sets them.
+ *  WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE is renamed outright for the same
+ *  reason despite not matching that naming pattern: it is a same-process
+ *  relaunch signal that interactive-mode.ts writes into a child's env and
+ *  package-manager-cli.ts/public-command.ts read back in that same child,
+ *  always the current build on both ends -- there is no history-spanning
+ *  scenario in which an old binary's name needs to be honored by a new one.
+ *  PRIME_API_KEY is absent on purpose -- it belongs to Prime Inference, not
+ *  to us. */
+const LEGACY_ENV_NAMES: ReadonlyArray<string> = [
+	"CODING_AGENT_DIR",
+	"SESSION_DIR",
+	"CODING_AGENT_SESSION_DIR",
+	"DOWNLOAD_BASE_URL",
+	"RELEASE_CHANNEL",
+	"PACKAGE",
+	"CMD",
+	"INSTALLER_PLAIN",
+	"SHELL_PROFILE",
+	"VERSION",
+	"BOOTSTRAP_TOOLS_ON_INSTALL",
+	"TRACES_API_KEY",
+	"TRACES_BASE_URL",
+	"WEBSEARCH_NUM_RESULTS",
+	"WEBSEARCH_TIMEOUT",
+];
+
+/** Collected during startup and drained through the existing deprecation
+ *  channel in migrations.ts, so no new surfacing mechanism appears. Carries
+ *  both env-name and project-path deprecations (Task 6 appends to it too). */
+export const LEGACY_NAME_WARNINGS: string[] = [];
+
+/**
+ * Unions a deprecationWarnings snapshot (e.g. runMigrations()'s return value)
+ * with the current LEGACY_NAME_WARNINGS, deduped by exact string.
+ *
+ * A long startup sequence can push a fresh warning well after that snapshot
+ * was taken -- --resume may pick a session whose cwd differs from the one
+ * runMigrations(cwd) ran against, and settings/resource resolution against
+ * that final cwd can call getProjectConfigDir() on a directory the snapshot
+ * never saw. Re-deriving the display list from LEGACY_NAME_WARNINGS at
+ * display time, instead of reusing only the stale snapshot, catches that
+ * case. Deduping by exact string (the same rule every push already uses)
+ * guarantees this can never double up an entry the snapshot already carried.
+ */
+export function withCurrentLegacyWarnings(snapshot: readonly string[]): string[] {
+	return Array.from(new Set([...snapshot, ...LEGACY_NAME_WARNINGS]));
+}
+
+export function readLegacyEnv(name: string): string | undefined {
+	const current = process.env[name];
+	if (current !== undefined) return current;
+
+	const prefix = `${envPrefix}_`;
+	if (!name.startsWith(prefix)) return undefined;
+	const suffix = name.slice(prefix.length);
+	if (!LEGACY_ENV_NAMES.includes(suffix)) return undefined;
+
+	const legacyName = `PRIME_AGENT_${suffix}`;
+	const legacy = process.env[legacyName];
+	if (legacy === undefined) return undefined;
+
+	const warning = `${legacyName} is deprecated; use ${name}. The old name stops working after the next release.`;
+	if (!LEGACY_NAME_WARNINGS.includes(warning)) LEGACY_NAME_WARNINGS.push(warning);
+	return legacy;
+}
+
+/** Deprecation notice for the legacy command name, or undefined.
+ *  The caller supplies the writer: stdout is a protocol surface for
+ *  --mode acp, rpc, and --json, whose contract test pins a single JSON
+ *  document, so this must never reach it. */
+export function warnIfLegacyAlias(invokedAs: string, write: (message: string) => void): boolean {
+	if (basename(invokedAs) !== "prime-agent") return false;
+	write(
+		"warning: 'prime-agent' is deprecated; use 'wasmedge-agent'. " +
+			"The alias stops working after the next release.\n",
+	);
+	return true;
+}
 
 export function expandTildePath(path: string): string {
 	if (path === "~") return homedir();
@@ -514,10 +601,10 @@ export function getShareViewerUrl(gistId: string): string {
 }
 
 // =============================================================================
-// User Config Paths (~/.prime/agent/*)
+// User Config Paths (~/.wasmedge-agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.prime/agent/) */
+/** Get the agent config directory (e.g., ~/.wasmedge-agent/) */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {
@@ -531,7 +618,7 @@ export function getCustomThemesDir(): string {
 	return join(getAgentDir(), "themes");
 }
 
-/** Directory where daemon and client diagnostic logs are written (e.g. ~/.prime/agent/logs/). */
+/** Directory where daemon and client diagnostic logs are written (e.g. ~/.wasmedge-agent/logs/). */
 export function getLogsDir(): string {
 	return join(getAgentDir(), "logs");
 }

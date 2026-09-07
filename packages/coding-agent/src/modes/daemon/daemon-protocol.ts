@@ -48,6 +48,18 @@ import type { SessionSummary } from "./daemon-session-list.js";
  * without leaking transport details back into InteractiveMode.
  */
 
+// Pinned, and not branding. This value is serialized into the handshake and
+// compared by exact equality on the other side of a socket, which makes it a
+// wire identifier under rule R1 -- the same footing as the ACP _meta namespace
+// and the persisted session entry types.
+//
+// The new default socket path is not a defence. It separates a default old
+// daemon from a default new client, and nothing else: --daemon-socket puts
+// both ends on a path the brand never touched, and an external client that
+// speaks this protocol was written against the published name. Either peer can
+// then connect successfully and reject otherwise-compatible messages purely
+// over the spelling of a product name. Renaming it buys nothing a user can
+// see, because no user ever sees it.
 export const DAEMON_PROTOCOL_NAME = "prime-agent.daemon";
 export const DAEMON_PROTOCOL_VERSION = 7;
 export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
@@ -198,7 +210,7 @@ export function collectDaemonClientEnv(source: NodeJS.ProcessEnv = process.env):
 export function collectDaemonLaunchEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(source)) {
-		if (value !== undefined && !key.startsWith("PRIME_AGENT_INTERNAL_")) {
+		if (value !== undefined && !key.startsWith("WASMEDGE_AGENT_INTERNAL_")) {
 			env[key] = value;
 		}
 	}

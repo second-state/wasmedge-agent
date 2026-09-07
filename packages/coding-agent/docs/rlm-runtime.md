@@ -1,6 +1,6 @@
 # RLM Runtime Architecture
 
-Prime Agent gives each agent session a sandboxed Rust cell engine and a native recursive sub-agent interface. The guest `rlm` crate is a model-facing shim; the TypeScript host owns child execution, persistence, usage accounting, and lifecycle.
+WasmEdge Agent gives each agent session a sandboxed Rust cell engine and a native recursive sub-agent interface. The guest `rlm` crate is a model-facing shim; the TypeScript host owns child execution, persistence, usage accounting, and lifecycle.
 
 ## Architecture
 
@@ -170,7 +170,7 @@ Registry scope follows the parent transcript. An unrelated new parent session do
 
 ## Usage and Cost Attribution
 
-The admission handle does not contain usage or completion data. Prime Agent asynchronously folds the child's assistant usage and cost into the parent assistant turn that launched it.
+The admission handle does not contain usage or completion data. WasmEdge Agent asynchronously folds the child's assistant usage and cost into the parent assistant turn that launched it.
 
 The parent transcript persists a `child_usage_attributed` entry containing:
 
@@ -184,7 +184,7 @@ On reload, the aggregate is reapplied to the parent message. Context-tree report
 
 `rlm::harness` is a persisted state ledger for prompt notes, memories, reusable skill references, sub-agent specifications, and refinement events. It is not a second execution engine.
 
-Session-local state lives in the session artifact directory under `harness/harness_state.json`, mounted into cells at `/agent/harness`; explicitly global entries live under `~/.prime/agent/harness/`, mounted at `/agent/harness-global`. Unlike the bridge-backed capabilities, harness access is direct file I/O over these preopens. The guest store re-syncs from disk when the file's mtime moves, so host-side `/refine` writes and cell writes do not overwrite each other, and saves are atomic (tmp + rename).
+Session-local state lives in the session artifact directory under `harness/harness_state.json`, mounted into cells at `/agent/harness`; explicitly global entries live under `~/.wasmedge-agent/harness/`, mounted at `/agent/harness-global`. Unlike the bridge-backed capabilities, harness access is direct file I/O over these preopens. The guest store re-syncs from disk when the file's mtime moves, so host-side `/refine` writes and cell writes do not overwrite each other, and saves are atomic (tmp + rename).
 
 `/refine` runs a dedicated review over the current trajectory and applies small create/update/delete edits. Rollback uses recorded before/after snapshots. The base system prompt remains immutable; refinements are supplemental state. Skill entries reference mounted crates (`{"type": "rust", "use": "agent_lib::skills::<crate>", ...}`); kernel-era `python` references remain readable but can no longer be created.
 
@@ -205,7 +205,7 @@ Goal state, persistence, token and wall-clock accounting, and continuation promp
 For a persisted root session, the relevant layout is:
 
 ```text
-~/.prime/agent/
+~/.wasmedge-agent/
   sessions/
     <root-session-id>.jsonl
   session-artifacts/

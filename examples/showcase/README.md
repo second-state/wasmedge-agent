@@ -20,11 +20,11 @@ demonstrates one thing the runtime swap changes. Plan for 30–45 minutes.
 Verify everything:
 
 ```bash
-./prime-agent.sh doctor        # six checks; `doctor --fix` repairs most issues
+./wasmedge-agent.sh doctor        # six checks; `doctor --fix` repairs most issues
 ```
 
 On a fresh clone, `doctor` will report the workspace template as
-not-vendored and cold — that is expected. Run `./prime-agent.sh doctor
+not-vendored and cold — that is expected. Run `./wasmedge-agent.sh doctor
 --fix` once (it takes a minute) to vendor and warm it, or let the first
 launch do it lazily.
 
@@ -34,7 +34,7 @@ uses. If you plan to launch with `--dist` in section 3, warm it too —
 otherwise its first `rust` cell pays the one-time vendor and build itself:
 
 ```bash
-./prime-agent.sh --dist doctor --fix
+./wasmedge-agent.sh --dist doctor --fix
 ```
 
 Unlike the source template, this one is not warmed once and left alone:
@@ -48,7 +48,7 @@ fails outright if you happen to be offline.
 The agent needs a capable model. Either export an API key that is
 auto-discovered (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `OPENROUTER_API_KEY`, …) or describe a custom endpoint in
-`~/.prime/agent/models.json`:
+`~/.wasmedge-agent/models.json`:
 
 ```json
 {
@@ -87,7 +87,7 @@ files there:
 
 ```bash
 [ -d /tmp/showcase ] || cp -R examples/showcase/project /tmp/showcase
-./prime-agent.sh --cwd /tmp/showcase --name showcase
+./wasmedge-agent.sh --cwd /tmp/showcase --name showcase
 ```
 
 `--name showcase` is what the cleanup step in section 4 uses to find this
@@ -101,7 +101,7 @@ over from the pristine fixture instead, delete it first with `rm -rf
 /tmp/showcase`.
 
 The TUI takes a few seconds to appear when running from source
-(`./prime-agent.sh --dist` is ~3× faster after `npm run build`, once its
+(`./wasmedge-agent.sh --dist` is ~3× faster after `npm run build`, once its
 own template is warm — see section 1). Skim
 `notes.md` in the fixture for the backstory: ops handed you a flaky
 morning of API traffic and an inventory snapshot.
@@ -159,7 +159,7 @@ state layer. Unlike a Python kernel's invisible in-memory namespace, this
 state is explicit and on disk: it outlives the cell, the turn, and the
 process, and you can ask the model "what keys are in your rlm state?". It
 is scoped to the session, though — if you stop here and come back later,
-reopen it with `./prime-agent.sh --cwd /tmp/showcase --continue`. Keep the
+reopen it with `./wasmedge-agent.sh --cwd /tmp/showcase --continue`. Keep the
 `--cwd`: `--continue` only considers sessions rooted at the directory you
 launch from, so dropping it reattaches whatever session was last rooted
 there — your own earlier work if you have used the agent in this repo, or
@@ -250,22 +250,22 @@ credentials until you stop it. Stop it by the name you launched it with —
 is rooted here, so the name is what makes this one addressable:
 
 ```bash
-./prime-agent.sh stop showcase
+./wasmedge-agent.sh stop showcase
 ```
 
 That releases the worker. The background supervisor stays up with a copy of
 the environment you launched from, ready for the next agent;
-`./prime-agent.sh shutdown` is what ends that too, but it stops **every**
+`./wasmedge-agent.sh shutdown` is what ends that too, but it stops **every**
 agent and background service on your machine, interrupting any work in
 flight — reach for it only when this showcase session is the only thing
 running.
 
 ## 5. Troubleshooting
 
-- `./prime-agent.sh doctor` (add `--fix` to repair) checks cargo, the wasm
+- `./wasmedge-agent.sh doctor` (add `--fix` to repair) checks cargo, the wasm
   target, WasmEdge, and the workspace template.
 - Launch hangs then reports a held socket lock → a previous daemon wedged:
-  run `./prime-agent.sh shutdown --force` and retry (the error message
+  run `./wasmedge-agent.sh shutdown --force` and retry (the error message
   says exactly this). `--force` skips the confirmation prompt, and the
   scope is still every agent on the machine — stop other sessions you care
   about before reaching for it.

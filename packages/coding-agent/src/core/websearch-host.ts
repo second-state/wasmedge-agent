@@ -14,7 +14,7 @@ const NO_KEY_MESSAGE =
 	"Web search is not set up yet: no Serper API key is configured.\n" +
 	"Tell the user how to enable it:\n" +
 	"  1. Get a free API key at https://serper.dev (sign up, copy the key).\n" +
-	'  2. In Prime Agent, run /login and choose "Serper (web search)", then paste the key.\n' +
+	'  2. In WasmEdge Agent, run /login and choose "Serper (web search)", then paste the key.\n' +
 	"Do not ask the user to set environment variables. Once the key is saved, web search works automatically.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,11 +127,11 @@ export function createWebsearchHostHandler(options: WebsearchHostHandlerOptions)
 		}
 		const timeoutSeconds = positiveIntOr(
 			payload.timeout,
-			envInt("PRIME_AGENT_WEBSEARCH_TIMEOUT", DEFAULT_TIMEOUT_SECONDS),
+			envInt("WASMEDGE_AGENT_WEBSEARCH_TIMEOUT", DEFAULT_TIMEOUT_SECONDS),
 		);
 		const numResults = positiveIntOr(
 			payload.num_results,
-			envInt("PRIME_AGENT_WEBSEARCH_NUM_RESULTS", DEFAULT_NUM_RESULTS),
+			envInt("WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS", DEFAULT_NUM_RESULTS),
 		);
 		const maxOutput = positiveIntOr(payload.max_output, DEFAULT_MAX_OUTPUT_CHARS);
 

@@ -70,7 +70,7 @@ import {
 	type AgentTracePreviewResult,
 	type AgentTraceUploadAllResult,
 	type AgentTraceUploadResult,
-	getPrimeAgentTraceCredential,
+	getWasmEdgeAgentTraceCredential,
 	previewAgentTraceFile,
 	uploadAgentTraceFile,
 	uploadAllAgentTraces,
@@ -110,7 +110,7 @@ import {
 } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScopeFromModels } from "../../core/model-resolver.js";
 import { parseNewSessionCommand } from "../../core/new-session-command.js";
-import { resolvePrimeAgentTracesBaseUrl } from "../../core/prime-inference-auth.js";
+import { resolveWasmEdgeAgentTracesBaseUrl } from "../../core/prime-inference-auth.js";
 import { resolvePrimeInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
 import { parseCommandArgs } from "../../core/prompt-templates.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
@@ -242,6 +242,7 @@ import {
 	getThemeByName,
 	initTheme,
 	onThemeChange,
+	resolveThemeName,
 	setRegisteredThemes,
 	setTheme,
 	setThemeInstance,
@@ -7180,7 +7181,10 @@ export class InteractiveMode {
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: state.thinkingLevel,
 					availableThinkingLevels: state.availableThinkingLevels,
-					currentTheme: this.settingsManager.getTheme() || "prime",
+					// Through resolveThemeName so a settings file still naming the
+					// pre-rename built-in shows the theme actually in use, and not
+					// a name the picker cannot offer.
+					currentTheme: resolveThemeName(this.settingsManager.getTheme() || "wasmedge"),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -8897,7 +8901,7 @@ export class InteractiveMode {
 				return `Trace upload skipped: session file is ${result.size.toLocaleString()} bytes; limit is ${result.maxBytes.toLocaleString()} bytes.`;
 			case "failed":
 				if (result.statusCode === 404) {
-					return "Trace upload endpoint was not found. The platform API may not be deployed yet, or PRIME_AGENT_TRACES_BASE_URL points at the wrong API.";
+					return "Trace upload endpoint was not found. The platform API may not be deployed yet, or WASMEDGE_AGENT_TRACES_BASE_URL points at the wrong API.";
 				}
 				return `Trace upload failed: ${result.statusCode ? `HTTP ${result.statusCode}: ` : ""}${result.message}. See ${getAgentTracesLogPath()} for details.`;
 		}
@@ -8998,14 +9002,14 @@ export class InteractiveMode {
 
 		if (command === "status") {
 			await this.settingsManager.reload().catch(() => undefined);
-			const credential = await getPrimeAgentTraceCredential(this.modelRegistry.authStorage);
+			const credential = await getWasmEdgeAgentTraceCredential(this.modelRegistry.authStorage);
 			const state = await this.agentConnection.getState();
 			const info = [
 				theme.bold("Trace Sharing"),
 				"",
 				`${theme.fg("dim", "Automatic uploads:")} ${this.settingsManager.getAgentTracesEnabled() ? "Enabled" : "Disabled"}`,
 				`${theme.fg("dim", "Credential:")} ${credential?.label ?? "Not configured"}`,
-				`${theme.fg("dim", "Endpoint:")} ${resolvePrimeAgentTracesBaseUrl()}`,
+				`${theme.fg("dim", "Endpoint:")} ${resolveWasmEdgeAgentTracesBaseUrl()}`,
 				`${theme.fg("dim", "Session file:")} ${state.sessionFile ?? "In-memory"}`,
 				"",
 				theme.fg(
@@ -9027,7 +9031,7 @@ export class InteractiveMode {
 		}
 
 		if (command === "login") {
-			await this.createAuthFlows().runPrimeAgentTracesLogin();
+			await this.createAuthFlows().runWasmEdgeAgentTracesLogin();
 			return;
 		}
 
@@ -9037,13 +9041,13 @@ export class InteractiveMode {
 		}
 
 		if (command === "on" || command === "enable") {
-			let credential = await getPrimeAgentTraceCredential(this.modelRegistry.authStorage);
+			let credential = await getWasmEdgeAgentTraceCredential(this.modelRegistry.authStorage);
 			if (!credential) {
-				const authResult = await this.createAuthFlows().runPrimeAgentTracesLogin();
+				const authResult = await this.createAuthFlows().runWasmEdgeAgentTracesLogin();
 				if (authResult.status !== "success") {
 					return;
 				}
-				credential = await getPrimeAgentTraceCredential(this.modelRegistry.authStorage);
+				credential = await getWasmEdgeAgentTraceCredential(this.modelRegistry.authStorage);
 			}
 			if (!credential) {
 				this.showError("Trace sharing needs a Prime API key.");
@@ -9062,7 +9066,7 @@ export class InteractiveMode {
 		}
 
 		if (command === "upload" || command === "upload-current") {
-			const credential = await getPrimeAgentTraceCredential(this.modelRegistry.authStorage);
+			const credential = await getWasmEdgeAgentTraceCredential(this.modelRegistry.authStorage);
 			if (!credential) {
 				this.showError("Trace sharing needs a Prime API key. Run /traces login.");
 				return;
@@ -9078,7 +9082,7 @@ export class InteractiveMode {
 		}
 
 		if (command === "upload-all") {
-			const credential = await getPrimeAgentTraceCredential(this.modelRegistry.authStorage);
+			const credential = await getWasmEdgeAgentTraceCredential(this.modelRegistry.authStorage);
 			if (!credential) {
 				this.showError("Trace sharing needs a Prime API key. Run /traces login.");
 				return;

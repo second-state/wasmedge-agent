@@ -1,11 +1,11 @@
 ---
 name: skill-creator
-description: Create, validate, and install Prime Agent skills - both markdown skills and Rust crate skills callable from rust cells. Use when the user asks to create a skill, turn a workflow, script, or helper into a reusable skill, add a Rust skill the agent can call, or asks how to write a SKILL.md and where skills live.
+description: Create, validate, and install WasmEdge Agent skills - both markdown skills and Rust crate skills callable from rust cells. Use when the user asks to create a skill, turn a workflow, script, or helper into a reusable skill, add a Rust skill the agent can call, or asks how to write a SKILL.md and where skills live.
 ---
 
 # Skill Creator
 
-A skill is a directory with a `SKILL.md` file (YAML frontmatter + markdown instructions). At startup Prime Agent reads only each skill's name and description into the system prompt; the full file loads on demand when a task matches. Prime Agent follows the [Agent Skills standard](https://agentskills.io/specification) and extends it with Rust crate skills.
+A skill is a directory with a `SKILL.md` file (YAML frontmatter + markdown instructions). At startup WasmEdge Agent reads only each skill's name and description into the system prompt; the full file loads on demand when a task matches. WasmEdge Agent follows the [Agent Skills standard](https://agentskills.io/specification) and extends it with Rust crate skills.
 
 | Kind | What it is | When to use |
 |---|---|---|
@@ -18,8 +18,8 @@ Before writing a Rust skill, read [references/rust-skills.md](references/rust-sk
 
 1. **Pick the kind.** Default to markdown. Go Rust only when the agent should *call* the capability (`agent_lib::skills::my_skill::run(...)?`) instead of following instructions.
 2. **Pick the location.** Ask the user when it is not obvious from context:
-   - Project skill, shared via the repo: `.prime/agent/skills/<name>/`
-   - Personal global skill: `~/.prime/agent/skills/<name>/`
+   - Project skill, shared via the repo: `.wasmedge-agent/skills/<name>/`
+   - Personal global skill: `~/.wasmedge-agent/skills/<name>/`
    - Shipped with an npm package: a `skills/` directory in the package, or `pi.skills` paths in its `package.json`
 3. **Scaffold and write** the directory using the layout and frontmatter rules below.
 4. **Verify** the skill loads (see Verification).

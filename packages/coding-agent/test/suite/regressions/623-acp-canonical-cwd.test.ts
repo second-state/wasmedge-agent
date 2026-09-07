@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.js";
-import { PRIME_AGENT_META_NAMESPACE } from "../../../src/modes/acp/acp-meta.js";
+import { WASMEDGE_AGENT_META_NAMESPACE } from "../../../src/modes/acp/acp-meta.js";
 import { runAcpModeWithConnection } from "../../../src/modes/acp/index.js";
 import { InProcessAgentConnection } from "../../../src/modes/agent-connection/in-process-agent-connection.js";
 import { createHarness, type Harness } from "../harness.js";
@@ -31,7 +31,7 @@ async function newAcpSession(harness: Harness, cwd: string) {
 }
 
 function cwdMeta(created: { _meta?: Record<string, unknown> | null }): unknown {
-	return (created._meta?.[PRIME_AGENT_META_NAMESPACE] as { cwd?: unknown } | undefined)?.cwd;
+	return (created._meta?.[WASMEDGE_AGENT_META_NAMESPACE] as { cwd?: unknown } | undefined)?.cwd;
 }
 
 function findExistingCaseVariant(path: string): string | undefined {
@@ -75,7 +75,7 @@ describe("#623 ACP canonical cwd comparison", () => {
 	it("does not report a mismatch for paths resolving to the same directory", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const aliasRoot = mkdtempSync(join(tmpdir(), "prime-agent-acp-cwd-"));
+		const aliasRoot = mkdtempSync(join(tmpdir(), "wasmedge-agent-acp-cwd-"));
 		directories.push(aliasRoot);
 		const alias = join(aliasRoot, "alias");
 		symlinkSync(process.cwd(), alias, process.platform === "win32" ? "junction" : "dir");

@@ -45,5 +45,5 @@ jobs:
       - name: Run process stress tests
         working-directory: packages/coding-agent
         env:
-          PRIME_AGENT_STRESS_WORKERS: "10"
+          WASMEDGE_AGENT_STRESS_WORKERS: "10"
         run: npm run test:process-stress

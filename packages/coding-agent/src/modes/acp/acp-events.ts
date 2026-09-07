@@ -1,13 +1,13 @@
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentConnectionSessionEvent } from "../agent-connection/types.js";
-import type { PrimeAgentRustMeta, PrimeAgentSessionMeta } from "./acp-meta.js";
-import { primeAgentMeta } from "./acp-meta.js";
+import type { WasmEdgeAgentRustMeta, WasmEdgeAgentSessionMeta } from "./acp-meta.js";
+import { wasmEdgeAgentMeta } from "./acp-meta.js";
 
 /**
- * Translate prime-agent session events into ACP `session/update` payloads.
+ * Translate wasmedge-agent session events into ACP `session/update` payloads.
  *
  * Kept as a pure function so the mapping is testable without a live ACP client
- * or a running agent. Returning an array lets one prime-agent event fan out to
+ * or a running agent. Returning an array lets one wasmedge-agent event fan out to
  * several ACP updates (or none, for events ACP has no place for).
  */
 
@@ -97,12 +97,12 @@ function toolResultText(result: unknown): string | undefined {
  * ride along as ACP image content blocks); mirror those exact fields rather than
  * inventing a MIME bundle the tool never produces.
  */
-function rustRichOutput(result: unknown): PrimeAgentRustMeta | undefined {
+function rustRichOutput(result: unknown): WasmEdgeAgentRustMeta | undefined {
 	if (!result || typeof result !== "object") return undefined;
 	const details = (result as { details?: unknown }).details;
 	if (!details || typeof details !== "object") return undefined;
 	const { attachments, diffs } = details as { attachments?: unknown; diffs?: unknown };
-	const meta: PrimeAgentRustMeta = {};
+	const meta: WasmEdgeAgentRustMeta = {};
 	if (Array.isArray(attachments) && attachments.length > 0) {
 		meta.attachments = attachments.map((attachment) => {
 			// CellAttachment exposes mimeType, base64 `data`, and an optional path.
@@ -164,7 +164,7 @@ export function acpUpdatesForSessionEvent(
 					toolCallId: event.toolCallId,
 					status: (event.isError ? "failed" : "completed") satisfies AcpToolStatus,
 					...(text ? { content: [{ type: "content", content: textContent(text) }] } : {}),
-					...(rich ? { _meta: primeAgentMeta({ rust: rich }) } : {}),
+					...(rich ? { _meta: wasmEdgeAgentMeta({ rust: rich }) } : {}),
 				},
 			];
 		}
@@ -210,7 +210,7 @@ export function acpUpdatesForSessionEvent(
 			return [
 				{
 					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({
+					_meta: wasmEdgeAgentMeta({
 						compaction: {
 							tokensBefore: event.result?.tokensBefore,
 							summary: event.result?.summary,
@@ -223,7 +223,7 @@ export function acpUpdatesForSessionEvent(
 			return [
 				{
 					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({
+					_meta: wasmEdgeAgentMeta({
 						subagents: [
 							{
 								id: event.child.id,
@@ -239,14 +239,14 @@ export function acpUpdatesForSessionEvent(
 			];
 
 		// Goals, continual-harness refinement, and agent-to-agent messaging are
-		// prime-agent concepts with no ACP counterpart. They are still part of a
+		// wasmedge-agent concepts with no ACP counterpart. They are still part of a
 		// turn's observable behavior, so they surface as namespaced metadata
 		// instead of being dropped.
 		case "goal_update":
 			return [
 				{
 					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({
+					_meta: wasmEdgeAgentMeta({
 						goal: {
 							status: event.goal.status,
 							objective: event.goal.objective,
@@ -261,7 +261,7 @@ export function acpUpdatesForSessionEvent(
 			return [
 				{
 					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({
+					_meta: wasmEdgeAgentMeta({
 						refinement: {
 							status: "complete",
 							summary: event.result.summary,
@@ -277,7 +277,7 @@ export function acpUpdatesForSessionEvent(
 			return [
 				{
 					sessionUpdate: "session_info_update",
-					_meta: primeAgentMeta({ refinement: { status: "failed", error: event.error } }),
+					_meta: wasmEdgeAgentMeta({ refinement: { status: "failed", error: event.error } }),
 				},
 			];
 
@@ -286,10 +286,16 @@ export function acpUpdatesForSessionEvent(
 	}
 }
 
+// Pinned, and not branding. This prefix leaves the process in every bash
+// tool-call id and is what an ACP client correlates a call's start, output and
+// end by across the protocol boundary, so it is a wire value under rule R1 --
+// the same footing as the ACP _meta namespace acp-meta.ts emits beside it. A
+// client holding an id issued before a rename would stop matching the updates
+// that follow it. Nothing in this value is ever shown to a user.
 const BASH_TOOL_CALL_PREFIX = "prime-agent-bash";
 
 export function bashToolCallId(runId: string | undefined): string {
 	return runId ? `${BASH_TOOL_CALL_PREFIX}-${runId}` : BASH_TOOL_CALL_PREFIX;
 }
 
-export type { PrimeAgentSessionMeta };
+export type { WasmEdgeAgentSessionMeta };

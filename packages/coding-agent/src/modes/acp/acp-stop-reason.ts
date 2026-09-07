@@ -8,7 +8,7 @@ import { autonomousLimitReason } from "../../core/autonomous.js";
 export type AcpStopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
 
 /**
- * Map a finished prime-agent turn onto an ACP stop reason.
+ * Map a finished wasmedge-agent turn onto an ACP stop reason.
  *
  * Autonomous quality gates deliberately do NOT surface as a distinct stop
  * reason: a failing gate is a continuation inside the same prompt turn, so the

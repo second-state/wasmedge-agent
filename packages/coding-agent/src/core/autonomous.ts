@@ -384,6 +384,9 @@ async function captureGitWorktreeSnapshot(
 		".",
 		":(exclude)verification",
 		":(exclude)target",
+		// Named by the external verifiers harness, not by us: renaming our
+		// exclusion would not rename the directory it creates, it would only
+		// stop excluding it and let harness artifacts read as workspace changes.
 		":(exclude).vf-prime-agent",
 		":(exclude)Cargo.lock",
 		":(exclude)submission.tar.gz",

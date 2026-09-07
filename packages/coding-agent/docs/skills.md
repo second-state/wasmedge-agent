@@ -1,10 +1,10 @@
-> Prime Agent can create skills. Ask it to build one for your use case.
+> WasmEdge Agent can create skills. Ask it to build one for your use case.
 
 # Skills
 
-Skills are self-contained capability packages that Prime Agent loads on demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
+Skills are self-contained capability packages that WasmEdge Agent loads on demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
 
-Prime Agent implements the [Agent Skills standard](https://agentskills.io/specification), warning about violations but remaining lenient. It also supports Rust crate skills: a superset of markdown skills that mount a crate into the cell workspace and expose it as typed calls under `agent_lib::skills`.
+WasmEdge Agent implements the [Agent Skills standard](https://agentskills.io/specification), warning about violations but remaining lenient. It also supports Rust crate skills: a superset of markdown skills that mount a crate into the cell workspace and expose it as typed calls under `agent_lib::skills`.
 
 ## Table of Contents
 
@@ -12,7 +12,7 @@ Prime Agent implements the [Agent Skills standard](https://agentskills.io/specif
 - [Built-in Skills](#built-in-skills)
 - [How Skills Work](#how-skills-work)
 - [Rust Crate Skills](#rust-crate-skills)
-- [Creating Skills with Prime Agent](#creating-skills-with-prime-agent)
+- [Creating Skills with WasmEdge Agent](#creating-skills-with-wasmedge-agent)
 - [Skill Commands](#skill-commands)
 - [Skill Structure](#skill-structure)
 - [Frontmatter](#frontmatter)
@@ -24,21 +24,21 @@ Prime Agent implements the [Agent Skills standard](https://agentskills.io/specif
 
 > **Security:** Skills can instruct the model to perform any action and may include executable code the model invokes. Review skill content before use.
 
-Prime Agent loads skills from:
+WasmEdge Agent loads skills from:
 
 - Global:
-  - `~/.prime/agent/skills/`
+  - `~/.wasmedge-agent/skills/`
   - `~/.agents/skills/`
 - Project:
-  - `.prime/agent/skills/`
+  - `.wasmedge-agent/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Packages: `skills/` directories or `pi.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
-- Built-in: `skills/` shipped with the prime-agent package (lowest precedence)
+- Built-in: `skills/` shipped with the wasmedge-agent package (lowest precedence)
 
 Discovery rules:
-- In `~/.prime/agent/skills/` and `.prime/agent/skills/`, direct root `.md` files are discovered as individual skills
+- In `~/.wasmedge-agent/skills/` and `.wasmedge-agent/skills/`, direct root `.md` files are discovered as individual skills
 - In all skill locations, directories containing `SKILL.md` are discovered recursively
 - In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored
 
@@ -46,7 +46,7 @@ Disable discovery with `--no-skills` (explicit `--skill` paths still load).
 
 ## Built-in Skills
 
-Prime Agent ships with built-in skills that load by default:
+WasmEdge Agent ships with built-in skills that load by default:
 
 - `skill-creator` - teaches the agent to create new skills: markdown skill layout, frontmatter rules, placement and precedence, and the full Rust crate skill contract (crate layout, `run()` convention, workspace-dependency rules) with a working template in `references/rust-skills.md`.
 - `websearch` - a Rust crate Google search skill using the [Serper](https://serper.dev) API; the crate calls a typed host request, so the API key never enters the sandbox.
@@ -64,8 +64,8 @@ variables required, and it works even if you add the key mid-session.
 Optional overrides (environment variables):
 
 ```bash
-export PRIME_AGENT_WEBSEARCH_TIMEOUT=45
-export PRIME_AGENT_WEBSEARCH_NUM_RESULTS=5
+export WASMEDGE_AGENT_WEBSEARCH_TIMEOUT=45
+export WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS=5
 ```
 
 A `SERPER_API_KEY` in the environment, if set, takes precedence over the stored key.
@@ -73,7 +73,7 @@ A `SERPER_API_KEY` in the environment, if set, takes precedence over the stored 
 Once mounted, the model calls it from a rust cell:
 
 ```rust
-let results = agent_lib::skills::websearch::run("latest Prime Agent release")?;
+let results = agent_lib::skills::websearch::run("latest WasmEdge Agent release")?;
 println!("{results}");
 ```
 
@@ -119,7 +119,7 @@ To use skills from Claude Code or OpenAI Codex, add their directories to setting
 }
 ```
 
-For project-level Claude Code skills, add to `.prime/agent/settings.json`:
+For project-level Claude Code skills, add to `.wasmedge-agent/settings.json`:
 
 ```json
 {
@@ -129,7 +129,7 @@ For project-level Claude Code skills, add to `.prime/agent/settings.json`:
 
 ## How Skills Work
 
-1. At startup, Prime Agent scans skill locations and extracts names, descriptions, type, and file locations
+1. At startup, WasmEdge Agent scans skill locations and extracts names, descriptions, type, and file locations
 2. The system prompt includes visible skills in XML format per the [specification](https://agentskills.io/integrate-skills); Rust skills additionally list their `agent_lib::skills` use path
 3. When a task matches, the agent reads the full `SKILL.md` from a rust cell (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions — calling the mounted crate for a Rust skill, or using relative paths to reference scripts and assets for a markdown skill
@@ -140,7 +140,7 @@ Skills with `disable-model-invocation: true` are hidden from the startup skill l
 
 ## Rust Crate Skills
 
-A Rust crate skill uses the same `SKILL.md` metadata and invocation behavior as a markdown skill, but also provides a crate that Prime Agent mounts into the cell workspace.
+A Rust crate skill uses the same `SKILL.md` metadata and invocation behavior as a markdown skill, but also provides a crate that WasmEdge Agent mounts into the cell workspace.
 
 ```
 web-search/
@@ -156,7 +156,7 @@ Detection rules:
 - the crate name is the skill name with hyphens converted to underscores
 - `src/lib.rs` must exist
 
-For `web-search`, Prime Agent exposes `agent_lib::skills::web_search` in cells. The convention is a documented `run()` entry point, with any richer typed API alongside it:
+For `web-search`, WasmEdge Agent exposes `agent_lib::skills::web_search` in cells. The convention is a documented `run()` entry point, with any richer typed API alongside it:
 
 ```rust
 use agent_lib::skills::web_search;
@@ -168,13 +168,13 @@ At session start (and on `/reload`) the skill directory is linked into the works
 
 Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
-## Creating Skills with Prime Agent
+## Creating Skills with WasmEdge Agent
 
-Prime Agent ships with a built-in `skill-creator` skill that teaches the agent both the Agent Skills format and the Rust crate contract. You can ask for a skill in normal language:
+WasmEdge Agent ships with a built-in `skill-creator` skill that teaches the agent both the Agent Skills format and the Rust crate contract. You can ask for a skill in normal language:
 
 ```text
 Create a project Rust crate skill named release-audit in
-.prime/agent/skills/release-audit. It should expose
+.wasmedge-agent/skills/release-audit. It should expose
 agent_lib::skills::release_audit::run(repository, target_version), include
 concise SKILL.md instructions, use workspace dependencies, and verify the
 call compiles and runs in a cell.
@@ -188,7 +188,7 @@ To force the creation workflow explicitly, invoke the built-in skill command:
 
 Tell the agent three things:
 
-1. **Scope:** use `.prime/agent/skills/<name>/` for a project skill committed with the repository, or `~/.prime/agent/skills/<name>/` for a personal skill.
+1. **Scope:** use `.wasmedge-agent/skills/<name>/` for a project skill committed with the repository, or `~/.wasmedge-agent/skills/<name>/` for a personal skill.
 2. **Kind:** ask for a markdown skill when the capability is primarily instructions; ask for a Rust crate skill when the agent should call reusable functionality from cells.
 3. **Contract:** describe the intended Rust call, inputs, output, dependencies, credentials, and verification behavior.
 
@@ -305,7 +305,7 @@ description: Helps with PDFs.
 
 ## Validation
 
-Prime Agent validates skills against the Agent Skills standard. Most issues produce warnings but still load the skill:
+WasmEdge Agent validates skills against the Agent Skills standard. Most issues produce warnings but still load the skill:
 
 - Name doesn't match parent directory
 - Name exceeds 64 characters or contains invalid characters

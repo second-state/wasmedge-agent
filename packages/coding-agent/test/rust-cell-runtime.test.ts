@@ -30,7 +30,7 @@ describe("templateCandidates", () => {
 	it.each([resolve("/$bunfs", "root", "cli"), "B:\\~BUN\\root\\cli", "B:\\%7EBUN\\root\\cli"])(
 		"looks beside the executable first from Bun's virtual filesystem at %s",
 		(here) => {
-			const executable = resolve("/release", "prime-agent");
+			const executable = resolve("/release", "wasmedge-agent");
 			expect(templateCandidates(here, executable)[0]).toBe(
 				resolve("/release", "wasmedge-agent-runtime", "template"),
 			);
@@ -122,7 +122,7 @@ describe("resolveTemplateDir", () => {
 	it("resolves a compiled Bun executable's sidecar through the real search", () => {
 		const dir = mkdtempSync(join(tmpdir(), "template-bun-binary-"));
 		tempDirs.push(dir);
-		const executable = join(dir, "prime-agent");
+		const executable = join(dir, "wasmedge-agent");
 		const template = writeTemplate(join(dir, "wasmedge-agent-runtime", "template"));
 		expect(resolveTemplateDir(resolve("/$bunfs", "root", "cli"), executable)).toBe(resolve(template));
 	});

@@ -513,7 +513,7 @@ describe("skills", () => {
 		});
 
 		it("should warn when Rust skills share a crate name", () => {
-			const tempDir = mkdtempSync(join(tmpdir(), "prime-agent-skills-"));
+			const tempDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-skills-"));
 			try {
 				writeRustSkill(tempDir, "web-search");
 				writeRustSkill(tempDir, "web_search");

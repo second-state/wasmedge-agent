@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentTraceUploadAllResult, AgentTraceUploadResult } from "../src/core/agent-traces.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import { PRIME_AGENT_TRACES_PROVIDER_ID } from "../src/core/prime-inference-auth.js";
+import { WASMEDGE_AGENT_TRACES_PROVIDER_ID } from "../src/core/prime-inference-auth.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 
 interface TracesCommandContext {
@@ -38,7 +38,7 @@ function makeContext(enabled = true): TracesCommandContext {
 		},
 		modelRegistry: {
 			authStorage: AuthStorage.inMemory({
-				[PRIME_AGENT_TRACES_PROVIDER_ID]: { type: "api_key", key: "trace-key" },
+				[WASMEDGE_AGENT_TRACES_PROVIDER_ID]: { type: "api_key", key: "trace-key" },
 			}),
 		},
 		previewCurrentTrace: vi.fn(async () => {}),

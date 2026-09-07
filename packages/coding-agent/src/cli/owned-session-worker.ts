@@ -16,9 +16,9 @@ import { attachJsonlLineReader, serializeJsonLine } from "../modes/rpc/jsonl.js"
 import { isHelpCommandRequest, PUBLIC_COMMAND_NAMES, REMOVED_COMMAND_NAMES } from "./command-registry.js";
 import { type CliSubprocessLaunchSpec, createCliSubprocessLaunchSpec } from "./subprocess-launch.js";
 
-const OWNED_WORKER_ENV = "PRIME_AGENT_INTERNAL_OWNED_WORKER";
-const OWNED_RECOVERY_DESCRIPTOR_ENV = "PRIME_AGENT_INTERNAL_OWNED_RECOVERY_DESCRIPTOR";
-const OWNED_PROFILE_ENV = "PRIME_AGENT_INTERNAL_OWNED_PROFILE";
+const OWNED_WORKER_ENV = "WASMEDGE_AGENT_INTERNAL_OWNED_WORKER";
+const OWNED_RECOVERY_DESCRIPTOR_ENV = "WASMEDGE_AGENT_INTERNAL_OWNED_RECOVERY_DESCRIPTOR";
+const OWNED_PROFILE_ENV = "WASMEDGE_AGENT_INTERNAL_OWNED_PROFILE";
 
 let closeOwnerWatch: (() => void) | undefined;
 
@@ -201,7 +201,10 @@ export async function runOwnedSessionWorkerFrontend(
 	profile: OwnedSessionWorkerProfile,
 ): Promise<number> {
 	const interactive = profile === "interactive-ephemeral";
-	const recoveryDescriptorPath = join(tmpdir(), `prime-agent-owned-${process.pid}-${randomUUID().slice(0, 12)}.json`);
+	const recoveryDescriptorPath = join(
+		tmpdir(),
+		`wasmedge-agent-owned-${process.pid}-${randomUUID().slice(0, 12)}.json`,
+	);
 	const orphanProcessJournalPath = `${recoveryDescriptorPath}.orphans.jsonl`;
 	let currentChild: ChildProcess | undefined;
 	let terminating = false;
@@ -214,7 +217,7 @@ export async function runOwnedSessionWorkerFrontend(
 	let detachRpcOutput: (() => void) | undefined;
 	const bufferedRpcInput: string[] = [];
 	const pendingRpcCommands = new Map<string, { publicId?: string; command: string }>();
-	const anonymousRpcIdPrefix = `prime-agent-owned-${randomUUID()}`;
+	const anonymousRpcIdPrefix = `wasmedge-agent-owned-${randomUUID()}`;
 	let anonymousRpcCommandId = 0;
 
 	const prepareRpcInput = (line: string): string => {
@@ -480,7 +483,7 @@ export async function maybeRunOwnedSessionWorkerFrontend(
 	args: readonly string[],
 	forceLegacyFrontend = false,
 ): Promise<boolean> {
-	if (!forceLegacyFrontend && process.env.PRIME_AGENT_INTERNAL_LEGACY_OWNED_WORKER_FRONTEND !== "1") {
+	if (!forceLegacyFrontend && process.env.WASMEDGE_AGENT_INTERNAL_LEGACY_OWNED_WORKER_FRONTEND !== "1") {
 		return false;
 	}
 	const profile = classifyOwnedSessionWorkerInvocation(args, process.stdin.isTTY);

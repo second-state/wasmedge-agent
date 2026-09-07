@@ -289,7 +289,7 @@ describe("ensureInteractiveDaemonRunning", () => {
 
 		try {
 			await expect(ensureInteractiveDaemonRunning(socketPath)).rejects.toThrow(
-				/Prime Agent daemon exited during startup \(code 23\)\.[\s\S]*fatal startup failure/,
+				/WasmEdge Agent daemon exited during startup \(code 23\)\.[\s\S]*fatal startup failure/,
 			);
 			expect(Date.now() - startedAt).toBeLessThan(10_000);
 		} finally {
@@ -362,7 +362,7 @@ describe("ensureInteractiveDaemonRunning", () => {
 
 		try {
 			await expect(ensureInteractiveDaemonRunning(socketPath, join(dir, "missing-cwd"))).rejects.toThrow(
-				/Failed to spawn Prime Agent daemon: .*ENOENT/,
+				/Failed to spawn WasmEdge Agent daemon: .*ENOENT/,
 			);
 		} finally {
 			if (originalAgentDir === undefined) delete process.env[ENV_AGENT_DIR];

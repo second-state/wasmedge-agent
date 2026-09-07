@@ -201,6 +201,7 @@ import {
 	mergeHarnessStates,
 	mergeRefinementHistory,
 	planRefinement,
+	REFINEMENT_CUSTOM_TYPE,
 	type RefinementPlan,
 	type RefinementResult,
 	reviewAutoRefine,
@@ -7697,7 +7698,7 @@ export class AgentSession {
 			if (targetScope === "global") {
 				appendGlobalRefinement(globalHarnessStateDir, result);
 			}
-			this.sessionManager.appendCustomEntry("prime-agent.refinement", result);
+			this.sessionManager.appendCustomEntry(REFINEMENT_CUSTOM_TYPE, result);
 			this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
 			this.agent.state.systemPrompt = this._baseSystemPrompt;
 			try {
@@ -8707,7 +8708,7 @@ export class AgentSession {
 	}
 
 	private _createEphemeralRlmSessionDir(): string {
-		this._rlmSessionDir = mkdtempSync(join(tmpdir(), "prime-agent-rlm-"));
+		this._rlmSessionDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-rlm-"));
 		return this._rlmSessionDir;
 	}
 

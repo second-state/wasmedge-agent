@@ -6,7 +6,11 @@ import { getDaemonUpdateRestartManifestPath } from "../../../src/config.js";
 import type { SessionActionRecoverySnapshot } from "../../../src/core/agent-session.js";
 import type { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.js";
 import type { AgentCronJob, AgentCronJobStore, AgentCronScheduler } from "../../../src/core/cron-jobs.js";
-import { type CustomMessage, createSessionSlashCommandMessage } from "../../../src/core/messages.js";
+import {
+	type CustomMessage,
+	createSessionSlashCommandMessage,
+	UPDATE_RESTART_CUSTOM_TYPE,
+} from "../../../src/core/messages.js";
 import { parseSessionSlashCommand } from "../../../src/core/slash-commands.js";
 import type { BashOperations } from "../../../src/core/tools/bash.js";
 import type { ActiveSessionState, DaemonSocketClient } from "../../../src/modes/daemon/active-session-state.js";
@@ -135,7 +139,7 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 function createCustomMessage(content: string): CustomMessage {
 	return {
 		role: "custom",
-		customType: "prime-agent.test",
+		customType: "wasmedge-agent.test",
 		content,
 		display: false,
 		timestamp: Date.now(),
@@ -632,7 +636,7 @@ describe("issue #4257 update restart resume", () => {
 		expect(
 			harness.sessionManager
 				.getEntries()
-				.some((entry) => entry.type === "custom_message" && entry.customType === "prime-agent.update_restart"),
+				.some((entry) => entry.type === "custom_message" && entry.customType === UPDATE_RESTART_CUSTOM_TYPE),
 		).toBe(true);
 		abortSpy.mockRestore();
 		agentAbortSpy.mockRestore();

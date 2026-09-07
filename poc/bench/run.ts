@@ -6,10 +6,12 @@
  *
  * Groups: A = stock upstream prime-agent (ipython baseline), B = upstream +
  * PoC rust extension (M1), F = this fork's built-in rust runtime (M5
- * acceptance; launched via the repo's own prime-agent.sh, no extension).
- * Each run gets an isolated PRIME_AGENT_CODING_AGENT_DIR (models.json copied
- * in) so sessions land in the run directory; the baseline kernel venv is
- * shared via PRIME_AGENT_KERNEL_VENV to avoid re-bootstrapping per run.
+ * acceptance; launched via the repo's own wasmedge-agent.sh, no extension).
+ * Each run gets an isolated coding-agent dir (models.json copied in) so
+ * sessions land in the run directory; the baseline kernel venv is shared to
+ * avoid re-bootstrapping per run. Since the rebrand the two programs read
+ * different env names -- upstream PRIME_AGENT_*, the fork WASMEDGE_AGENT_* --
+ * so both are set and each binary ignores the other's.
  */
 
 import { execSync, spawn } from "node:child_process";
@@ -24,10 +26,16 @@ const REPO = resolve(HERE, "..", "..");
 const TASKS_DIR = join(HERE, "tasks");
 const RESULTS_DIR = join(HERE, "results");
 const PRIME_AGENT_SH = process.env.BENCH_PRIME_AGENT ?? "prime-agent";
-const FORK_PRIME_AGENT = join(REPO, "prime-agent.sh");
+const FORK_PRIME_AGENT = join(REPO, "wasmedge-agent.sh");
 const EXTENSION_DIR = join(REPO, "poc", "extension");
 const SHARED_KERNEL_VENV = join(homedir(), ".wasmedge-agent", "bench", "kernel-venv");
-const MODELS_JSON = join(homedir(), ".prime", "agent", "models.json");
+// The seed provider config is copied into every run's isolated agent dir, so
+// either program's copy serves all groups; prefer this fork's, and fall back to
+// upstream's for a machine that only has the stock install.
+const FORK_MODELS_JSON = join(homedir(), ".wasmedge-agent", "models.json");
+const MODELS_JSON = existsSync(FORK_MODELS_JSON)
+	? FORK_MODELS_JSON
+	: join(homedir(), ".prime", "agent", "models.json");
 
 interface TaskSpec {
 	id: string;
@@ -164,8 +172,12 @@ async function runOne(
 
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
+		// Upstream (groups A and B) reads these...
 		PRIME_AGENT_CODING_AGENT_DIR: agentDir,
 		PRIME_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
+		// ...and this fork (group F) reads these. Each ignores the other's.
+		WASMEDGE_AGENT_CODING_AGENT_DIR: agentDir,
+		WASMEDGE_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
 	};
 	if (group === "B") {
 		env.WASMEDGE_POC_PROMPT = variant;
@@ -252,23 +264,28 @@ async function runOne(
 // previous one-shot's supervisor is still tearing down attaches to a dying
 // daemon (create timeouts / socket-closed crashes). Wait for the socket to
 // clear, and break a wedged leftover by killing its owners.
-const DAEMON_SOCK_DIR = join(tmpdir(), `prime-agent-${process.getuid?.() ?? "0"}`);
+const DAEMON_SOCK_DIRS = [
+	join(tmpdir(), `prime-agent-${process.getuid?.() ?? "0"}`), // upstream: groups A and B
+	join(tmpdir(), `wasmedge-agent-${process.getuid?.() ?? "0"}`), // this fork: group F
+];
 async function settleDaemonSocket(): Promise<void> {
-	const sock = join(DAEMON_SOCK_DIR, "daemon.sock");
-	const deadline = Date.now() + 15_000;
-	while (existsSync(sock)) {
-		if (Date.now() > deadline) {
-			try {
-				execSync(`lsof -t ${JSON.stringify(sock)} | xargs kill -9`, { stdio: "ignore" });
-			} catch {
-				// no live owner: just a stale file
+	for (const dir of DAEMON_SOCK_DIRS) {
+		const sock = join(dir, "daemon.sock");
+		const deadline = Date.now() + 15_000;
+		while (existsSync(sock)) {
+			if (Date.now() > deadline) {
+				try {
+					execSync(`lsof -t ${JSON.stringify(sock)} | xargs kill -9`, { stdio: "ignore" });
+				} catch {
+					// no live owner: just a stale file
+				}
+				try {
+					execSync(`rm -rf ${JSON.stringify(dir)}`, { stdio: "ignore" });
+				} catch {}
+				break;
 			}
-			try {
-				execSync(`rm -rf ${JSON.stringify(DAEMON_SOCK_DIR)}`, { stdio: "ignore" });
-			} catch {}
-			return;
+			await new Promise((res) => setTimeout(res, 500));
 		}
-		await new Promise((res) => setTimeout(res, 500));
 	}
 }
 

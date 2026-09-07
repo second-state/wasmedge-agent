@@ -10,8 +10,8 @@ host: cells call this crate, and the host performs the HTTP request.
 
 ## Setup
 
-Get a free API key at https://serper.dev, then run `/login` in Prime Agent and
-choose "Serper (web search)" to paste it. The key is stored in Prime Agent and
+Get a free API key at https://serper.dev, then run `/login` in WasmEdge Agent and
+choose "Serper (web search)" to paste it. The key is stored in WasmEdge Agent and
 used by the host automatically.
 
 If web search reports a missing key, walk the user through those two steps;
@@ -19,8 +19,8 @@ don't ask them to set environment variables.
 
 Optional overrides (host environment variables):
 
-- `PRIME_AGENT_WEBSEARCH_TIMEOUT` - HTTP timeout in seconds (default 45).
-- `PRIME_AGENT_WEBSEARCH_NUM_RESULTS` - number of organic results to return (default 5).
+- `WASMEDGE_AGENT_WEBSEARCH_TIMEOUT` - HTTP timeout in seconds (default 45).
+- `WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS` - number of organic results to return (default 5).
 
 ## Usage
 
@@ -33,6 +33,6 @@ Call the mounted crate from a rust cell:
 //   SearchOpts { num_results: Option<u32>, timeout: Option<u32>, max_output: Option<u32> }
 use agent_lib::skills::websearch;
 
-let results = websearch::run("latest Prime Agent release")?;
+let results = websearch::run("latest WasmEdge Agent release")?;
 println!("{results}");
 ```

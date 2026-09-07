@@ -45,7 +45,7 @@ import {
 import type { SessionActionRecoverySnapshot } from "./core/agent-session.js";
 import { SESSION_ACTION_RECOVERY_FORMAT_VERSION } from "./core/agent-session.js";
 import type { AgentSessionRuntimeMetadata } from "./core/agent-session-runtime.js";
-import { type CustomMessage, isSessionSlashCommand } from "./core/messages.js";
+import { type CustomMessage, isSessionSlashCommand, UPDATE_COMPLETE_CUSTOM_TYPE } from "./core/messages.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { DaemonClient, type DaemonHello } from "./modes/daemon/daemon-client.js";
@@ -484,15 +484,15 @@ async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
 }
 
 const UPDATE_RESTART_CONTINUATION_PROMPT =
-	"Prime Agent restarted after an update. Continue the interrupted task from the saved transcript and restored tool/workspace state. Inspect current state before retrying commands when needed.";
+	"WasmEdge Agent restarted after an update. Continue the interrupted task from the saved transcript and restored tool/workspace state. Inspect current state before retrying commands when needed.";
 
 const UPDATE_SESSION_LOSS_COPY: DaemonSessionLossCopy = {
 	busyDetail(count) {
 		const { noun, pronoun } = pluralizeSessions(count);
-		return `Prime Agent has ${count} busy ${noun}. After the update installs, it will stop ${pronoun}, restart its background service, and resume interrupted work.`;
+		return `WasmEdge Agent has ${count} busy ${noun}. After the update installs, it will stop ${pronoun}, restart its background service, and resume interrupted work.`;
 	},
 	unlistableDetail:
-		"Running agents could not be listed. After the update installs, Prime Agent will stop resident agents, restart its background service, and resume interrupted work where possible.",
+		"Running agents could not be listed. After the update installs, WasmEdge Agent will stop resident agents, restart its background service, and resume interrupted work where possible.",
 	question: "Continue?",
 	nonTtyHint: "Re-run with --force to proceed.",
 };
@@ -1010,8 +1010,8 @@ async function restoreDaemonUpdateRestartSession(
 					type: "append_custom_message",
 					activeSessionId,
 					message: {
-						customType: "prime-agent.update_complete",
-						content: `Prime Agent updated to v${VERSION}. This daemon session was restored after the update.`,
+						customType: UPDATE_COMPLETE_CUSTOM_TYPE,
+						content: `WasmEdge Agent updated to v${VERSION}. This daemon session was restored after the update.`,
 						display: true,
 						details: { version: VERSION },
 					},

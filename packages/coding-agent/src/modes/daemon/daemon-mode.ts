@@ -98,6 +98,7 @@ import {
 	resolveHeartbeatStreamingBehavior,
 	shouldDeferHeartbeatCronJob,
 } from "../../core/cron-jobs.js";
+import { UPDATE_RESTART_CUSTOM_TYPE } from "../../core/messages.js";
 import { ORPHAN_PROCESS_JOURNAL_ENV } from "../../core/orphan-process-journal.js";
 import { PromptAdmissionCancelledError, waitForPromptAdmission } from "../../core/prompt-admission.js";
 import type { CreateRlmSubagentRuntimeOptions, SubagentRuntimeHost } from "../../core/rlm-runtime.js";
@@ -338,9 +339,9 @@ const CLIENT_CATCHUP_RETRY_MS = 250;
 const UPDATE_RESTART_ABORT_BASH_TIMEOUT_MS = 5000;
 const SUPERVISOR_FENCE_POLL_MS = 250;
 const UPDATE_RESTART_MARKER =
-	"<prime_agent_update_interrupted>\n" +
-	"Prime Agent was updated and intentionally interrupted this session. Continue from the saved transcript and restored tool/workspace state. Any running model, tool, bash, or child-agent work may have been partially completed.\n" +
-	"</prime_agent_update_interrupted>";
+	"<wasmedge_agent_update_interrupted>\n" +
+	"WasmEdge Agent was updated and intentionally interrupted this session. Continue from the saved transcript and restored tool/workspace state. Any running model, tool, bash, or child-agent work may have been partially completed.\n" +
+	"</wasmedge_agent_update_interrupted>";
 const RECOVERY_CHECKPOINT_EVENTS: ReadonlySet<string> = new Set([
 	"agent_start",
 	"agent_end",
@@ -617,7 +618,7 @@ export class AgentDaemon {
 
 		this.registerSignalHandlers();
 		this.summarizer.start();
-		this.log(`Prime Agent daemon listening on ${this.socketPath}`);
+		this.log(`WasmEdge Agent daemon listening on ${this.socketPath}`);
 		// No startup restore: on-disk sessions return only via --resume or the agents view.
 		if (!this.shuttingDown) {
 			this.cronScheduler.start();
@@ -5666,7 +5667,7 @@ export class AgentDaemon {
 			return;
 		}
 		state.runtime.session.sessionManager.appendCustomMessageEntry(
-			"prime-agent.update_restart",
+			UPDATE_RESTART_CUSTOM_TYPE,
 			UPDATE_RESTART_MARKER,
 			false,
 			{
