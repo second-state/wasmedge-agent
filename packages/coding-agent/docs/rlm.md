@@ -1,6 +1,6 @@
 # RLM Programming Model
 
-Prime Agent is built around a recursive language model (RLM) runtime: the model works by writing Rust programs — cells — that are compiled to WebAssembly and executed in a WasmEdge sandbox. Provider calls, session persistence, child lifecycles, scheduling, and safety policy remain in the TypeScript host; the Rust cell is the model-facing programming surface.
+WasmEdge Agent is built around a recursive language model (RLM) runtime: the model works by writing Rust programs — cells — that are compiled to WebAssembly and executed in a WasmEdge sandbox. Provider calls, session persistence, child lifecycles, scheduling, and safety policy remain in the TypeScript host; the Rust cell is the model-facing programming surface.
 
 ## RLM Loop
 
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 }
 ```
 
-A later cell reads `rlm::state::get("large_configs")?` — or checks `rlm::state::keys()?` — instead of re-deriving the list. Prime Agent extensions may intentionally add custom tools, but the built-in RLM design does not require a separate model tool for every capability.
+A later cell reads `rlm::state::get("large_configs")?` — or checks `rlm::state::keys()?` — instead of re-deriving the list. WasmEdge Agent extensions may intentionally add custom tools, but the built-in RLM design does not require a separate model tool for every capability.
 
 ### 2. Subagents are native RLM calls
 
@@ -99,7 +99,7 @@ Successfully completed daemon-backed children remain addressable while their par
 
 ### 3. Skills add programmatic capability
 
-Prime Agent supports the Agent Skills markdown format and extends it with Rust crate skills. Both use `SKILL.md` for discovery, routing, and instructions. A Rust skill also contains a crate that Prime Agent mounts into the cell workspace and exposes under `agent_lib::skills`.
+WasmEdge Agent supports the Agent Skills markdown format and extends it with Rust crate skills. Both use `SKILL.md` for discovery, routing, and instructions. A Rust skill also contains a crate that WasmEdge Agent mounts into the cell workspace and exposes under `agent_lib::skills`.
 
 For a skill named `release-audit`, the model can call:
 

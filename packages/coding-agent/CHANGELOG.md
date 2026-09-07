@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+- Renamed Prime Agent to WasmEdge Agent. `wasmedge-agent` is the canonical
+  command; `prime-agent` keeps working for one release and warns on stderr.
+- Configuration moved from `~/.prime/agent/` to `~/.wasmedge-agent/`,
+  migrated once on startup, and by `npm install -g` before it creates
+  `~/.wasmedge-agent/bin/`. When both directories exist nothing is moved, the
+  legacy tree is left untouched, and a deprecation warning names both
+  directories and says which one is in use. After a successful move, an empty
+  `~/.prime` is removed; it is kept if anything is still in it, including
+  Prime Inference's `config.json`.
+- `PRIME_AGENT_*` environment variables became `WASMEDGE_AGENT_*`, in the CLI
+  and in `install.sh`. Every user-facing name keeps a deprecated fallback for
+  one release and warns on stderr; internal, test-only, and same-process
+  signal names (nothing a user would set) were renamed outright.
+- `PRIME_API_KEY`, `~/.prime/config.json` and the Prime Inference provider are
+  unchanged; they belong to the provider, not to the agent.
+- Values that leave the process keep their names, because a rename would only
+  break the things that read them back: the `prime-agent-traces` provider id,
+  the `ai.primeintellect.prime-agent` ACP `_meta` namespace, and the
+  `prime-agent.refinement` session entry type that `/refine` history is stored
+  under.
+- The in-app update check no longer has a built-in release host. The renamed
+  constant still held upstream's release bucket, so a WasmEdge Agent build
+  offered upstream's version as an update and `/update` installed upstream's
+  `prime-agent` tarball over it. The check is disabled until
+  `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` is set, and `update` now reports that and
+  stops. It used to fall back to a global package-manager install of its own
+  package name, which the release owns no registry entry for. The same applies
+  whenever the check identifies no release at all -- offline mode,
+  `PI_SKIP_VERSION_CHECK`, a host that answers with an error, a manifest with
+  no usable version -- and when the manifest names a version but neither a
+  tarball nor a package, so nothing is identified to install. `--force` does
+  not bypass any of it: it skips the version comparison, not the check that
+  there is something real to install.
+- Commands that return early -- `doctor` and the other public commands,
+  `config`, `--version`, `--help`, `--export` -- now print the deprecation
+  warnings collected during startup, on stderr. They used to return before the
+  reporter ran, so a legacy environment variable or a config directory left in
+  the old location was handled correctly and never mentioned.
+- Identifiers still spelling the old product name in CamelCase were renamed:
+  `primeAgentMeta` is `wasmEdgeAgentMeta`, the ACP `_meta` interfaces are
+  `WasmEdgeAgent*Meta`, and the traces helpers are `*WasmEdgeAgentTraces*`.
+  These are names, not values: the `_meta` namespace and the traces provider
+  id they sit beside are unchanged.
+- `npm install -g`'s postinstall step prints the deprecation warnings it
+  collects, on stderr, instead of exiting silently. It is the step that creates
+  the both-directories state, and it was the one place that could never report
+  it.
+- The built-in `prime` theme is now `wasmedge`. A settings file that still
+  names `prime` keeps loading it for one release and warns on stderr; the old
+  name stops working after the next release.
+- The OAuth callback page in the browser now says WasmEdge Agent. It titled
+  its tab "Prime Intellect authentication successful" for every Anthropic,
+  OpenAI Codex and MCP login, none of which involve Prime Inference. The
+  Prime Inference sign-in copy is unchanged, because that one really is
+  Prime Intellect's.
+- A daemon started before the rename keeps running under the old process
+  title and socket name, so the new client can neither reach it nor list it
+  with `daemon ps`. Stop it manually once (for example `pkill -f prime-agent`)
+  after upgrading. Startup now looks for that daemon's endpoint -- the unix
+  socket, or the named pipe on Windows -- and warns naming it, saying which
+  configuration directory is in use now and that the old daemon can still
+  write into the one that is not. The move goes ahead either way: refusing it
+  would strand the whole legacy tree, because the new directory appears in the
+  same run and nothing may clobber it afterwards. Nothing is lost if you leave
+  the old daemon running -- the next launch finds both directories and says
+  which one is live.
+
 ## [0.7.0] - 2026-08-05
 
 ### Breaking Changes

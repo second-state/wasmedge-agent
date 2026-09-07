@@ -378,7 +378,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(skillCommandsItemIndex + 1, 0, {
 			id: "builtin-skills",
 			label: "Built-in skills",
-			description: "Load built-in skills shipped with prime-agent (takes effect after reload)",
+			description: "Load built-in skills shipped with wasmedge-agent (takes effect after reload)",
 			currentValue: config.enableBuiltinSkills ? "true" : "false",
 			values: ["true", "false"],
 		});

@@ -8,6 +8,7 @@ import {
 	readDaemonUpdateRestartStatus,
 } from "../../../src/cli/daemon-update-restart.js";
 import { ENV_AGENT_DIR } from "../../../src/config.js";
+import { UPDATE_COMPLETE_CUSTOM_TYPE } from "../../../src/core/messages.js";
 import { DaemonAgentConnection } from "../../../src/modes/agent-connection/daemon-agent-connection.js";
 import { DaemonClient } from "../../../src/modes/daemon/daemon-client.js";
 import type { DaemonResponse } from "../../../src/modes/daemon/daemon-protocol.js";
@@ -31,7 +32,7 @@ const fauxExtensionPath = resolve(__dirname, "../../fixtures/eng-4600-faux-exten
 const launcherFixturePath = resolve(__dirname, "../../fixtures/eng-4606-update-launcher.ts");
 const tsxPath = resolve(__dirname, "../../../../../node_modules/tsx/dist/cli.mjs");
 const tsconfigPath = resolve(__dirname, "../../../../../tsconfig.json");
-const supervisorRegistryDirEnv = "PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
+const supervisorRegistryDirEnv = "WASMEDGE_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
 const supervisors = new Set<SupervisorHandle>();
 const harnesses: Harness[] = [];
 const sockets = new Set<string>();
@@ -431,7 +432,7 @@ describe("ENG-4606 update restart coordinator", () => {
 		expect(await connection.getMessages()).toContainEqual(
 			expect.objectContaining({
 				role: "custom",
-				customType: "prime-agent.update_complete",
+				customType: UPDATE_COMPLETE_CUSTOM_TYPE,
 				display: true,
 			}),
 		);

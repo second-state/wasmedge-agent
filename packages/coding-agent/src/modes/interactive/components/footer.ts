@@ -2,7 +2,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 
 /**
- * Footer component for the prime brand TUI.
+ * Footer component for the WasmEdge Agent TUI.
  *
  * Renders nothing by default — token counters, cost, model name, cwd, and context %
  * are intentionally hidden. The setters and invalidate/dispose hooks are kept so the
@@ -35,7 +35,7 @@ export class FooterComponent implements Component {
 	}
 
 	render(_width: number): string[] {
-		// Footer is intentionally empty in the prime brand TUI. Telemetry (cost, tokens, model,
+		// Footer is intentionally empty in the WasmEdge Agent TUI. Telemetry (cost, tokens, model,
 		// cwd, context %) is hidden by default; bring it back via /usage when needed.
 		return [];
 	}

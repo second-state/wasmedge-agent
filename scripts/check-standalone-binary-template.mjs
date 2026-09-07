@@ -47,9 +47,9 @@ function findOnPath(name) {
 }
 
 function smokeCompiledBinary(bun) {
-	const releaseDir = mkdtempSync(join(tmpdir(), "prime-agent-binary-template-"));
+	const releaseDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-binary-template-"));
 	const homeDir = join(releaseDir, "home");
-	const executable = join(releaseDir, process.platform === "win32" ? "prime-agent.exe" : "prime-agent");
+	const executable = join(releaseDir, process.platform === "win32" ? "wasmedge-agent.exe" : "wasmedge-agent");
 	const template = join(releaseDir, "wasmedge-agent-runtime", "template");
 
 	try {
@@ -65,7 +65,7 @@ function smokeCompiledBinary(bun) {
 		}
 		const windowsProbe = spawnSync(
 			bun,
-			["build", "--compile", "--target=bun-windows-x64", entrypoint, "--outfile", join(releaseDir, "prime-agent.exe")],
+			["build", "--compile", "--target=bun-windows-x64", entrypoint, "--outfile", join(releaseDir, "wasmedge-agent.exe")],
 			{ encoding: "utf8", timeout: 120000 },
 		);
 		if (windowsProbe.status !== 0) {

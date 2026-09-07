@@ -9,7 +9,7 @@
  *
  * This single test proves:
  *   - The production daemon-launch env scrub strips inherited
- *     PRIME_AGENT_INTERNAL_DAEMON_WORKER=1 so the auto-spawned supervisor
+ *     WASMEDGE_AGENT_INTERNAL_DAEMON_WORKER=1 so the auto-spawned supervisor
  *     starts in supervisor mode (not worker mode) and sends daemon_hello.
  *   - serializedRefine=true (derived from appMode="json") crosses the real
  *     socket/process and arrives at the owned worker.
@@ -89,8 +89,8 @@ async function runCli(
 			TSX_TSCONFIG_PATH: repoTsconfigPath,
 			[ENV_AGENT_DIR]: options.agentDir,
 			PI_SKIP_VERSION_CHECK: "1",
-			PRIME_AGENT_INTERNAL_LEGACY_OWNED_WORKER_FRONTEND: "0",
-			PRIME_AGENT_KERNEL_FORKSERVER: "0",
+			WASMEDGE_AGENT_INTERNAL_LEGACY_OWNED_WORKER_FRONTEND: "0",
+			WASMEDGE_AGENT_KERNEL_FORKSERVER: "0",
 			RLM_DEPTH: "0",
 			// The test deliberately RE-INJECTS the worker role env var
 			// (via options.environment, applied last) to prove the
@@ -157,7 +157,7 @@ function writeAutoRefineSettings(agentDir: string): void {
 
 describe("Real-process serializedRefine — JSON mode", () => {
 	it("daemon supervisor scrubs inherited worker env, checkpoint applies refine_complete before agent_end", async () => {
-		const root = mkdtempSync(join(tmpdir(), "prime-agent-process-json-refine-"));
+		const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-process-json-refine-"));
 		tempRoots.add(root);
 		const agentDir = join(root, "agent");
 		mkdirSync(agentDir, { recursive: true });
@@ -197,7 +197,7 @@ describe("Real-process serializedRefine — JSON mode", () => {
 			{
 				agentDir,
 				environment: {
-					PRIME_AGENT_TEST_EVENT_LOG: eventLogPath,
+					WASMEDGE_AGENT_TEST_EVENT_LOG: eventLogPath,
 					[DAEMON_WORKER_ROLE_ENV]: "1",
 				},
 			},

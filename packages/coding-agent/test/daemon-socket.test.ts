@@ -18,7 +18,7 @@ describe("defaultDaemonSocketPath", () => {
 			return;
 		}
 
-		expect(defaultDaemonSocketPath()).toBe("\\\\.\\pipe\\prime-agent-daemon");
+		expect(defaultDaemonSocketPath()).toBe("\\\\.\\pipe\\wasmedge-agent-daemon");
 	});
 
 	it("uses a per-user Unix socket directory", () => {
@@ -29,7 +29,7 @@ describe("defaultDaemonSocketPath", () => {
 		const suffix = typeof process.getuid === "function" ? String(process.getuid()) : "user";
 		const socketPath = defaultDaemonSocketPath();
 
-		expect(dirname(socketPath)).toBe(join(tmpdir(), `prime-agent-${suffix}`));
+		expect(dirname(socketPath)).toBe(join(tmpdir(), `wasmedge-agent-${suffix}`));
 		expect(basename(socketPath)).toBe("daemon.sock");
 	});
 

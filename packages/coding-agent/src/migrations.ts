@@ -15,6 +15,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
+import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir, getSessionsDir } from "./config.js";
 import { migrateKeybindingsConfig } from "./core/keybindings.js";
@@ -156,7 +157,7 @@ function isLegacySessionDirName(name: string): boolean {
 /**
  * Migrate legacy per-cwd session directories into the flat session root.
  *
- * Older versions stored sessions under ~/.prime/agent/sessions/--cwd--/*.jsonl.
+ * Older versions stored sessions under ~/.wasmedge-agent/sessions/--cwd--/*.jsonl.
  * The daemon list/continue paths now scan the flat session root, so move any
  * existing nested JSONL session files up one level.
  */

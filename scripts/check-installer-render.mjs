@@ -17,78 +17,78 @@ if (mainCallIndex === -1) {
 
 const harnessSource = `${installerSource.slice(0, mainCallIndex)}
 
-prime_agent_test_cols=80
-prime_agent_test_rows=24
+wasmedge_agent_test_cols=80
+wasmedge_agent_test_rows=24
 
-prime_agent_read_terminal_size() {
-	prime_agent_screen_cols="$prime_agent_test_cols"
-	prime_agent_screen_rows="$prime_agent_test_rows"
+wasmedge_agent_read_terminal_size() {
+	wasmedge_agent_screen_cols="$wasmedge_agent_test_cols"
+	wasmedge_agent_screen_rows="$wasmedge_agent_test_rows"
 }
 
 print_render_meta() {
 	label="$1"
-	if prime_agent_show_logo; then
+	if wasmedge_agent_show_logo; then
 		visible=1
 	else
 		visible=0
 	fi
-	content_height=$(prime_agent_content_height)
+	content_height=$(wasmedge_agent_content_height)
 	printf '__META__ %s cols=%s rows=%s layout_show_logo=%s lab_width=%s render_lab_width=%s compact=%s visible=%s content_height=%s\\n' \\
-		"$label" "$prime_agent_screen_cols" "$prime_agent_screen_rows" "$prime_agent_screen_layout_show_logo" \\
-		"$prime_agent_screen_layout_lab_width" "$prime_agent_screen_render_lab_width" "$prime_agent_screen_compact" "$visible" "$content_height"
+		"$label" "$wasmedge_agent_screen_cols" "$wasmedge_agent_screen_rows" "$wasmedge_agent_screen_layout_show_logo" \\
+		"$wasmedge_agent_screen_layout_lab_width" "$wasmedge_agent_screen_render_lab_width" "$wasmedge_agent_screen_compact" "$visible" "$content_height"
 }
 
 render_case() {
-	prime_agent_screen_title="Installing Prime Agent"
-	prime_agent_screen_detail="Fetching the verified package."
-	prime_agent_screen_question=
-	prime_agent_screen_frame=1
-	prime_agent_screen_cols="$1"
-	prime_agent_screen_rows="$2"
-	prime_agent_screen_layout_ready=0
-	prime_agent_screen_layout_show_logo=0
-	prime_agent_screen_layout_lab_width=0
-	prime_agent_screen_render_lab_width=0
-	prime_agent_screen_compact=0
-	prime_agent_init_screen_layout
-	prime_agent_refresh_screen_layout_mode
+	wasmedge_agent_screen_title="Installing WasmEdge Agent"
+	wasmedge_agent_screen_detail="Fetching the verified package."
+	wasmedge_agent_screen_question=
+	wasmedge_agent_screen_frame=1
+	wasmedge_agent_screen_cols="$1"
+	wasmedge_agent_screen_rows="$2"
+	wasmedge_agent_screen_layout_ready=0
+	wasmedge_agent_screen_layout_show_logo=0
+	wasmedge_agent_screen_layout_lab_width=0
+	wasmedge_agent_screen_render_lab_width=0
+	wasmedge_agent_screen_compact=0
+	wasmedge_agent_init_screen_layout
+	wasmedge_agent_refresh_screen_layout_mode
 	print_render_meta first
 	printf '__RENDER_START__ first\\n'
-	prime_agent_render_screen
+	wasmedge_agent_render_screen
 	printf '__RENDER_END__ first\\n'
 
-	prime_agent_screen_frame=2
-	prime_agent_screen_cols="$3"
-	prime_agent_screen_rows="$4"
-	prime_agent_refresh_screen_layout_mode
+	wasmedge_agent_screen_frame=2
+	wasmedge_agent_screen_cols="$3"
+	wasmedge_agent_screen_rows="$4"
+	wasmedge_agent_refresh_screen_layout_mode
 	print_render_meta second
 	printf '__RENDER_START__ second\\n'
-	prime_agent_render_screen
+	wasmedge_agent_render_screen
 	printf '__RENDER_END__ second\\n'
 }
 
 screen_case() {
-	prime_agent_screen_enabled=1
-	prime_agent_screen_drawn=0
-	prime_agent_screen_last_cols=0
-	prime_agent_screen_last_rows=0
-	prime_agent_screen_layout_ready=0
-	prime_agent_screen_layout_show_logo=0
-	prime_agent_screen_layout_lab_width=0
-	prime_agent_screen_render_lab_width=0
-	prime_agent_screen_compact=0
-	prime_agent_screen_frame=0
+	wasmedge_agent_screen_enabled=1
+	wasmedge_agent_screen_drawn=0
+	wasmedge_agent_screen_last_cols=0
+	wasmedge_agent_screen_last_rows=0
+	wasmedge_agent_screen_layout_ready=0
+	wasmedge_agent_screen_layout_show_logo=0
+	wasmedge_agent_screen_layout_lab_width=0
+	wasmedge_agent_screen_render_lab_width=0
+	wasmedge_agent_screen_compact=0
+	wasmedge_agent_screen_frame=0
 
-	prime_agent_test_cols="$1"
-	prime_agent_test_rows="$2"
+	wasmedge_agent_test_cols="$1"
+	wasmedge_agent_test_rows="$2"
 	printf '__SCREEN_START__ first\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	wasmedge_agent_screen "Installing WasmEdge Agent" "Installing WasmEdge Agent" "Fetching the verified package." ""
 	printf '__SCREEN_END__ first\\n' >&2
 
-	prime_agent_test_cols="$3"
-	prime_agent_test_rows="$4"
+	wasmedge_agent_test_cols="$3"
+	wasmedge_agent_test_rows="$4"
 	printf '__SCREEN_START__ second\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	wasmedge_agent_screen "Installing WasmEdge Agent" "Installing WasmEdge Agent" "Fetching the verified package." ""
 	printf '__SCREEN_END__ second\\n' >&2
 }
 
@@ -97,8 +97,8 @@ progress_case() {
 Linking command binaries.
 Finalizing npm install."
 	for progress_frame in 1 24 25 48 49 200; do
-		prime_agent_animation_frame="$progress_frame"
-		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(prime_agent_animation_status "Installing Prime Agent" "$progress_details" static)" "$(prime_agent_animation_detail "$progress_details")"
+		wasmedge_agent_animation_frame="$progress_frame"
+		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(wasmedge_agent_animation_status "Installing WasmEdge Agent" "$progress_details" static)" "$(wasmedge_agent_animation_detail "$progress_details")"
 	done
 }
 
@@ -107,7 +107,7 @@ screen_case "$@"
 progress_case
 `;
 
-const tempDir = mkdtempSync(join(tmpdir(), "prime-agent-installer-render-"));
+const tempDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-installer-render-"));
 const harnessPath = join(tempDir, "harness.sh");
 
 try {
@@ -254,7 +254,7 @@ function assertInstallerProgress(progress) {
 			`expected progress sample ${index + 1} to show "${expectedDetail}", got "${progress[index].detail}"`,
 		);
 		check(
-			progress[index].status === "Installing Prime Agent...",
+			progress[index].status === "Installing WasmEdge Agent...",
 			`expected progress sample ${index + 1} to use indeterminate status`,
 		);
 		check(!progress[index].status.includes("%"), `expected progress sample ${index + 1} not to include a percent`);

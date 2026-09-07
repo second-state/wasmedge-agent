@@ -126,7 +126,7 @@ export class PrimeOnboardingSplashComponent implements Component {
 	private formatBrandLine(): PanelTextLine {
 		return [
 			{ text: "Welcome to ", tone: "text" },
-			{ text: "PRIME", tone: "text", bold: true },
+			{ text: "WasmEdge", tone: "text", bold: true },
 			{ text: " Agent", tone: "text", italic: true },
 		];
 	}

@@ -27,7 +27,7 @@ export type McpConnector = (options: McpConnectOptions) => Promise<McpConnection
 export const defaultMcpConnector: McpConnector = async ({ url, headers }) => {
 	const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 	const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-	const client = new Client({ name: "prime-agent", version: "1.0.0" });
+	const client = new Client({ name: "wasmedge-agent", version: "1.0.0" });
 	const transport = new StreamableHTTPClientTransport(new URL(url), {
 		requestInit: { headers },
 	});

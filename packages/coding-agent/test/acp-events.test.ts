@@ -5,7 +5,7 @@ import {
 	acpUpdatesForSessionEvent,
 	bashToolCallId,
 } from "../src/modes/acp/acp-events.js";
-import { PRIME_AGENT_META_NAMESPACE } from "../src/modes/acp/acp-meta.js";
+import { WASMEDGE_AGENT_META_NAMESPACE } from "../src/modes/acp/acp-meta.js";
 import type { AgentConnectionSessionEvent } from "../src/modes/agent-connection/types.js";
 
 /** Real streaming shape: the discriminator is on the event, delta is a string. */
@@ -83,7 +83,7 @@ describe("ACP session event mapping", () => {
 			content: [{ type: "content", content: { type: "text", text: "done" } }],
 		});
 		expect(updates[0]?._meta).toEqual({
-			[PRIME_AGENT_META_NAMESPACE]: {
+			[WASMEDGE_AGENT_META_NAMESPACE]: {
 				rust: {
 					attachments: [{ mimeType: "image/png", path: "/tmp/plot.png", bytes: 5 }],
 					diffCount: 1,
@@ -112,6 +112,15 @@ describe("ACP session event mapping", () => {
 			isError: true,
 		} as AgentConnectionSessionEvent);
 		expect(updates[0]).toMatchObject({ status: "failed" });
+	});
+
+	it("keeps the bash tool-call id at its established wire value", () => {
+		// The id crosses the protocol boundary and is what a client correlates
+		// a bash call's updates by (rule R1). Every other assertion in this file
+		// compares bashToolCallId() with itself, which would hold for any
+		// spelling; this one names the value clients were given.
+		expect(bashToolCallId("r1")).toBe("prime-agent-bash-r1");
+		expect(bashToolCallId(undefined)).toBe("prime-agent-bash");
 	});
 
 	it("gives bash a synthetic tool call with a stable id across its lifecycle", () => {
@@ -158,7 +167,7 @@ describe("ACP session event mapping", () => {
 		} as AgentConnectionSessionEvent);
 		expect(updates[0]?.sessionUpdate).toBe("session_info_update");
 		expect(updates[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: {
+			[WASMEDGE_AGENT_META_NAMESPACE]: {
 				subagents: [{ id: "sub-1", sessionName: "reviewer", status: "running" }],
 			},
 		});
@@ -173,7 +182,7 @@ describe("ACP session event mapping", () => {
 			willRetry: false,
 		} as AgentConnectionSessionEvent);
 		expect(updates[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 1234, summary: "compacted" } },
+			[WASMEDGE_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 1234, summary: "compacted" } },
 		});
 	});
 
@@ -183,7 +192,7 @@ describe("ACP session event mapping", () => {
 			goal: { status: "active", objective: "ship ACP", tokenBudget: 1000, tokensUsed: 25 },
 		} as AgentConnectionSessionEvent);
 		expect(updates[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: {
+			[WASMEDGE_AGENT_META_NAMESPACE]: {
 				goal: { status: "active", objective: "ship ACP", tokenBudget: 1000, tokensUsed: 25 },
 			},
 		});
@@ -201,7 +210,7 @@ describe("ACP session event mapping", () => {
 			},
 		} as AgentConnectionSessionEvent);
 		expect(done[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: {
+			[WASMEDGE_AGENT_META_NAMESPACE]: {
 				refinement: { status: "complete", summary: "persisted a memory", changes: ["create memory:m1"] },
 			},
 		});
@@ -211,7 +220,7 @@ describe("ACP session event mapping", () => {
 			error: "budget exhausted",
 		} as AgentConnectionSessionEvent);
 		expect(failed[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: { refinement: { status: "failed", error: "budget exhausted" } },
+			[WASMEDGE_AGENT_META_NAMESPACE]: { refinement: { status: "failed", error: "budget exhausted" } },
 		});
 	});
 
@@ -243,7 +252,7 @@ describe("ACP session event mapping", () => {
 			willRetry: false,
 		} as AgentConnectionSessionEvent);
 		expect(compaction[0]?._meta).toMatchObject({
-			[PRIME_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 90_000, summary: "kept the last turns" } },
+			[WASMEDGE_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 90_000, summary: "kept the last turns" } },
 		});
 	});
 

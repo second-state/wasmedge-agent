@@ -2,7 +2,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.js";
-import { PRIME_AGENT_META_NAMESPACE } from "../../src/modes/acp/acp-meta.js";
+import { WASMEDGE_AGENT_META_NAMESPACE } from "../../src/modes/acp/acp-meta.js";
 import { runAcpModeWithConnection } from "../../src/modes/acp/index.js";
 import { InProcessAgentConnection } from "../../src/modes/agent-connection/in-process-agent-connection.js";
 import { createHarness } from "./harness.js";
@@ -54,7 +54,7 @@ function connectAcpClient(connection: any): ClientHarness {
 describe("ACP mode end to end", () => {
 	it("completes a prompt turn and streams assistant text", async () => {
 		const harness = await createHarness();
-		harness.setResponses([fauxAssistantMessage("Hello from prime-agent.")]);
+		harness.setResponses([fauxAssistantMessage("Hello from wasmedge-agent.")]);
 		const connection = new InProcessAgentConnection(runtimeHostFor(harness.session));
 
 		const { client, updates } = connectAcpClient(connection);
@@ -64,8 +64,8 @@ describe("ACP mode end to end", () => {
 			clientCapabilities: {},
 		});
 		expect(init.protocolVersion).toBe(acp.PROTOCOL_VERSION);
-		expect(init.agentInfo?.name).toBe("prime-agent");
-		expect(init._meta).toHaveProperty(PRIME_AGENT_META_NAMESPACE);
+		expect(init.agentInfo?.name).toBe("wasmedge-agent");
+		expect(init._meta).toHaveProperty(WASMEDGE_AGENT_META_NAMESPACE);
 
 		const session = await client.request("session/new", { cwd: harness.tempDir, mcpServers: [] });
 		expect(typeof session.sessionId).toBe("string");
@@ -80,7 +80,7 @@ describe("ACP mode end to end", () => {
 			.filter((u) => u.update?.sessionUpdate === "agent_message_chunk")
 			.map((u) => u.update.content.text)
 			.join("");
-		expect(text).toContain("Hello from prime-agent");
+		expect(text).toContain("Hello from wasmedge-agent");
 
 		harness.cleanup();
 	}, 30_000);

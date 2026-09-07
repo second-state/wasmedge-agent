@@ -1,9 +1,9 @@
 # MCP Integrations
 
-Connect external services (Linear, Notion, …) to Prime Agent over the
+Connect external services (Linear, Notion, …) to WasmEdge Agent over the
 [Model Context Protocol](https://modelcontextprotocol.io).
 
-Consistent with Prime Agent's host-mediated I/O design, MCP integrations are
+Consistent with WasmEdge Agent's host-mediated I/O design, MCP integrations are
 **not** exposed as new agent tools, and no per-integration package is needed.
 The TypeScript host owns the connections; the model reaches every connected
 server from a rust cell through two typed requests:
@@ -37,7 +37,7 @@ Built-in integrations (Linear, Notion) ship **disabled**. Logging in enables the
 - `/mcp` lists integrations and connection status; `/mcp logout <name>`
   disconnects.
 
-Credentials are stored once in `~/.prime/agent/auth.json` under `mcp:<name>`.
+Credentials are stored once in `~/.wasmedge-agent/auth.json` under `mcp:<name>`.
 Enablement is derived from whether valid credentials exist — there is no separate
 on/off switch.
 
@@ -65,11 +65,11 @@ let result = rlm::mcp::call_tool("linear", "list_issues", json!({"team": "Engine
 
 ## Adding your own server
 
-Declare it under `mcpServers` in `~/.prime/agent/settings.json` (or project
-`.prime/agent/settings.json`) — that is the whole integration:
+Declare it under `mcpServers` in `~/.wasmedge-agent/settings.json` (or project
+`.wasmedge-agent/settings.json`) — that is the whole integration:
 
 ```jsonc
-// ~/.prime/agent/settings.json
+// ~/.wasmedge-agent/settings.json
 {
   "mcpServers": {
     "acme": {

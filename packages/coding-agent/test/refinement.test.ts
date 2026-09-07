@@ -21,6 +21,7 @@ import {
 	mergeHarnessStates,
 	mergeRefinementHistory,
 	planRefinement,
+	REFINEMENT_CUSTOM_TYPE,
 	type RefinementAction,
 	type RefinementKind,
 	type RefinementProposal,
@@ -56,7 +57,7 @@ afterEach(() => {
 });
 
 function makeTempDir(): string {
-	tempDir = mkdtempSync(join(tmpdir(), "prime-agent-refinement-test-"));
+	tempDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-refinement-test-"));
 	return tempDir;
 }
 
@@ -727,6 +728,34 @@ describe("harness refinement", () => {
 		];
 
 		expect(getRefinementHistory(entries)).toEqual([result]);
+	});
+
+	it("keeps the persisted custom type at its pre-rebrand value", () => {
+		// A wire value (rule R1): written into session JSONL and matched back by
+		// exact equality. Pinning it by literal, not just asserting a constant
+		// exists, is what stops a later edit from rebranding it and silently
+		// emptying every existing /refine history -- no error, just a history
+		// that looks empty.
+		expect(REFINEMENT_CUSTOM_TYPE).toBe("prime-agent.refinement");
+
+		const stored: RefinementResult = {
+			id: "refine_before_rebrand",
+			summary: "Recorded before the rebrand",
+			rationale: "Repeated failure.",
+			expectedOutcome: "Better validation.",
+			appliedEdits: [],
+			harnessStatePath: join(tmpdir(), "harness_state.json"),
+		};
+		const entry: CustomEntry = {
+			type: "custom",
+			customType: "prime-agent.refinement",
+			data: stored,
+			id: "custom_before_rebrand",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+		};
+
+		expect(getRefinementHistory([entry])).toEqual([stored]);
 	});
 
 	it.each(kinds)("rejects duplicate create for %s entries", (kind) => {

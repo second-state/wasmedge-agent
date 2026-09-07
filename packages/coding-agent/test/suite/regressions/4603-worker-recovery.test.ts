@@ -95,7 +95,7 @@ const fauxExtensionPath = resolve(__dirname, "../../fixtures/eng-4600-faux-exten
 const cliPath = resolve(__dirname, "../../../src/cli.ts");
 const tsxPath = resolve(__dirname, "../../../../../node_modules/tsx/dist/cli.mjs");
 const tsconfigPath = resolve(__dirname, "../../../../../tsconfig.json");
-const supervisorRegistryDirEnv = "PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
+const supervisorRegistryDirEnv = "WASMEDGE_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
 const handles = new Set<ProcessHandle>();
 const harnesses: Harness[] = [];
 const socketTempDirs = new Set<string>();
@@ -140,7 +140,7 @@ async function createPaths(): Promise<TestPaths> {
 		socketTmpDir,
 		socketPath:
 			process.platform === "win32"
-				? `\\\\.\\pipe\\prime-agent-eng-4603-${process.pid}-${Date.now()}`
+				? `\\\\.\\pipe\\wasmedge-agent-eng-4603-${process.pid}-${Date.now()}`
 				: join(harness.tempDir, "daemon.sock"),
 	};
 }

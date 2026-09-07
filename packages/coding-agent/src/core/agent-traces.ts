@@ -7,9 +7,9 @@ import { readFirstLineSync } from "../utils/file-lines.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
 	loadPrimeCliConfig,
-	PRIME_AGENT_TRACES_PROVIDER_ID,
 	PRIME_INFERENCE_PROVIDER_ID,
-	resolvePrimeAgentTracesBaseUrl,
+	resolveWasmEdgeAgentTracesBaseUrl,
+	WASMEDGE_AGENT_TRACES_PROVIDER_ID,
 } from "./prime-inference-auth.js";
 import type { SessionHeader, SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -496,7 +496,7 @@ export async function previewAgentTraceFile(options: AgentTracePreviewOptions): 
 	}
 
 	const traceContext = resolveTraceContext(options.sessionFile, header);
-	const baseUrl = resolvePrimeAgentTracesBaseUrl(options.baseUrl);
+	const baseUrl = resolveWasmEdgeAgentTracesBaseUrl(options.baseUrl);
 	const git = body ? activeGitContext(body, header) : header.git;
 	const preview = body
 		? traceContentPreview(body, Math.max(256, options.maxContentChars ?? TRACE_PREVIEW_MAX_CHARS))
@@ -632,22 +632,22 @@ export async function uploadAllAgentTraces(options: AgentTraceUploadAllOptions):
 	};
 }
 
-export async function getPrimeAgentTraceCredential(
+export async function getWasmEdgeAgentTraceCredential(
 	authStorage: AuthStorage,
 	options: { reloadAuth?: boolean; configPath?: string } = {},
 ): Promise<AgentTraceCredential | undefined> {
-	const traceEnvKey = stringEnv("PRIME_AGENT_TRACES_API_KEY");
+	const traceEnvKey = stringEnv("WASMEDGE_AGENT_TRACES_API_KEY");
 	if (traceEnvKey) {
-		return { apiKey: traceEnvKey, source: "environment", label: "PRIME_AGENT_TRACES_API_KEY" };
+		return { apiKey: traceEnvKey, source: "environment", label: "WASMEDGE_AGENT_TRACES_API_KEY" };
 	}
 
 	if (options.reloadAuth !== false) {
 		authStorage.reload();
 	}
 
-	const traceKey = await authStorage.getApiKey(PRIME_AGENT_TRACES_PROVIDER_ID, { includeFallback: false });
+	const traceKey = await authStorage.getApiKey(WASMEDGE_AGENT_TRACES_PROVIDER_ID, { includeFallback: false });
 	if (traceKey) {
-		return { apiKey: traceKey, source: "stored", label: "Prime Agent Traces credential" };
+		return { apiKey: traceKey, source: "stored", label: "WasmEdge Agent Traces credential" };
 	}
 
 	const primeEnvKey = stringEnv("PRIME_API_KEY");
@@ -752,7 +752,7 @@ async function performAgentTraceUpload(
 		return { status: "invalid_session", message: "Session file is missing a valid session header" };
 	}
 
-	const credential = await getPrimeAgentTraceCredential(options.authStorage, {
+	const credential = await getWasmEdgeAgentTraceCredential(options.authStorage, {
 		configPath: options.configPath,
 		reloadAuth: options.reloadConfig !== false,
 	});
@@ -799,7 +799,7 @@ async function performAgentTraceUpload(
 		return { status: "disabled" };
 	}
 
-	const baseUrl = resolvePrimeAgentTracesBaseUrl(options.baseUrl);
+	const baseUrl = resolveWasmEdgeAgentTracesBaseUrl(options.baseUrl);
 	const url = `${baseUrl}/api/v1/agent-traces/sessions/${encodeURIComponent(header.id)}`;
 	const fetchFn = options.fetchFn ?? fetch;
 

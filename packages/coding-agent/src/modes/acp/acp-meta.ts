@@ -1,18 +1,18 @@
 /**
- * Namespaced `_meta` payloads for prime-agent capabilities that ACP has no
+ * Namespaced `_meta` payloads for wasmedge-agent capabilities that ACP has no
  * native concept for (rust cell semantics, RLM subagents, autonomous gates,
  * goals, heartbeats, continual harness state).
  *
  * ACP reserves `_meta` on capability objects, notifications, tool calls, and
  * content blocks precisely so agents can carry non-standard data. Vanilla ACP
- * clients ignore these keys; a prime-agent-aware client (or the verifiers
+ * clients ignore these keys; a wasmedge-agent-aware client (or the verifiers
  * harness) reads them. Never add non-standard fields to an ACP object root.
  */
 
-/** Reverse-domain namespace for every prime-agent `_meta` payload. */
-export const PRIME_AGENT_META_NAMESPACE = "ai.primeintellect.prime-agent";
+/** Reverse-domain namespace for every wasmedge-agent `_meta` payload. */
+export const WASMEDGE_AGENT_META_NAMESPACE = "ai.primeintellect.prime-agent";
 
-export interface PrimeAgentSubagentMeta {
+export interface WasmEdgeAgentSubagentMeta {
 	id: string;
 	sessionName?: string;
 	status: string;
@@ -22,7 +22,7 @@ export interface PrimeAgentSubagentMeta {
 	error?: string;
 }
 
-export interface PrimeAgentAutonomousMeta {
+export interface WasmEdgeAgentAutonomousMeta {
 	enabled: boolean;
 	continuationsUsed: number;
 	turnsUsed: number;
@@ -32,64 +32,64 @@ export interface PrimeAgentAutonomousMeta {
 	limitReason?: string;
 }
 
-export interface PrimeAgentRustAttachmentMeta {
+export interface WasmEdgeAgentRustAttachmentMeta {
 	mimeType?: string;
 	path?: string;
 	bytes?: number;
 }
 
-export interface PrimeAgentRustMeta {
+export interface WasmEdgeAgentRustMeta {
 	/** Media the cell loaded into context, as reported by the rust tool. */
-	attachments?: PrimeAgentRustAttachmentMeta[];
+	attachments?: WasmEdgeAgentRustAttachmentMeta[];
 	/** Number of diffs the cell displayed. */
 	diffCount?: number;
 }
 
-export interface PrimeAgentGoalMeta {
+export interface WasmEdgeAgentGoalMeta {
 	status: string;
 	objective?: string;
 	tokenBudget?: number;
 	tokensUsed?: number;
 }
 
-export interface PrimeAgentRefinementMeta {
+export interface WasmEdgeAgentRefinementMeta {
 	status: "complete" | "failed";
 	summary?: string;
 	changes?: string[];
 	error?: string;
 }
 
-export interface PrimeAgentAgentMessageMeta {
+export interface WasmEdgeAgentAgentMessageMeta {
 	toolCallId: string;
 	target?: string;
 	deliveryStatus?: string;
 }
 
-export interface PrimeAgentCwdMeta {
+export interface WasmEdgeAgentCwdMeta {
 	/** The cwd the client asked for. */
 	requested: string;
-	/** The cwd prime-agent is actually running in, fixed at startup. */
+	/** The cwd wasmedge-agent is actually running in, fixed at startup. */
 	actual: string;
 }
 
-export interface PrimeAgentSessionMeta {
+export interface WasmEdgeAgentSessionMeta {
 	/** Present when a client-requested cwd differs from the agent's real cwd. */
-	cwd?: PrimeAgentCwdMeta;
+	cwd?: WasmEdgeAgentCwdMeta;
 	/** Set when the session's heartbeat or cron schedule changed. */
 	heartbeatsChanged?: boolean;
-	goal?: PrimeAgentGoalMeta;
-	refinement?: PrimeAgentRefinementMeta;
-	agentMessage?: PrimeAgentAgentMessageMeta;
+	goal?: WasmEdgeAgentGoalMeta;
+	refinement?: WasmEdgeAgentRefinementMeta;
+	agentMessage?: WasmEdgeAgentAgentMessageMeta;
 	sessionId?: string;
 	rlmDepth?: number;
 	rlmMaxDepth?: number;
 	compaction?: { tokensBefore?: number; summary?: string };
-	subagents?: PrimeAgentSubagentMeta[];
-	autonomous?: PrimeAgentAutonomousMeta;
-	rust?: PrimeAgentRustMeta;
+	subagents?: WasmEdgeAgentSubagentMeta[];
+	autonomous?: WasmEdgeAgentAutonomousMeta;
+	rust?: WasmEdgeAgentRustMeta;
 }
 
-/** Wrap a prime-agent payload in its reverse-domain `_meta` envelope. */
-export function primeAgentMeta(payload: PrimeAgentSessionMeta): Record<string, unknown> {
-	return { [PRIME_AGENT_META_NAMESPACE]: payload };
+/** Wrap a wasmedge-agent payload in its reverse-domain `_meta` envelope. */
+export function wasmEdgeAgentMeta(payload: WasmEdgeAgentSessionMeta): Record<string, unknown> {
+	return { [WASMEDGE_AGENT_META_NAMESPACE]: payload };
 }

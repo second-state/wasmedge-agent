@@ -15,7 +15,7 @@ describe("fullscreen mode settings", () => {
 			rmSync(testDir, { recursive: true });
 		}
 		mkdirSync(agentDir, { recursive: true });
-		mkdirSync(join(projectDir, ".prime", "agent"), { recursive: true });
+		mkdirSync(join(projectDir, ".wasmedge-agent"), { recursive: true });
 		savedEnv = process.env.PI_FULLSCREEN;
 		delete process.env.PI_FULLSCREEN;
 	});

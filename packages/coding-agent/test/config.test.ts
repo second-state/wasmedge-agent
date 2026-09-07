@@ -3,7 +3,11 @@ import { homedir, tmpdir } from "os";
 import { delimiter, join } from "path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	APP_NAME,
+	APP_TITLE,
+	CONFIG_DIR_NAME,
 	detectInstallMethod,
+	ENV_AGENT_DIR,
 	ENV_LEGACY_SESSION_DIR,
 	ENV_SESSION_DIR,
 	getSelfUpdateCommand,
@@ -12,6 +16,25 @@ import {
 	getUpdateInstruction,
 } from "../src/config.js";
 import { getDefaultSessionDir } from "../src/core/session-manager.js";
+
+/** These are the whole point of the rebrand, and every one is derived from
+ *  package.json's piConfig at import time rather than written down anywhere.
+ *  check-branding catches a revert to the old literals but not a typo in the
+ *  new ones -- ".wasmedge_agent" or "wasmedge-agents" would sail past it while
+ *  silently relocating every user's config. Pin the values. */
+describe("application identity", () => {
+	test("resolves the WasmEdge Agent identity from piConfig", () => {
+		expect(APP_NAME).toBe("wasmedge-agent");
+		expect(APP_TITLE).toBe("wasmedge-agent");
+		expect(CONFIG_DIR_NAME).toBe(".wasmedge-agent");
+	});
+
+	test("derives the env prefix from the application name", () => {
+		expect(ENV_AGENT_DIR).toBe("WASMEDGE_AGENT_CODING_AGENT_DIR");
+		expect(ENV_SESSION_DIR).toBe("WASMEDGE_AGENT_SESSION_DIR");
+		expect(ENV_LEGACY_SESSION_DIR).toBe("WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR");
+	});
+});
 
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
 const originalPath = process.env.PATH;
@@ -216,7 +239,7 @@ describe("detectInstallMethod", () => {
 
 	test("self-updates tarball specs without uninstalling the same logical package first", () => {
 		const { prefix } = createNpmPrefixInstall();
-		const tarballUrl = "https://downloads.example.test/prime-agent/prime-agent-0.73.0.tgz";
+		const tarballUrl = "https://downloads.example.test/wasmedge-agent/wasmedge-agent-0.73.0.tgz";
 
 		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", undefined, tarballUrl);
 
@@ -229,9 +252,9 @@ describe("detectInstallMethod", () => {
 
 	test("self-updates renamed tarball packages by uninstalling the old package after install", () => {
 		const { prefix } = createNpmPrefixInstall();
-		const tarballUrl = "https://downloads.example.test/prime-agent/prime-agent-0.73.0.tgz";
+		const tarballUrl = "https://downloads.example.test/wasmedge-agent/wasmedge-agent-0.73.0.tgz";
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", undefined, tarballUrl, "prime-agent");
+		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", undefined, tarballUrl, "wasmedge-agent");
 
 		expect(command).toEqual({
 			command: "npm",
@@ -392,7 +415,7 @@ describe("detectInstallMethod", () => {
 
 describe("session paths", () => {
 	test("uses the short app-prefixed session dir env var", () => {
-		expect(ENV_SESSION_DIR).toBe("PRIME_AGENT_SESSION_DIR");
+		expect(ENV_SESSION_DIR).toBe("WASMEDGE_AGENT_SESSION_DIR");
 	});
 
 	test("uses the session root env var when computing sessions dir", () => {
@@ -411,9 +434,9 @@ describe("session paths", () => {
 	});
 
 	test("expands tilde in the session root env var", () => {
-		process.env[ENV_SESSION_DIR] = "~/prime-agent-sessions";
+		process.env[ENV_SESSION_DIR] = "~/wasmedge-agent-sessions";
 
-		expect(getSessionsDir("/agent")).toBe(join(homedir(), "prime-agent-sessions"));
+		expect(getSessionsDir("/agent")).toBe(join(homedir(), "wasmedge-agent-sessions"));
 	});
 
 	test("uses the env session root as the default session dir", () => {

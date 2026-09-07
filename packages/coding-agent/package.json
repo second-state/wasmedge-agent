@@ -4,8 +4,8 @@
 	"description": "Coding agent CLI with IPython-backed tools and session management",
 	"type": "module",
 	"piConfig": {
-		"name": "prime-agent",
-		"configDir": ".prime/agent"
+		"name": "wasmedge-agent",
+		"configDir": ".wasmedge-agent"
 	},
 	"bin": {
 		"pi": "dist/bundle/cli.js"
@@ -103,7 +103,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/PrimeIntellect-ai/prime-agent.git",
+		"url": "git+https://github.com/PrimeIntellect-ai/wasmedge-agent.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

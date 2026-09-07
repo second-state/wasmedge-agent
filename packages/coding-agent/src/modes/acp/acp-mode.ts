@@ -13,15 +13,15 @@ import { InProcessAgentConnection } from "../agent-connection/in-process-agent-c
 import type { AgentConnection } from "../agent-connection/types.js";
 import { latestAutonomousGateAttempt } from "../headless-completion.js";
 import { type AcpEventMappingState, acpUpdatesForSessionEvent } from "./acp-events.js";
-import { primeAgentMeta } from "./acp-meta.js";
+import { wasmEdgeAgentMeta } from "./acp-meta.js";
 import { type AcpStopReason, acpStopReason } from "./acp-stop-reason.js";
 
 /**
  * ACP (Agent Client Protocol) mode.
  *
- * prime-agent acts as an ACP agent over NDJSON on stdio, driving an
+ * wasmedge-agent acts as an ACP agent over NDJSON on stdio, driving an
  * `AgentConnection` in-process. It deliberately does not shell out to RPC mode
- * and translate: prime-agent's differentiators (rust-cell tools, subagents,
+ * and translate: wasmedge-agent's differentiators (rust-cell tools, subagents,
  * autonomous gates) are visible as first-class events here, and a translating
  * adapter is exactly what flattens them away.
  *
@@ -103,7 +103,7 @@ interface AcpSessionEntry {
 }
 
 /**
- * Split ACP prompt blocks into the text and images prime-agent accepts.
+ * Split ACP prompt blocks into the text and images wasmedge-agent accepts.
  *
  * Image and embedded-resource blocks are advertised in `initialize`, so they must
  * actually reach the model: dropping them silently would let a client believe a
@@ -139,7 +139,7 @@ function promptContent(blocks: readonly unknown[]): { text: string; images: Imag
 
 function autonomousMeta(status: AgentAutonomousStatus | undefined): Record<string, unknown> | undefined {
 	if (!status?.enabled) return undefined;
-	return primeAgentMeta({
+	return wasmEdgeAgentMeta({
 		autonomous: {
 			enabled: status.enabled,
 			continuationsUsed: status.continuationsUsed,
@@ -254,7 +254,7 @@ export async function runAcpModeWithConnection(
 		options.stream ?? acp.ndJsonStream(rawStdoutSink(), Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>);
 
 	const handle = acp
-		.agent({ name: "prime-agent" })
+		.agent({ name: "wasmedge-agent" })
 		.onRequest("initialize", async () => ({
 			protocolVersion: acp.PROTOCOL_VERSION,
 			agentCapabilities: {
@@ -264,10 +264,10 @@ export async function runAcpModeWithConnection(
 				// the single-session slot) instead of dropping the connection.
 				sessionCapabilities: { close: {} },
 			},
-			agentInfo: { name: "prime-agent", title: "Prime Agent", version: VERSION },
-			// Advertise prime-agent extras under a namespaced key: ACP reserves
+			agentInfo: { name: "wasmedge-agent", title: "WasmEdge Agent", version: VERSION },
+			// Advertise wasmedge-agent extras under a namespaced key: ACP reserves
 			// every object root for future protocol fields.
-			_meta: primeAgentMeta({}),
+			_meta: wasmEdgeAgentMeta({}),
 		}))
 		.onRequest("session/new", async (ctx: any) => {
 			if (!bound) {
@@ -278,11 +278,11 @@ export async function runAcpModeWithConnection(
 			}
 			if (session) {
 				throw new Error(
-					"prime-agent ACP mode hosts one session per connection; " +
-						"start another prime-agent process for a second session",
+					"wasmedge-agent ACP mode hosts one session per connection; " +
+						"start another wasmedge-agent process for a second session",
 				);
 			}
-			// prime-agent's cwd is fixed at startup by the session it was launched
+			// wasmedge-agent's cwd is fixed at startup by the session it was launched
 			// with, so a client-supplied cwd cannot be adopted after the fact.
 			// Report the real cwd back in `_meta` rather than failing the request or
 			// letting the client assume a directory the agent is not using.
@@ -299,7 +299,7 @@ export async function runAcpModeWithConnection(
 			}
 			const sessionId = randomUUID();
 			const entry: AcpSessionEntry = { id: sessionId, abort: undefined, unsubscribe: undefined };
-			// Subscribe for the session lifetime, not per prompt turn: prime-agent
+			// Subscribe for the session lifetime, not per prompt turn: wasmedge-agent
 			// subagents are fire-and-forget and keep reporting after the spawning turn
 			// ends, so a turn-scoped subscription would drop their updates. One
 			// mapping state per session keeps streaming bash output correlated with
@@ -312,7 +312,7 @@ export async function runAcpModeWithConnection(
 				// session events, but they drive the long-running work an ACP client
 				// most needs to observe.
 				if (event.type === "heartbeats_changed") {
-					notify({ sessionUpdate: "session_info_update", _meta: primeAgentMeta({ heartbeatsChanged: true }) });
+					notify({ sessionUpdate: "session_info_update", _meta: wasmEdgeAgentMeta({ heartbeatsChanged: true }) });
 					return;
 				}
 				if (event.type !== "session_event") return;
@@ -326,7 +326,7 @@ export async function runAcpModeWithConnection(
 			session = entry;
 			return {
 				sessionId,
-				...(cwdMismatch ? { _meta: primeAgentMeta({ cwd: cwdMismatch }) } : {}),
+				...(cwdMismatch ? { _meta: wasmEdgeAgentMeta({ cwd: cwdMismatch }) } : {}),
 			};
 		})
 		.onRequest("session/prompt", async (ctx: any) => {
@@ -369,7 +369,7 @@ export async function runAcpModeWithConnection(
 				// client as a successful but empty turn.
 				const failure = await turnFailure(connection, priorMessages);
 				if (failure && !abort.signal.aborted) {
-					throw new Error(`prime-agent turn failed: ${failure}`);
+					throw new Error(`wasmedge-agent turn failed: ${failure}`);
 				}
 				return { stopReason: acpStopReason({ cancelled: abort.signal.aborted, autonomous: status }) };
 			} catch (error) {

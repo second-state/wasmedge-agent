@@ -16,7 +16,7 @@ import {
 import chalk from "chalk";
 import { type Static, type TProperties, Type } from "typebox";
 import type { Validator } from "typebox/compile";
-import { getCustomThemesDir, getThemesDir } from "../../../config.js";
+import { getCustomThemesDir, getThemesDir, LEGACY_NAME_WARNINGS } from "../../../config.js";
 import type { SourceInfo } from "../../../core/source-info.js";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
 
@@ -602,11 +602,11 @@ let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const primePath = path.join(themesDir, "prime.json");
+		const wasmedgePath = path.join(themesDir, "wasmedge.json");
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
 		BUILTIN_THEMES = {
-			prime: JSON.parse(fs.readFileSync(primePath, "utf-8")) as ThemeJson,
+			wasmedge: JSON.parse(fs.readFileSync(wasmedgePath, "utf-8")) as ThemeJson,
 			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
 			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
 		};
@@ -790,7 +790,8 @@ export function loadThemeFromPath(themePath: string, mode?: ColorMode): Theme {
 	return createTheme(themeJson, mode, themePath);
 }
 
-function loadTheme(name: string, mode?: ColorMode): Theme {
+function loadTheme(rawName: string, mode?: ColorMode): Theme {
+	const name = resolveThemeName(rawName);
 	const registeredTheme = registeredThemes.get(name);
 	if (registeredTheme) {
 		return registeredTheme;
@@ -812,8 +813,8 @@ function detectTerminalBackground(): "dark" | "light" {
 }
 
 function getDefaultTheme(): string {
-	// Prime brand is dark-first; only fall back to light when the terminal is light.
-	return detectTerminalBackground() === "light" ? "light" : "prime";
+	// The brand theme is dark-first; only fall back to light when the terminal is light.
+	return detectTerminalBackground() === "light" ? "light" : "wasmedge";
 }
 
 // ============================================================================
@@ -843,6 +844,34 @@ let themeWatcher: fs.FSWatcher | undefined;
 let themeReloadTimer: NodeJS.Timeout | undefined;
 let onThemeChangeCallback: (() => void) | undefined;
 const registeredThemes = new Map<string, Theme>();
+
+/** Built-in themes renamed by the rebrand, old name to new.
+ *
+ *  The theme name is a public value: the loader keys on it, the default-theme
+ *  selection returns it, and -- the reason this table exists -- a user's saved
+ *  settings.json holds it. Renaming the file alone would leave every settings
+ *  file that says `"theme": "prime"` silently falling back to dark, so the old
+ *  key keeps resolving for one release, on the same terms as the legacy
+ *  command name and the legacy environment-variable prefix (rule R3).
+ *
+ *  Registered themes win, exactly as they did before the rename: loadTheme
+ *  consulted registeredThemes before the built-ins, so a plugin theme under
+ *  the old name kept its precedence and still does. A *custom* theme file of
+ *  that name never won -- getBuiltinThemes was checked first -- so aliasing it
+ *  to the built-in preserves that too. */
+const RENAMED_BUILTIN_THEMES: Readonly<Record<string, string>> = { prime: "wasmedge" };
+
+/** Maps a legacy built-in theme name to its current one, warning once through
+ *  the same deprecation channel every other legacy name uses. Returns any
+ *  other name unchanged. */
+export function resolveThemeName(name: string): string {
+	if (registeredThemes.has(name)) return name;
+	const renamed = RENAMED_BUILTIN_THEMES[name];
+	if (!renamed) return name;
+	const warning = `Theme "${name}" was renamed to "${renamed}"; update your settings. The old name stops working after the next release.`;
+	if (!LEGACY_NAME_WARNINGS.includes(warning)) LEGACY_NAME_WARNINGS.push(warning);
+	return renamed;
+}
 
 onDefaultTerminalColorsChange(() => {
 	if (currentThemeIsAutomatic) {
@@ -891,7 +920,7 @@ export function preloadCodeHighlighter(): Promise<void> {
 export function initTheme(themeName?: string, enableWatcher: boolean = false): void {
 	void preloadCodeHighlighter();
 	void preloadThemeValidator();
-	const name = themeName ?? getDefaultTheme();
+	const name = resolveThemeName(themeName ?? getDefaultTheme());
 	currentThemeName = name;
 	currentThemeIsAutomatic = themeName === undefined;
 	try {
@@ -907,7 +936,8 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 	}
 }
 
-export function setTheme(name: string, enableWatcher: boolean = false): { success: boolean; error?: string } {
+export function setTheme(rawName: string, enableWatcher: boolean = false): { success: boolean; error?: string } {
+	const name = resolveThemeName(rawName);
 	currentThemeName = name;
 	currentThemeIsAutomatic = false;
 	try {
@@ -954,7 +984,7 @@ function startThemeWatcher(): void {
 	// Only watch if it's a custom theme (not built-in)
 	if (
 		!currentThemeName ||
-		currentThemeName === "prime" ||
+		currentThemeName === "wasmedge" ||
 		currentThemeName === "dark" ||
 		currentThemeName === "light"
 	) {

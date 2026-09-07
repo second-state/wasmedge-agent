@@ -22,8 +22,8 @@ try {
 	}
 	if (bootstrapRuntime) {
 		const toolchain = resolveToolchain();
-		ensureTemplateReady(toolchain.cargoBin, (message) => console.log(`prime-agent: ${message}`));
+		ensureTemplateReady(toolchain.cargoBin, (message) => console.log(`wasmedge-agent: ${message}`));
 	}
 } catch (error) {
-	console.error(`prime-agent: postinstall setup skipped: ${oneLine(errorMessage(error))}`);
+	console.error(`wasmedge-agent: postinstall setup skipped: ${oneLine(errorMessage(error))}`);
 }

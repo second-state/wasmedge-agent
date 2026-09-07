@@ -1,6 +1,6 @@
 # Daemon Architecture
 
-Prime Agent isolates each active root session tree in its own process. The daemon is internal infrastructure: interactive, print, JSON, RPC, piped-stdin, and `--no-session` describe client behavior and retain their public I/O contracts.
+WasmEdge Agent isolates each active root session tree in its own process. The daemon is internal infrastructure: interactive, print, JSON, RPC, piped-stdin, and `--no-session` describe client behavior and retain their public I/O contracts.
 
 ## Process Topology
 
@@ -36,7 +36,7 @@ Normal interactive sessions use resident workers:
 - Workers monitor the public supervisor socket. If it disappears, one worker acquires an atomic launch lease and starts a replacement supervisor.
 - A replacement supervisor adopts live workers and their active-session IDs.
 - A worker crash affects one root tree. Recovery retries after 250 ms, 1 second, and 5 seconds; three failures mark that root failed.
-- `prime-agent shutdown` stops the supervisor and all workers; `--force` also terminates unresponsive worker process groups and tracked children.
+- `wasmedge-agent shutdown` stops the supervisor and all workers; `--force` also terminates unresponsive worker process groups and tracked children.
 
 There is no fixed session, worker, client, or workload cap in this layer.
 
@@ -160,7 +160,7 @@ npx tsx test/daemon-multiclient-bench.ts
 npx tsx test/daemon-multiclient-bench.ts --generated-session-mib 100
 npx tsx test/daemon-multiclient-bench.ts --generated-session-mib 500
 npx tsx test/daemon-multiclient-bench.ts --session-file /path/to/session.jsonl
-PRIME_AGENT_STRESS_WORKERS=50 npx tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-supervisor-process.test.ts -t "hosts resident roots"
+WASMEDGE_AGENT_STRESS_WORKERS=50 npx tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-supervisor-process.test.ts -t "hosts resident roots"
 ```
 
 The benchmark compares fanout and attach paths, including serialization count, throughput, elapsed time, and sampled RSS. The stress case starts many resident roots and verifies that their schedules advance independently while sessions are busy.

@@ -1,3 +1,6 @@
+<!-- TEMPORARY 2026-09-03: the butterfly below is still upstream's Prime Agent
+     butterfly, renamed but not redrawn, so its alt text credits the vendor
+     whose mark it is. It must be redrawn before release (spec section 10). -->
 <p align="center">
   <a href="https://primeintellect.ai">
     <picture>
@@ -7,13 +10,13 @@
   </a>
 </p>
 
-<h1 align="center">Prime Agent CLI</h1>
+<h1 align="center">WasmEdge Agent CLI</h1>
 
 <p align="center">
   RLM-native terminal coding and research harness.
 </p>
 
-Prime Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `prime-agent`. Do not use the inherited npm package as the Prime Agent install path.
+WasmEdge Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `wasmedge-agent`. Do not use the inherited npm package as the WasmEdge Agent install path.
 
 ## Table of Contents
 
@@ -35,7 +38,7 @@ Prime Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mon
   - [MCP Integrations](#mcp-integrations)
   - [Extensions](#extensions)
   - [Themes](#themes)
-  - [Prime Agent Packages](#prime-agent-packages)
+  - [WasmEdge Agent Packages](#wasmedge-agent-packages)
 - [Programmatic Usage](#programmatic-usage)
 - [Upstream](#upstream)
 - [CLI Reference](#cli-reference)
@@ -43,30 +46,30 @@ Prime Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mon
 ## Quick Start
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
+curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh
 ```
 
 To install the beta built from the latest commit on `main`:
 
 ```bash
-curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh -s -- beta
+curl -fsSL https://app.primeintellect.ai/wasmedge-agent/install.sh | sh -s -- beta
 ```
 
 Authenticate with an API key:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-prime-agent
+wasmedge-agent
 ```
 
 Or use your existing subscription:
 
 ```bash
-prime-agent
+wasmedge-agent
 /login  # Then select provider
 ```
 
-Then just talk to Prime Agent. By default, Prime Agent gives the model two tools: `rust` and `bash`. The model writes Rust cells that compile to WebAssembly and run sandboxed in [WasmEdge](https://wasmedge.org) — reading files, editing code, inspecting data, and persisting state across cells — while `bash` runs the project's own commands. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [Prime Agent packages](#prime-agent-packages).
+Then just talk to WasmEdge Agent. By default, WasmEdge Agent gives the model two tools: `rust` and `bash`. The model writes Rust cells that compile to WebAssembly and run sandboxed in [WasmEdge](https://wasmedge.org) — reading files, editing code, inspecting data, and persisting state across cells — while `bash` runs the project's own commands. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [WasmEdge Agent packages](#wasmedge-agent-packages).
 
 The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` binary; the installer offers to set both up, the workspace template prebuilds automatically, and `doctor --fix` repairs the rest. Set `WASMEDGE_AGENT_CARGO` / `WASMEDGE_AGENT_WASMEDGE` to use specific binaries.
 
@@ -74,7 +77,7 @@ The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` 
 
 ## Providers & Models
 
-For each built-in provider, Prime Agent maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
+For each built-in provider, WasmEdge Agent maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max
@@ -112,7 +115,7 @@ For each built-in provider, Prime Agent maintains a list of tool-capable models,
 
 See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
-**Custom providers & models:** Add providers via `~/.prime/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
+**Custom providers & models:** Add providers via `~/.wasmedge-agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 
 ## Interactive Mode
 
@@ -167,11 +170,11 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit` | Quit Prime Agent |
+| `/quit` | Quit WasmEdge Agent |
 
 ### Keyboard Shortcuts
 
-See `/hotkeys` for the full list. Customize via `~/.prime/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
+See `/hotkeys` for the full list. Customize via `~/.wasmedge-agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
 
 **Commonly used:**
 
@@ -196,7 +199,7 @@ Submit messages while the agent is working:
 - **Escape** clears the input without interrupting active work
 - **Alt+Up** retrieves queued messages back to editor
 
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so Prime Agent can receive the follow-up shortcut.
+On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so WasmEdge Agent can receive the follow-up shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -206,13 +209,13 @@ Sessions are stored as JSONL files with a tree structure. Each entry has an `id`
 
 ### Management
 
-Sessions auto-save as flat JSONL files under `~/.prime/agent/sessions/`. Each session header records its working directory, which the searchable session view uses to identify and open saved sessions.
+Sessions auto-save as flat JSONL files under `~/.wasmedge-agent/sessions/`. Each session header records its working directory, which the searchable session view uses to identify and open saved sessions.
 
 ```bash
-prime-agent -c                  # Continue most recent session
-prime-agent -r [path|id]        # Browse past sessions or resume one directly
-prime-agent --no-session        # Ephemeral mode (don't save)
-prime-agent --fork <path|id>    # Fork specific session file or ID into a new session
+wasmedge-agent -c                  # Continue most recent session
+wasmedge-agent -r [path|id]        # Browse past sessions or resume one directly
+wasmedge-agent --no-session        # Ephemeral mode (don't save)
+wasmedge-agent --fork <path|id>    # Fork specific session file or ID into a new session
 ```
 
 Use `/session` in interactive mode to see the current session ID before reusing it with `--resume <id>` or `--fork <id>`.
@@ -249,21 +252,21 @@ Use `/settings` to modify common options, or edit JSON files directly:
 
 | Location | Scope |
 |----------|-------|
-| `~/.prime/agent/settings.json` | Global (all projects) |
-| `.prime/agent/settings.json` | Project (overrides global) |
+| `~/.wasmedge-agent/settings.json` | Global (all projects) |
+| `.wasmedge-agent/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
 
 ### Update checks
 
-Prime Agent stable builds fetch `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json` to check whether a newer version exists. Beta builds fetch `beta.json` and remain on the beta channel. Override the base URL with `PRIME_AGENT_DOWNLOAD_BASE_URL`. Disable version checks with `PI_SKIP_VERSION_CHECK=1`.
+WasmEdge Agent stable builds fetch `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json` to check whether a newer version exists. Beta builds fetch `beta.json` and remain on the beta channel. Override the base URL with `WASMEDGE_AGENT_DOWNLOAD_BASE_URL`. Disable version checks with `PI_SKIP_VERSION_CHECK=1`.
 
 Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
 ## Context Files
 
-Prime Agent loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.prime/agent/AGENTS.md` (global)
+WasmEdge Agent loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
+- `~/.wasmedge-agent/AGENTS.md` (global)
 - Parent directories (walking up from cwd)
 - Current directory
 
@@ -273,7 +276,7 @@ Disable context file loading with `--no-context-files` (or `-nc`).
 
 ### System Prompt
 
-Replace the default system prompt with `.prime/agent/SYSTEM.md` (project) or `~/.prime/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
+Replace the default system prompt with `.wasmedge-agent/SYSTEM.md` (project) or `~/.wasmedge-agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
 
 ## Customization
 
@@ -282,19 +285,19 @@ Replace the default system prompt with `.prime/agent/SYSTEM.md` (project) or `~/
 Reusable prompts as Markdown files. Type `/name` to expand.
 
 ```markdown
-<!-- ~/.prime/agent/prompts/review.md -->
+<!-- ~/.wasmedge-agent/prompts/review.md -->
 Review this code for bugs, security issues, and performance problems.
 Focus on: {{focus}}
 ```
 
-Place in `~/.prime/agent/prompts/`, `.prime/agent/prompts/`, or a [Prime Agent package](#prime-agent-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
+Place in `~/.wasmedge-agent/prompts/`, `.wasmedge-agent/prompts/`, or a [WasmEdge Agent package](#wasmedge-agent-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
 
 ### Skills
 
-On-demand capability packages following the [Agent Skills standard](https://agentskills.io). At startup, Prime Agent gives the model each visible skill's name, type, description, and location. The full `SKILL.md` stays out of context until the model reads it from a rust cell or you explicitly invoke `/skill:name`.
+On-demand capability packages following the [Agent Skills standard](https://agentskills.io). At startup, WasmEdge Agent gives the model each visible skill's name, type, description, and location. The full `SKILL.md` stays out of context until the model reads it from a rust cell or you explicitly invoke `/skill:name`.
 
 ```markdown
-<!-- ~/.prime/agent/skills/my-skill/SKILL.md -->
+<!-- ~/.wasmedge-agent/skills/my-skill/SKILL.md -->
 ---
 name: my-skill
 description: Use this skill when the user asks about X.
@@ -307,11 +310,11 @@ description: Use this skill when the user asks about X.
 2. Then that
 ```
 
-Skills can also be Rust crates. A Rust skill is a normal skill directory with `SKILL.md` plus `Cargo.toml` and `src/lib.rs`. Prime Agent mounts it into the cell workspace and exposes it as `agent_lib::skills::<crate>`, so the model calls documented typed functions (conventionally `run(...)`) directly from cells.
+Skills can also be Rust crates. A Rust skill is a normal skill directory with `SKILL.md` plus `Cargo.toml` and `src/lib.rs`. WasmEdge Agent mounts it into the cell workspace and exposes it as `agent_lib::skills::<crate>`, so the model calls documented typed functions (conventionally `run(...)`) directly from cells.
 
-Place in `~/.prime/agent/skills/`, `~/.agents/skills/`, `.prime/agent/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [Prime Agent package](#prime-agent-packages) to share with others. See [docs/skills.md](docs/skills.md).
+Place in `~/.wasmedge-agent/skills/`, `~/.agents/skills/`, `.wasmedge-agent/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [WasmEdge Agent package](#wasmedge-agent-packages) to share with others. See [docs/skills.md](docs/skills.md).
 
-Prime Agent ships with a built-in `websearch` skill (Google search via the [Serper](https://serper.dev) API). It loads by default; run `/login`, switch to **MCP Connections**, and choose "Serper (web search)" to add your key. Disable it with `bundledSkills.websearch: false`, or override it with your own `websearch` skill in any location above. See [docs/skills.md#built-in-skills](docs/skills.md#built-in-skills).
+WasmEdge Agent ships with a built-in `websearch` skill (Google search via the [Serper](https://serper.dev) API). It loads by default; run `/login`, switch to **MCP Connections**, and choose "Serper (web search)" to add your key. Disable it with `bundledSkills.websearch: false`, or override it with your own `websearch` skill in any location above. See [docs/skills.md#built-in-skills](docs/skills.md#built-in-skills).
 
 ### MCP Integrations
 
@@ -330,12 +333,12 @@ Built-in integrations for Linear and Notion ship disabled. **Logging in enables 
 /mcp logout <name>   disconnect
 ```
 
-Credentials are stored once in `~/.prime/agent/auth.json` (under `mcp:<name>`); the host injects the bearer token and refreshes expired tokens — credentials never enter the sandbox. Enablement is derived from whether valid credentials exist, so there is no separate on/off switch.
+Credentials are stored once in `~/.wasmedge-agent/auth.json` (under `mcp:<name>`); the host injects the bearer token and refreshes expired tokens — credentials never enter the sandbox. Enablement is derived from whether valid credentials exist, so there is no separate on/off switch.
 
 **Add your own server.** Declare it under `mcpServers` in settings:
 
 ```jsonc
-// ~/.prime/agent/settings.json
+// ~/.wasmedge-agent/settings.json
 {
   "mcpServers": {
     "acme": { "type": "http", "url": "https://mcp.acme.com/mcp", "oauth": true }
@@ -351,7 +354,7 @@ See [docs/mcp-integrations.md](docs/mcp-integrations.md) for the full authoring 
 
 <p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>
 
-TypeScript modules that extend Prime Agent with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
+TypeScript modules that extend WasmEdge Agent with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
 
 ```typescript
 export default function (pi: ExtensionAPI) {
@@ -361,7 +364,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-The default export can also be `async`. Prime Agent waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
+The default export can also be `async`. WasmEdge Agent waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
 
 **What's possible:**
 - Custom tools (or replace built-in tools entirely)
@@ -373,49 +376,49 @@ The default export can also be `async`. Prime Agent waits for async extension fa
 - Git checkpointing and auto-commit
 - SSH and sandbox execution
 - MCP server integration
-- Make Prime Agent look like Claude Code
+- Make WasmEdge Agent look like Claude Code
 - Games while waiting (yes, Doom runs)
 - ...anything you can dream up
 
-Place in `~/.prime/agent/extensions/`, `.prime/agent/extensions/`, or a [Prime Agent package](#prime-agent-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
+Place in `~/.wasmedge-agent/extensions/`, `.wasmedge-agent/extensions/`, or a [WasmEdge Agent package](#wasmedge-agent-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
 
 ### Themes
 
-Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and Prime Agent immediately applies changes.
+Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and WasmEdge Agent immediately applies changes.
 
-Place in `~/.prime/agent/themes/`, `.prime/agent/themes/`, or a [Prime Agent package](#prime-agent-packages) to share with others. See [docs/themes.md](docs/themes.md).
+Place in `~/.wasmedge-agent/themes/`, `.wasmedge-agent/themes/`, or a [WasmEdge Agent package](#wasmedge-agent-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
-### Prime Agent Packages
+### WasmEdge Agent Packages
 
 Bundle and share extensions, skills, prompts, and themes via npm or git.
 
-> **Security:** Prime Agent packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
+> **Security:** WasmEdge Agent packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
 ```bash
-prime-agent package install npm:@foo/prime-agent-tools
-prime-agent package install npm:@foo/prime-agent-tools@1.2.3  # pinned version
-prime-agent package install git:github.com/user/repo
-prime-agent package install git:github.com/user/repo@v1       # tag or commit
-prime-agent package install git:git@github.com:user/repo
-prime-agent package install https://github.com/user/repo
-prime-agent package install ssh://git@github.com/user/repo
-prime-agent package remove npm:@foo/prime-agent-tools
-prime-agent package list
-prime-agent package update                                  # update packages, except pinned versions
-prime-agent package update npm:@foo/prime-agent-tools       # update one package
-prime-agent update                                          # update Prime Agent
-prime-agent update --force                                  # reinstall Prime Agent even if current
-prime-agent config                                          # enable/disable package resources
+wasmedge-agent package install npm:@foo/wasmedge-agent-tools
+wasmedge-agent package install npm:@foo/wasmedge-agent-tools@1.2.3  # pinned version
+wasmedge-agent package install git:github.com/user/repo
+wasmedge-agent package install git:github.com/user/repo@v1       # tag or commit
+wasmedge-agent package install git:git@github.com:user/repo
+wasmedge-agent package install https://github.com/user/repo
+wasmedge-agent package install ssh://git@github.com/user/repo
+wasmedge-agent package remove npm:@foo/wasmedge-agent-tools
+wasmedge-agent package list
+wasmedge-agent package update                                  # update packages, except pinned versions
+wasmedge-agent package update npm:@foo/wasmedge-agent-tools       # update one package
+wasmedge-agent update                                          # update WasmEdge Agent
+wasmedge-agent update --force                                  # reinstall WasmEdge Agent even if current
+wasmedge-agent config                                          # enable/disable package resources
 ```
 
-Packages install to `~/.prime/agent/git/` (git) or global npm. Use `--local` for project-local installs (`.prime/agent/git/`, `.prime/agent/npm/`). Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
+Packages install to `~/.wasmedge-agent/git/` (git) or global npm. Use `--local` for project-local installs (`.wasmedge-agent/git/`, `.wasmedge-agent/npm/`). Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
 
 Create a package by adding the inherited `pi` manifest key to `package.json`:
 
 ```json
 {
-  "name": "my-prime-agent-package",
-  "keywords": ["prime-agent-package"],
+  "name": "my-wasmedge-agent-package",
+  "keywords": ["wasmedge-agent-package"],
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"],
@@ -425,7 +428,7 @@ Create a package by adding the inherited `pi` manifest key to `package.json`:
 }
 ```
 
-Without a `pi` manifest, Prime Agent auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
+Without a `pi` manifest, WasmEdge Agent auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
 
 See [docs/packages.md](docs/packages.md).
 
@@ -434,7 +437,7 @@ See [docs/packages.md](docs/packages.md).
 ### SDK
 
 ```typescript
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "prime-agent";
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "wasmedge-agent";
 
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
@@ -456,7 +459,7 @@ See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
 For non-Node.js integrations, use RPC mode over stdin/stdout:
 
 ```bash
-prime-agent --mode rpc
+wasmedge-agent --mode rpc
 ```
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
@@ -465,30 +468,30 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 ## Upstream
 
-Prime Agent is forked from [pi-mono](https://github.com/badlogic/pi-mono) by Mario Zechner and keeps MIT attribution in the root license.
+WasmEdge Agent is forked from [pi-mono](https://github.com/badlogic/pi-mono) by Mario Zechner and keeps MIT attribution in the root license.
 
-The package architecture, extension model, and source package names still reflect that upstream lineage while the distributed command and release artifacts are branded for Prime Agent.
+The package architecture, extension model, and source package names still reflect that upstream lineage while the distributed command and release artifacts are branded for WasmEdge Agent.
 
 ## CLI Reference
 
 ```bash
-prime-agent [options] [@files...] [messages...]
+wasmedge-agent [options] [@files...] [messages...]
 ```
 
-Run `prime-agent help` for the command list and `prime-agent help <command>` for details.
+Run `wasmedge-agent help` for the command list and `wasmedge-agent help <command>` for details.
 
 ### Agent Commands
 
 ```bash
-prime-agent agents                         # Search running, idle, and inactive sessions
-prime-agent list [--all]                   # List active or saved agents
-prime-agent attach <agent>                 # Attach the interactive UI
-prime-agent stop <agent>                   # Stop one agent
-prime-agent rename <agent> <name>          # Rename an agent
-prime-agent send <agent> <message>         # Send an agent-to-agent message
-prime-agent status                         # Show background service status
-prime-agent doctor [--fix]                 # Inspect or safely clean up background services
-prime-agent shutdown [--force]             # Stop every agent, worker, and background service
+wasmedge-agent agents                         # Search running, idle, and inactive sessions
+wasmedge-agent list [--all]                   # List active or saved agents
+wasmedge-agent attach <agent>                 # Attach the interactive UI
+wasmedge-agent stop <agent>                   # Stop one agent
+wasmedge-agent rename <agent> <name>          # Rename an agent
+wasmedge-agent send <agent> <message>         # Send an agent-to-agent message
+wasmedge-agent status                         # Show background service status
+wasmedge-agent doctor [--fix]                 # Inspect or safely clean up background services
+wasmedge-agent shutdown [--force]             # Stop every agent, worker, and background service
 ```
 
 `shutdown` asks for confirmation. `shutdown --force` skips confirmation and kills unresponsive workers and their tracked child processes.
@@ -496,9 +499,9 @@ prime-agent shutdown [--force]             # Stop every agent, worker, and backg
 ### Scheduled Prompts
 
 ```bash
-prime-agent schedule list [--all] [agent]
-prime-agent schedule add <agent> <schedule> -- <message>
-prime-agent schedule cancel <job-id>
+wasmedge-agent schedule list [--all] [agent]
+wasmedge-agent schedule add <agent> <schedule> -- <message>
+wasmedge-agent schedule cancel <job-id>
 ```
 
 Schedules run prompts later or repeatedly. A schedule can be a supported one-time expression such as `in 5m` or a cron expression.
@@ -508,12 +511,12 @@ Schedules run prompts later or repeatedly. A schedule can be a supported one-tim
 Packages bundle capabilities such as extensions, skills, prompts, and themes.
 
 ```bash
-prime-agent package install <source> [--local]
-prime-agent package remove <source> [--local]
-prime-agent package list
-prime-agent package update [source]
-prime-agent update [--force]                   # Update Prime Agent itself
-prime-agent config                             # Enable/disable package resources
+wasmedge-agent package install <source> [--local]
+wasmedge-agent package remove <source> [--local]
+wasmedge-agent package list
+wasmedge-agent package update [source]
+wasmedge-agent update [--force]                   # Update WasmEdge Agent itself
+wasmedge-agent config                             # Enable/disable package resources
 ```
 
 ### Modes
@@ -525,10 +528,10 @@ prime-agent config                             # Enable/disable package resource
 | `--mode json` | Output all events as JSON lines (see [docs/json.md](docs/json.md)) |
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
 
-In print mode, Prime Agent also reads piped stdin and merges it into the initial prompt:
+In print mode, WasmEdge Agent also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | wasmedge-agent -p "Summarize this text"
 ```
 
 ### Model Options
@@ -541,7 +544,7 @@ cat README.md | prime-agent -p "Summarize this text"
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 
-Use `prime-agent model list [search]` to list available models.
+Use `wasmedge-agent model list [search]` to list available models.
 
 ### Session Options
 
@@ -553,7 +556,7 @@ Use `prime-agent model list [search]` to list available models.
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode (don't save) |
 
-Use `prime-agent session export <file> [output]` to export a saved session to HTML.
+Use `wasmedge-agent session export <file> [output]` to export a saved session to HTML.
 
 ### Tool Options
 
@@ -613,57 +616,57 @@ Gates run before the continuation, turn, token, and wall-clock limits are evalua
 Prefix files with `@` to include in the message:
 
 ```bash
-prime-agent @prompt.md "Answer this"
-prime-agent -p @screenshot.png "What's in this image?"
-prime-agent @code.ts @test.ts "Review these files"
+wasmedge-agent @prompt.md "Answer this"
+wasmedge-agent -p @screenshot.png "What's in this image?"
+wasmedge-agent @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-prime-agent "List all .ts files in src/"
+wasmedge-agent "List all .ts files in src/"
 
 # Non-interactive
-prime-agent -p "Summarize this codebase"
+wasmedge-agent -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | wasmedge-agent -p "Summarize this text"
 
 # Different model
-prime-agent --provider openai --model gpt-4o "Help me refactor"
+wasmedge-agent --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-prime-agent --model openai/gpt-4o "Help me refactor"
+wasmedge-agent --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-prime-agent --model sonnet:high "Solve this complex problem"
+wasmedge-agent --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-prime-agent --models "claude-*,gpt-4o"
+wasmedge-agent --models "claude-*,gpt-4o"
 
 # Restrict to the built-in rust cell tool
-prime-agent --tools rust -p "Review the code"
+wasmedge-agent --tools rust -p "Review the code"
 
 # High thinking level
-prime-agent --thinking high "Solve this complex problem"
+wasmedge-agent --thinking high "Solve this complex problem"
 ```
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `PRIME_AGENT_CODING_AGENT_DIR` | Override config directory (default: `~/.prime/agent`) |
-| `PRIME_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
-| `PRIME_AGENT_CODING_AGENT_SESSION_DIR` | Legacy alias for `PRIME_AGENT_SESSION_DIR` |
+| `WASMEDGE_AGENT_CODING_AGENT_DIR` | Override config directory (default: `~/.wasmedge-agent`) |
+| `WASMEDGE_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
+| `WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR` | Legacy alias for `WASMEDGE_AGENT_SESSION_DIR` |
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
-| `PI_SKIP_VERSION_CHECK` | Skip the Prime Agent version update check at startup. This prevents the release manifest request |
-| `PRIME_AGENT_DOWNLOAD_BASE_URL` | Override the Prime Agent release manifest and tarball base URL |
+| `PI_SKIP_VERSION_CHECK` | Skip the WasmEdge Agent version update check at startup. This prevents the release manifest request |
+| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Override the WasmEdge Agent release manifest and tarball base URL |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
-| `PRIME_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
-| `PRIME_AGENT_TRACES_BASE_URL` | Override the Prime Agent trace upload API base URL |
+| `WASMEDGE_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
+| `WASMEDGE_AGENT_TRACES_BASE_URL` | Override the WasmEdge Agent trace upload API base URL |
 | `WASMEDGE_AGENT_CARGO` | Path to the `cargo` binary (default: PATH, then `~/.cargo/bin/cargo`) |
 | `WASMEDGE_AGENT_WASMEDGE` | Path to the `wasmedge` binary (default: PATH, then `~/.wasmedge/bin/wasmedge`) |
 | `WASMEDGE_AGENT_TEMPLATE_DIR` | Override the cell workspace template location |
@@ -671,7 +674,7 @@ prime-agent --thinking high "Solve this complex problem"
 | `WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL` | `1` makes postinstall vendor and prebuild the workspace template |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
-The remaining `PI_*` variables in this table are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.prime/agent` configuration path.
+The remaining `PI_*` variables in this table are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.wasmedge-agent` configuration path.
 
 ## Contributing & Development
 
@@ -683,6 +686,6 @@ MIT
 
 ## See Also
 
-- [Prime Agent AI](../ai): Core LLM toolkit
-- [Prime Agent Core](../agent): Agent framework
-- [Prime Agent TUI](../tui): Terminal UI components
+- [WasmEdge Agent AI](../ai): Core LLM toolkit
+- [WasmEdge Agent Core](../agent): Agent framework
+- [WasmEdge Agent TUI](../tui): Terminal UI components

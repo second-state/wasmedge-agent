@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	checkPrimeAgentTracesAccess,
 	checkPrimeInferenceAccess,
+	checkWasmEdgeAgentTracesAccess,
 	fetchPrimeTeams,
 	loadPrimeCliConfig,
-	loginPrimeAgentTraces,
 	loginPrimeInference,
+	loginWasmEdgeAgentTraces,
+	resolveWasmEdgeAgentTracesBaseUrl,
 } from "../src/core/prime-inference-auth.js";
 
 function jsonResponse(body: unknown, status: number = 200): Response {
@@ -71,15 +72,15 @@ describe("Prime Inference auth", () => {
 		tempDir = join(tmpdir(), `pi-prime-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		configPath = join(tempDir, "config.json");
-		originalTraceBaseUrl = process.env.PRIME_AGENT_TRACES_BASE_URL;
-		delete process.env.PRIME_AGENT_TRACES_BASE_URL;
+		originalTraceBaseUrl = process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
+		delete process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
 	});
 
 	afterEach(() => {
 		if (originalTraceBaseUrl === undefined) {
-			delete process.env.PRIME_AGENT_TRACES_BASE_URL;
+			delete process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
 		} else {
-			process.env.PRIME_AGENT_TRACES_BASE_URL = originalTraceBaseUrl;
+			process.env.WASMEDGE_AGENT_TRACES_BASE_URL = originalTraceBaseUrl;
 		}
 		if (existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });
@@ -197,7 +198,7 @@ describe("Prime Inference auth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("checks Prime Agent trace access with Prime whoami permissions", async () => {
+	it("checks WasmEdge Agent trace access with Prime whoami permissions", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://prime-api.example/api/v1/user/whoami");
 			expect(init?.method).toBe("GET");
@@ -206,7 +207,7 @@ describe("Prime Inference auth", () => {
 		});
 
 		await expect(
-			checkPrimeAgentTracesAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
+			checkWasmEdgeAgentTracesAccess("prime-key", "https://prime-api.example", { fetchFn: fetchMock }),
 		).resolves.toEqual({ ok: true });
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
@@ -226,7 +227,7 @@ describe("Prime Inference auth", () => {
 		});
 		const onAuth = vi.fn();
 
-		const result = await loginPrimeAgentTraces(
+		const result = await loginWasmEdgeAgentTraces(
 			{ onAuth },
 			{ configPath, fetchFn: fetchMock, requestTimeoutMs: 1000 },
 		);
@@ -236,8 +237,14 @@ describe("Prime Inference auth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("validates imported Prime CLI trace credentials against PRIME_AGENT_TRACES_BASE_URL", async () => {
-		process.env.PRIME_AGENT_TRACES_BASE_URL = "https://trace-api.example/api/v1";
+	it("falls back to PRIME_AGENT_TRACES_BASE_URL for one release when the current name is unset", () => {
+		process.env.PRIME_AGENT_TRACES_BASE_URL = "https://legacy-trace.example/api/v1";
+
+		expect(resolveWasmEdgeAgentTracesBaseUrl()).toBe("https://legacy-trace.example");
+	});
+
+	it("validates imported Prime CLI trace credentials against WASMEDGE_AGENT_TRACES_BASE_URL", async () => {
+		process.env.WASMEDGE_AGENT_TRACES_BASE_URL = "https://trace-api.example/api/v1";
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -252,7 +259,7 @@ describe("Prime Inference auth", () => {
 		});
 		const onAuth = vi.fn();
 
-		const result = await loginPrimeAgentTraces(
+		const result = await loginWasmEdgeAgentTraces(
 			{ onAuth },
 			{ configPath, fetchFn: fetchMock, requestTimeoutMs: 1000 },
 		);
@@ -365,8 +372,8 @@ describe("Prime Inference auth", () => {
 		expect(progress.join("\n")).toContain("Existing Prime CLI key cannot access Prime Inference");
 	});
 
-	it("requests agent trace scope during Prime Agent trace browser login", async () => {
-		process.env.PRIME_AGENT_TRACES_BASE_URL = "https://prime-api.example/api/v1";
+	it("requests agent trace scope during WasmEdge Agent trace browser login", async () => {
+		process.env.WASMEDGE_AGENT_TRACES_BASE_URL = "https://prime-api.example/api/v1";
 		writeFileSync(
 			configPath,
 			JSON.stringify({
@@ -393,7 +400,7 @@ describe("Prime Inference auth", () => {
 		});
 		const onAuth = vi.fn();
 
-		const result = await loginPrimeAgentTraces(
+		const result = await loginWasmEdgeAgentTraces(
 			{
 				onAuth,
 			},

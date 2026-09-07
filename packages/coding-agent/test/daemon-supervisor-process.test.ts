@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR, getCronJobsPath } from "../src/config.js";
 import { AgentCronJobStore } from "../src/core/cron-jobs.js";
+import { WORKER_RECOVERY_CUSTOM_TYPE } from "../src/core/messages.js";
 import { readActiveOrphanProcesses } from "../src/core/orphan-process-journal.js";
 import {
 	acquireSessionLease,
@@ -26,7 +27,7 @@ const children = new Set<ChildProcess>();
 const workerPids = new Set<number>();
 const daemonSockets = new Set<string>();
 const childDiagnostics = new WeakMap<ChildProcess, { stdout: string; stderr: string }>();
-const PROCESS_STRESS_WORKERS = Number.parseInt(process.env.PRIME_AGENT_STRESS_WORKERS ?? "10", 10);
+const PROCESS_STRESS_WORKERS = Number.parseInt(process.env.WASMEDGE_AGENT_STRESS_WORKERS ?? "10", 10);
 
 afterEach(async () => {
 	for (const socketPath of daemonSockets) {
@@ -420,7 +421,7 @@ describe("daemon supervisor resident workers", () => {
 			type: "create",
 			sessionPath: sessionFile,
 			lifecycle: "client_owned",
-			launchEnv: { PRIME_AGENT_OWNED_TEST: launchEnvSentinel },
+			launchEnv: { WASMEDGE_AGENT_OWNED_TEST: launchEnvSentinel },
 			config: { cwd: projectDir, agentDir, sessionDir, noTools: true, noExtensions: true },
 		});
 		expect(created.success).toBe(true);
@@ -1297,7 +1298,7 @@ describe("daemon supervisor resident workers", () => {
 			throw new Error("Recovered worker did not expose its pid");
 		}
 		workerPids.add(recovered.workerPid);
-		expect(readFileSync(sessionFile, "utf8")).toContain("prime-agent.worker_recovery");
+		expect(readFileSync(sessionFile, "utf8")).toContain(WORKER_RECOVERY_CUSTOM_TYPE);
 		await expect(connection.getState()).resolves.toMatchObject({ sessionId: createdSummary.sessionId });
 
 		await connection.dispose();
