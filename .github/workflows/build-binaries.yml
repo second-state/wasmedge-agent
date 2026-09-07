@@ -1,13 +1,26 @@
 name: Release WasmEdge Agent
 
 # Fork note: upstream releases on every main push; this fork keeps the
-# workflow manual-only until its own release process exists (M5).
+# workflow manual-only until its own release process exists (M5). That is why
+# the channel is an input rather than a push trigger: everything below is
+# inherited from a workflow whose beta half ran on every commit to the default
+# branch, and with only a dispatch event the beta half was unreachable -- the
+# artifacts, the pointers, the installer, the tag and the release could not
+# advance by any invocation the workflow accepts.
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Production release tag to create or update (e.g., v0.0.1)'
+      channel:
+        description: 'Which channel to publish'
         required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - beta
+      release_tag:
+        description: 'Production release tag to create or update (e.g., v0.0.1). Ignored for beta.'
+        required: false
         type: string
 
 concurrency:
@@ -45,6 +58,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_SHA_VALUE: ${{ github.sha }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel || 'production' }}
           INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
@@ -57,9 +71,25 @@ jobs:
           publish_beta=false
           publish_production=false
 
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$INPUT_CHANNEL" = beta ]; then
             if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
               echo "Manual releases must run from the default branch (${DEFAULT_BRANCH}), not ${REF_NAME}." >&2
+              exit 1
+            fi
+            # Beta names itself from package.json plus this run, the way the
+            # inherited push trigger did. Nothing about it is a choice the
+            # dispatcher makes, so release_tag is not read here.
+            production_version=$(node -p "require('./package.json').version")
+            build_ref="$GITHUB_SHA_VALUE"
+            beta_version="${production_version}-beta.${RUN_NUMBER}.${RUN_ATTEMPT}.${GITHUB_SHA_VALUE::7}"
+            publish_beta=true
+          elif [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+              echo "Manual releases must run from the default branch (${DEFAULT_BRANCH}), not ${REF_NAME}." >&2
+              exit 1
+            fi
+            if [ -z "$INPUT_RELEASE_TAG" ]; then
+              echo "A production release needs release_tag (e.g., v0.0.1)." >&2
               exit 1
             fi
             production_version="${INPUT_RELEASE_TAG#v}"
