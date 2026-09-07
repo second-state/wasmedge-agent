@@ -46,4 +46,7 @@ export declare function createReleasePackageJson(
 	packageName: string,
 	releaseVersion: string,
 	internalPackageUrls: Map<string, string>,
+	/** Recorded in the public package's piConfig, so an installed release knows
+	 *  the host it came from and can check for its own updates. */
+	downloadBaseUrl?: string,
 ): Record<string, unknown>;

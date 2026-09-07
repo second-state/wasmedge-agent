@@ -1,22 +1,6 @@
-import { readLegacyEnv } from "../config.js";
+import { RELEASE_DOWNLOAD_BASE_URL, readLegacyEnv } from "../config.js";
 import { getPiUserAgent } from "./pi-user-agent.js";
 
-/** No default, deliberately.
- *
- * The rebrand renamed this constant but not its value, which stayed upstream's
- * release bucket. checkForNewPiVersion runs on every interactive startup, and
- * package-manager-cli takes `packageName` and `installSpec` straight from the
- * manifest it fetches -- so a shipped WasmEdge Agent announced upstream's
- * version as an update to itself and, on /update, would have installed
- * upstream's own release tarball over itself.
- *
- * WasmEdge Agent has no release host yet, so there is no correct value to put
- * here. Empty is the honest one: it self-disables the update check, the same
- * way install.sh refuses to run against its unreplaced download-URL sentinel,
- * rather than silently querying a host we do not own. Set
- * WASMEDGE_AGENT_DOWNLOAD_BASE_URL, or fill this in, once a release host
- * exists. */
-const DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "";
 const STABLE_VERSION_MANIFEST_PATH = "latest.json";
 const BETA_VERSION_MANIFEST_PATH = "beta.json";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
@@ -107,10 +91,17 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return candidateVersion.trim() !== currentVersion.trim();
 }
 
+/** The release host to ask, or "" when there is none to ask.
+ *
+ *  The environment first, then the host recorded in the manifest by the packer
+ *  that built this artifact. There is deliberately no constant behind those
+ *  two: the value this replaced was upstream's release bucket, and a shipped
+ *  WasmEdge Agent querying it announced upstream's version as an update to
+ *  itself and, on /update, would have installed upstream's release over
+ *  itself. A source checkout has no recorded host and gets "", which
+ *  self-disables the check rather than asking a host we do not own. */
 function getWasmEdgeAgentDownloadBaseUrl(): string {
-	return (
-		readLegacyEnv("WASMEDGE_AGENT_DOWNLOAD_BASE_URL")?.trim() || DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL
-	).replace(/\/+$/, "");
+	return (readLegacyEnv("WASMEDGE_AGENT_DOWNLOAD_BASE_URL")?.trim() || RELEASE_DOWNLOAD_BASE_URL).replace(/\/+$/, "");
 }
 
 function normalizeReleaseVersion(version: string): string {
@@ -147,9 +138,11 @@ export async function getLatestPiRelease(
 	if (!baseUrl) {
 		throw new Error(
 			"No release host is configured, so the update check cannot run. " +
-				"Set WASMEDGE_AGENT_DOWNLOAD_BASE_URL to the WasmEdge Agent release base URL. " +
-				"There is no default on purpose: the value this replaced was upstream's release bucket, " +
-				"and querying it would offer upstream's build as an update to this one.",
+				"A packed release records the host it was published to; this build carries none, " +
+				"which is what a source checkout looks like. " +
+				"Set WASMEDGE_AGENT_DOWNLOAD_BASE_URL to the WasmEdge Agent release base URL to override it. " +
+				"There is no compiled-in default on purpose: the value this replaced was upstream's release " +
+				"bucket, and querying it would offer upstream's build as an update to this one.",
 		);
 	}
 	const response = await fetch(`${baseUrl}/${getReleaseManifestPath(currentVersion)}`, {

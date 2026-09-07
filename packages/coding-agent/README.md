@@ -252,7 +252,11 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ### Update checks
 
-WasmEdge Agent has no release host yet, so the update check is off by default: with no base URL configured it makes no request at all. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to enable it. Stable builds then fetch `latest.json` under that base URL; beta builds fetch `beta.json` and remain on the beta channel. Disable version checks outright with `PI_SKIP_VERSION_CHECK=1`.
+An official release records the host it was published to, and the update check asks that host: stable builds fetch `latest.json` under it, and beta builds fetch `beta.json` and remain on the beta channel. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to ask a different one.
+
+A build that was not packed for release -- a source checkout, or your own `npm run build` -- records no host. It makes no request at all, and `wasmedge-agent update` says so rather than guessing. There is deliberately no compiled-in default: the only value that could sit there is upstream's release bucket, which would offer upstream's build as an update to this one.
+
+Disable version checks outright with `PI_SKIP_VERSION_CHECK=1`.
 
 Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -655,7 +659,7 @@ wasmedge-agent --thinking high "Solve this complex problem"
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
 | `PI_SKIP_VERSION_CHECK` | Skip the WasmEdge Agent version update check at startup. This prevents the release manifest request |
-| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Base URL for the WasmEdge Agent release manifest and tarballs. Unset by default, which disables the update check |
+| `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Release host for the WasmEdge Agent manifest and tarballs, overriding the one an official release records. A build that was not packed for release has none, and runs no update check |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
 | `WASMEDGE_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |

@@ -48,7 +48,7 @@ Edit directly or use `/settings` for common options.
 
 ### Update Checks
 
-The release manifest has no default host: set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` or no update check runs. Stable builds then fetch `latest.json` under that base URL, and beta builds fetch `beta.json` and continue following beta updates.
+An official release records the host it was published to, and the manifest is fetched from there: stable builds fetch `latest.json` under it, and beta builds fetch `beta.json` and continue following beta updates. `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` overrides that host. A build that was not packed for release records none, and runs no update check.
 
 Set `PI_SKIP_VERSION_CHECK=1` to disable the WasmEdge Agent version update check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -62,7 +62,7 @@ The stable `latest.json` and beta `beta.json` manifests use the same JSON shape:
 }
 ```
 
-`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, WasmEdge Agent installs that tarball instead of the package name. Relative tarball paths resolve against `WASMEDGE_AGENT_DOWNLOAD_BASE_URL`.
+`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, WasmEdge Agent installs that tarball instead of the package name. Relative tarball paths resolve against the release host: the one an official release records, or `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` where it is set.
 
 ### Warnings
 
