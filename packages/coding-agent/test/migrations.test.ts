@@ -20,9 +20,12 @@ import {
 	ENV_SESSION_DIR,
 	LEGACY_NAME_WARNINGS,
 	readLegacyEnv,
+	resetLegacyNameWarnings,
 	resolveLegacyNameWarningsEarly,
+	withCurrentLegacyWarnings,
 } from "../src/config.js";
 import {
+	drainLegacyNameWarnings,
 	legacyDaemonEndpointPresent,
 	migrateAgentDirIfNeeded,
 	migrateAgentDirToWasmEdge,
@@ -32,8 +35,10 @@ import {
 	reportStartupWarnings,
 	resetReportedLegacyWarnings,
 	runMigrations,
+	showDeprecationWarnings,
 } from "../src/migrations.js";
 import { legacyDaemonEndpoint } from "../src/modes/daemon/daemon-socket-dir.js";
+import { captureStderr } from "./capture-stderr.js";
 
 // Mocks the "fs" module -- the specifier migrations.ts itself imports from --
 // so that renameSync and cpSync alone can be made to throw synthetic,
@@ -487,6 +492,53 @@ describe("agent dir move wire-up", () => {
 			const warnings = LEGACY_NAME_WARNINGS.filter((w) => w.includes(socketPath));
 			expect(warnings).toHaveLength(1);
 			expect(warnings[0]).toContain("Stop it");
+		},
+	);
+
+	/** The shape of the real CLI, which no test modelled: cli-main.ts migrates
+	 *  before ./main.js is even imported, and main() then starts its run.
+	 *
+	 *  main() used to empty the whole collection there. The entry point's
+	 *  warning is not recoverable after that. The socket is under tmpdir()
+	 *  rather than the agent directory, so main()'s own migration does find it
+	 *  again -- but it finds it with the move already done, and queues the
+	 *  weaker variant that says the new directory "is in use now" instead of
+	 *  the one that says the user's configuration has just moved out from
+	 *  under a daemon that is still running. And it re-derives nothing at all
+	 *  in the race this warning exists for: a daemon that exits between the
+	 *  two calls unlinks the socket on its way out.
+	 */
+	it.skipIf(process.platform === "win32")(
+		"keeps the entry point's legacy-daemon warning when main() starts its run",
+		async () => {
+			const base = mkdtempSync(join(tmpdir(), "wasmedge-move-daemon-run-"));
+			tempDirs.push(base);
+			const legacy = join(base, ".prime", "agent");
+			mkdirSync(legacy, { recursive: true });
+			writeFileSync(join(legacy, "auth.json"), '{"anthropic":1}');
+			vi.mocked(homedir).mockReturnValue(base);
+			process.env[ENV_AGENT_DIR] = join(base, ".wasmedge-agent");
+			const socketPath = redirectSocketDir(base);
+
+			const stderr = captureStderr();
+			const server = createServer();
+			await new Promise<void>((listening) => server.listen(socketPath, listening));
+			let written = "";
+			try {
+				// cli-main.ts, before ./main.js is imported.
+				expect(migrateAgentDirIfNeeded()).toEqual({ moved: true, from: legacy });
+				// ...and then main(), in the order main() runs them.
+				resetReportedLegacyWarnings();
+				migrateAgentDirIfNeeded();
+				drainLegacyNameWarnings();
+				written = stderr.read();
+			} finally {
+				await new Promise<void>((closed) => server.close(() => closed()));
+				stderr.restore();
+			}
+
+			expect(written).toContain(socketPath);
+			expect(written).toContain("Your configuration has moved to");
 		},
 	);
 
@@ -948,6 +1000,93 @@ describe("legacy project-local config dir reaches the deprecation snapshot", () 
 		const projectDirWarning = deprecationWarnings.find((w) => w.includes(join(".prime", "agent")));
 		expect(projectDirWarning).toBeDefined();
 		expect(projectDirWarning).toContain(".wasmedge-agent");
+	});
+});
+
+describe("legacy name warnings across runs of main()", () => {
+	/** Answers the keypress showDeprecationWarnings blocks on, so the
+	 *  interactive channel can be driven from a test. */
+	function stubKeypress() {
+		return vi.spyOn(process.stdin, "once").mockImplementation(function (
+			this: typeof process.stdin,
+			event: string | symbol,
+			listener: unknown,
+		) {
+			if (event === "data") (listener as (chunk: Buffer) => void)(Buffer.from("\n"));
+			return this;
+		} as typeof process.stdin.once);
+	}
+
+	it("does not replay a warning the interactive channel already showed", async () => {
+		// Interactive mode holds its warnings back and writes them itself,
+		// inside the TUI, rather than through the terse reporter. Both are
+		// deliveries; only one of them was written down. So a run that
+		// delivered this way left the warning in the collection with nothing
+		// recording that it had been shown, and the next run showed it again
+		// after the environment that caused it was gone.
+		const shown: string[] = [];
+		const consoleLog = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			shown.push(args.map((arg) => String(arg)).join(" "));
+		});
+		const keypress = stubKeypress();
+		try {
+			process.env.PRIME_AGENT_CODING_AGENT_DIR = "/example/legacy";
+			resetLegacyNameWarnings();
+			resetReportedLegacyWarnings();
+			readLegacyEnv(ENV_AGENT_DIR);
+			await showDeprecationWarnings(withCurrentLegacyWarnings([]));
+			expect(shown.join("\n")).toContain("PRIME_AGENT_CODING_AGENT_DIR");
+
+			// The second run, with the legacy name gone.
+			delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+			shown.length = 0;
+			resetReportedLegacyWarnings();
+			readLegacyEnv(ENV_AGENT_DIR);
+			await showDeprecationWarnings(withCurrentLegacyWarnings([]));
+
+			expect(shown).toEqual([]);
+		} finally {
+			keypress.mockRestore();
+			consoleLog.mockRestore();
+			delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+			resetLegacyNameWarnings();
+			resetReportedLegacyWarnings();
+		}
+	});
+
+	it("does not replay a previous run's warnings once the legacy name is gone", () => {
+		// main() is exported, so an embedder can call it more than once in one
+		// process. It reset the record of what had already been written but not
+		// the collection itself, so a second run reported the first run's
+		// warnings with nothing left in the environment to justify them.
+		const stderr = captureStderr();
+		const written = () => stderr.read();
+		try {
+			process.env.PRIME_AGENT_CODING_AGENT_DIR = "/example/legacy";
+			resetLegacyNameWarnings();
+			resetReportedLegacyWarnings();
+			readLegacyEnv(ENV_AGENT_DIR);
+			drainLegacyNameWarnings();
+			expect(written()).toContain("PRIME_AGENT_CODING_AGENT_DIR");
+
+			// The second run, with the legacy name gone -- resetting exactly
+			// what main() resets, and nothing else. The delivered warning has
+			// to go with the record of its delivery; emptying the collection
+			// outright would pass here and lose what a process entry point
+			// collected before main() was reached.
+			delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+			stderr.reset();
+			resetReportedLegacyWarnings();
+			readLegacyEnv(ENV_AGENT_DIR);
+			drainLegacyNameWarnings();
+
+			expect(written()).toBe("");
+		} finally {
+			stderr.restore();
+			delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+			resetReportedLegacyWarnings();
+			resetLegacyNameWarnings();
+		}
 	});
 });
 

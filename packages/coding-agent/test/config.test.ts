@@ -6,6 +6,7 @@ import {
 	APP_NAME,
 	APP_TITLE,
 	CONFIG_DIR_NAME,
+	collectLegacyEnvDeprecations,
 	detectInstallMethod,
 	ENV_AGENT_DIR,
 	ENV_LEGACY_SESSION_DIR,
@@ -18,6 +19,7 @@ import {
 	LEGACY_ALIAS_ENV,
 	LEGACY_NAME_WARNINGS,
 	readLegacyEnv,
+	resetLegacyNameWarnings,
 	warnIfLegacyAlias,
 	withCurrentLegacyWarnings,
 } from "../src/config.js";
@@ -510,7 +512,53 @@ describe("legacy env fallback", () => {
 	afterEach(() => {
 		delete process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;
 		delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+		delete process.env.PRIME_AGENT_TRACES_API_KEY;
+		delete process.env.PRIME_AGENT_WEBSEARCH_TIMEOUT;
 		LEGACY_NAME_WARNINGS.length = 0;
+	});
+
+	/** Names whose only reader runs long after the startup drain: the websearch
+	 *  settings a tool call resolves, and the trace credential an upload does.
+	 *  Their fallback worked, and their deprecation was queued behind a reporter
+	 *  that had already run. */
+	it("collects a legacy name nothing reads until later in the session", () => {
+		process.env.PRIME_AGENT_TRACES_API_KEY = "legacy-key";
+		process.env.PRIME_AGENT_WEBSEARCH_TIMEOUT = "30";
+
+		collectLegacyEnvDeprecations();
+
+		const collected = LEGACY_NAME_WARNINGS.join("\n");
+		expect(collected).toContain("PRIME_AGENT_TRACES_API_KEY");
+		expect(collected).toContain("WASMEDGE_AGENT_TRACES_API_KEY");
+		expect(collected).toContain("PRIME_AGENT_WEBSEARCH_TIMEOUT");
+	});
+
+	it("says nothing about a legacy name that is not set", () => {
+		collectLegacyEnvDeprecations();
+
+		expect(LEGACY_NAME_WARNINGS.join("\n")).not.toContain("PRIME_AGENT_TRACES_API_KEY");
+	});
+
+	it("does not collect a legacy name the current one already answers", () => {
+		process.env.WASMEDGE_AGENT_TRACES_API_KEY = "current-key";
+		process.env.PRIME_AGENT_TRACES_API_KEY = "legacy-key";
+		try {
+			collectLegacyEnvDeprecations();
+
+			expect(LEGACY_NAME_WARNINGS.join("\n")).not.toContain("PRIME_AGENT_TRACES_API_KEY");
+		} finally {
+			delete process.env.WASMEDGE_AGENT_TRACES_API_KEY;
+		}
+	});
+
+	it("empties the collection for a fresh run", () => {
+		process.env.PRIME_AGENT_CODING_AGENT_DIR = "/example/legacy";
+		readLegacyEnv("WASMEDGE_AGENT_CODING_AGENT_DIR");
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(1);
+
+		resetLegacyNameWarnings();
+
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(0);
 	});
 
 	it("reads the legacy name when the current one is unset, and warns once", () => {

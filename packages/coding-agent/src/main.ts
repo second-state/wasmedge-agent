@@ -35,6 +35,7 @@ import {
 } from "./cli/session-resolver.js";
 import {
 	APP_NAME,
+	collectLegacyEnvDeprecations,
 	expandTildePath,
 	getAgentDir,
 	getLogsDir,
@@ -1200,6 +1201,10 @@ function exitWithoutReporting(exitCode: number): never {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	// Drops what a previous run of main() already reported, and keeps what
+	// this process collected before main() was reached -- cli-main.ts migrates
+	// the agent directory before ./main.js is imported, and the legacy-daemon
+	// warning that move queues is the one nothing below can re-derive.
 	resetReportedLegacyWarnings();
 	// Must precede every getAgentDir() consumer, including the log sink below,
 	// and must not sit behind the early return at isDaemonCatalogProcess().
@@ -1208,6 +1213,10 @@ export async function main(args: string[], options?: MainOptions) {
 	// --export print and call process.exit() directly, and a stream write left
 	// buffered is discarded by that exit wherever stderr is asynchronous.
 	warnIfLegacyAlias(process.argv[1] ?? "", writeStderrSync);
+	// Before any drain, and before the early returns below: a legacy name whose
+	// only reader runs later in the session would otherwise queue its warning
+	// after the last reporter had already run.
+	collectLegacyEnvDeprecations();
 	// packages/tui cannot import our config (the dependency runs the other
 	// way), so the host hands it the diagnostics directory.
 	process.env.PI_TUI_LOG_DIR ??= getLogsDir();

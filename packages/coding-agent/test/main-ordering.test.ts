@@ -27,6 +27,46 @@ describe("main() startup order", () => {
 		expect(migrate).toBeLessThan(catalogReturn);
 	});
 
+	it("clears the previous run's warnings before this run collects any", () => {
+		// main() is exported, and an embedder can call it twice. The clear has
+		// to sit above migrateAgentDirIfNeeded(), or a warning this run's
+		// migration re-queues -- byte-identical to one the previous run
+		// delivered -- would be dropped again as that run's.
+		const mainStart = source.indexOf("export async function main(");
+		const reset = source.indexOf("resetReportedLegacyWarnings(", mainStart);
+		const migrate = source.indexOf("migrateAgentDirIfNeeded(", mainStart);
+
+		expect(mainStart).toBeGreaterThan(-1);
+		expect(reset).toBeGreaterThan(-1);
+		expect(migrate).toBeGreaterThan(-1);
+		expect(reset).toBeLessThan(migrate);
+	});
+
+	it("never empties the whole warning collection", () => {
+		// The blanket clear reads as the obvious way to scope warnings to one
+		// run, and it shipped: it erased the legacy-daemon warning that
+		// cli-main.ts's migration had already queued, on the real CLI path,
+		// where the move has removed the socket that warning is keyed on and
+		// main()'s own migration re-derives nothing. Scoping belongs in
+		// resetReportedLegacyWarnings(), which drops only what was delivered.
+		const mainStart = source.indexOf("export async function main(");
+
+		expect(mainStart).toBeGreaterThan(-1);
+		expect(source.indexOf("resetLegacyNameWarnings(", mainStart)).toBe(-1);
+	});
+
+	it("sweeps the legacy environment names before the first drain", () => {
+		// Anchored inside main(): reportStartupWarnings appears above it too,
+		// in the exit helper that drains on a startup failure.
+		const mainStart = source.indexOf("export async function main(");
+		const sweep = source.indexOf("collectLegacyEnvDeprecations(", mainStart);
+		const drain = source.indexOf("reportStartupWarnings(", mainStart);
+
+		expect(sweep).toBeGreaterThan(-1);
+		expect(drain).toBeGreaterThan(-1);
+		expect(sweep).toBeLessThan(drain);
+	});
+
 	it("reports what startup collected before the model-listing exit", () => {
 		// Structural, and honest about it: reproducing this needs a terminal,
 		// because the bug is that appMode "interactive" skips the terse

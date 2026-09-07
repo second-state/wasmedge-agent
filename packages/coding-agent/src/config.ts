@@ -558,6 +558,59 @@ export function withCurrentLegacyWarnings(snapshot: readonly string[]): string[]
 	return Array.from(new Set([...snapshot, ...LEGACY_NAME_WARNINGS]));
 }
 
+/** Empties the collection. For tests, which need a known-empty starting
+ *  point; a new run of main() uses forgetLegacyNameWarnings() instead, for
+ *  the reason given there. */
+export function resetLegacyNameWarnings(): void {
+	LEGACY_NAME_WARNINGS.length = 0;
+}
+
+/** Drops warnings a finished run already delivered, leaving the rest.
+ *
+ *  This collection outlives a run of main(), and reportedLegacyWarnings --
+ *  the record of what has already been written -- does not. An embedder
+ *  calling the exported main() twice therefore saw the first run's warnings
+ *  reported again by the second, after the legacy name that caused them was
+ *  gone. Clearing the record of a delivery has to clear what was delivered.
+ *
+ *  Only that. Emptying the whole collection instead loses what the process
+ *  entry point collected before main() was ever reached, and one of those
+ *  cannot be recovered: cli-main.ts runs migrateAgentDirIfNeeded() before
+ *  ./main.js is even imported, and the legacy-daemon warning that move queues
+ *  is keyed on a socket under the directory the move just renamed. main()'s
+ *  own second call finds no socket and re-derives nothing, so a blanket clear
+ *  silently drops the one warning telling the user that a daemon from the
+ *  previous release is still writing session state where this build no longer
+ *  reads -- on the real CLI path, the only path where it can happen. */
+export function forgetLegacyNameWarnings(delivered: ReadonlySet<string>): void {
+	for (let index = LEGACY_NAME_WARNINGS.length - 1; index >= 0; index--) {
+		if (delivered.has(LEGACY_NAME_WARNINGS[index] as string)) LEGACY_NAME_WARNINGS.splice(index, 1);
+	}
+}
+
+/** Reads every legacy environment name once, for its deprecation alone.
+ *
+ *  readLegacyEnv() collects a warning where a value is used, and startup
+ *  drains what has been collected by then -- so a name first read after that
+ *  drain works, queues a warning nobody drains again, and the user is never
+ *  told the old name is going away. Four are read that way: the websearch
+ *  timeout and result count, resolved when a tool call runs, and the trace
+ *  credential and base URL, resolved when an upload does. In daemon mode the
+ *  read can happen in a worker process besides, whose stderr is not the
+ *  terminal anyone is looking at.
+ *
+ *  Sweeping the list at startup completes the collection before the drain,
+ *  rather than adding a second way to surface a warning: values stay lazy
+ *  where they are used, and only the deprecation is eager. A name added to
+ *  LEGACY_ENV_NAMES is covered without anyone remembering this exists.
+ *
+ *  The environment counterpart of resolveLegacyNameWarningsEarly below, which
+ *  does the same for the directory names, and called earlier than it because
+ *  this one needs no cwd and must also cover the runs that return before it. */
+export function collectLegacyEnvDeprecations(): void {
+	for (const suffix of LEGACY_ENV_NAMES) readLegacyEnv(`${envPrefix}_${suffix}`);
+}
+
 export function readLegacyEnv(name: string): string | undefined {
 	const current = process.env[name];
 	if (current !== undefined) return current;
