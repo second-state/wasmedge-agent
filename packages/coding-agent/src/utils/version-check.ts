@@ -1,7 +1,22 @@
 import { readLegacyEnv } from "../config.js";
 import { getPiUserAgent } from "./pi-user-agent.js";
 
-const DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev";
+/** No default, deliberately.
+ *
+ * The rebrand renamed this constant but not its value, which stayed upstream's
+ * release bucket. checkForNewPiVersion runs on every interactive startup, and
+ * package-manager-cli takes `packageName` and `installSpec` straight from the
+ * manifest it fetches -- so a shipped WasmEdge Agent announced upstream's
+ * version as an update to itself and, on /update, would have installed
+ * upstream's own release tarball over itself.
+ *
+ * WasmEdge Agent has no release host yet, so there is no correct value to put
+ * here. Empty is the honest one: it self-disables the update check, the same
+ * way install.sh refuses to run against its unreplaced download-URL sentinel,
+ * rather than silently querying a host we do not own. Set
+ * WASMEDGE_AGENT_DOWNLOAD_BASE_URL, or fill this in, once a release host
+ * exists. */
+const DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "";
 const STABLE_VERSION_MANIFEST_PATH = "latest.json";
 const BETA_VERSION_MANIFEST_PATH = "beta.json";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
@@ -86,7 +101,7 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return candidateVersion.trim() !== currentVersion.trim();
 }
 
-function getPrimeAgentDownloadBaseUrl(): string {
+function getWasmEdgeAgentDownloadBaseUrl(): string {
 	return (
 		readLegacyEnv("WASMEDGE_AGENT_DOWNLOAD_BASE_URL")?.trim() || DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL
 	).replace(/\/+$/, "");
@@ -117,7 +132,20 @@ export async function getLatestPiRelease(
 ): Promise<LatestPiRelease | undefined> {
 	if (process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE) return undefined;
 
-	const baseUrl = getPrimeAgentDownloadBaseUrl();
+	const baseUrl = getWasmEdgeAgentDownloadBaseUrl();
+	// Throws rather than returning undefined so the reason is legible to
+	// anyone who calls this directly or runs /update. checkForNewPiVersion
+	// below still swallows it, which is what keeps a build with no release
+	// host from printing a warning on every interactive startup -- the
+	// diagnosis lives in this message, not in the terminal of every user.
+	if (!baseUrl) {
+		throw new Error(
+			"No release host is configured, so the update check cannot run. " +
+				"Set WASMEDGE_AGENT_DOWNLOAD_BASE_URL to the WasmEdge Agent release base URL. " +
+				"There is no default on purpose: the value this replaced was upstream's release bucket, " +
+				"and querying it would offer upstream's build as an update to this one.",
+		);
+	}
 	const response = await fetch(`${baseUrl}/${getReleaseManifestPath(currentVersion)}`, {
 		headers: {
 			"User-Agent": getPiUserAgent(currentVersion),

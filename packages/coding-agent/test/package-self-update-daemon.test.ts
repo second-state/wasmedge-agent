@@ -397,6 +397,7 @@ describe("self-update daemon restart", () => {
 	let packageDir: string;
 	let originalAgentDir: string | undefined;
 	let originalPiPackageDir: string | undefined;
+	let originalDownloadBaseUrl: string | undefined;
 	let originalCwd: string;
 	let originalExecPath: string;
 	let originalExitCode: typeof process.exitCode;
@@ -508,12 +509,16 @@ describe("self-update daemon restart", () => {
 
 		originalAgentDir = process.env[ENV_AGENT_DIR];
 		originalPiPackageDir = process.env.PI_PACKAGE_DIR;
+		originalDownloadBaseUrl = process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
 		originalCwd = process.cwd();
 		originalExecPath = process.execPath;
 		originalExitCode = process.exitCode;
 		process.exitCode = undefined;
 		process.env[ENV_AGENT_DIR] = agentDir;
 		process.env.PI_PACKAGE_DIR = packageDir;
+		// The update check has no compiled-in release host any more, so the
+		// stubbed fetch below is only reached once one is named.
+		process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "https://releases.example.test";
 		process.chdir(projectDir);
 		Object.defineProperty(process, "execPath", {
 			value: join(packageDir, "dist", "cli.js"),
@@ -522,7 +527,10 @@ describe("self-update daemon restart", () => {
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ npmCommand: ["npm"] }, null, 2));
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ version: "999.0.0" })),
+			// An actionable manifest: it names the package to install. A
+			// version-only manifest is refused, and these tests are about what
+			// happens once an update legitimately runs.
+			vi.fn(async () => Response.json({ package: PACKAGE_NAME, version: "999.0.0" })),
 		);
 	});
 
@@ -539,6 +547,11 @@ describe("self-update daemon restart", () => {
 			delete process.env.PI_PACKAGE_DIR;
 		} else {
 			process.env.PI_PACKAGE_DIR = originalPiPackageDir;
+		}
+		if (originalDownloadBaseUrl === undefined) {
+			delete process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
+		} else {
+			process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = originalDownloadBaseUrl;
 		}
 		delete process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV];
 		Object.defineProperty(process, "execPath", { value: originalExecPath, configurable: true });
@@ -569,13 +582,144 @@ describe("self-update daemon restart", () => {
 		process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] = "1";
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ version: "0.2.6" })),
+			vi.fn(async () => Response.json({ package: PACKAGE_NAME, version: "0.2.6" })),
 		);
 
 		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
 
 		expect(process.exitCode).toBe(SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE);
 		expect(mockState.calls.some((call) => call.startsWith("spawn:npm "))).toBe(false);
+	});
+
+	it("reports a missing release host instead of installing a registry package", async () => {
+		// The hazard the fallback created: with no release host there is no
+		// artifact to install, and PACKAGE_NAME as a bare spec is a registry
+		// name the release does not own. `update` must stop, not guess.
+		delete process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL;
+		const fetchSpy = vi.fn(async () => Response.json({ version: "99.0.0" }));
+		vi.stubGlobal("fetch", fetchSpy);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+			expect(process.exitCode).toBe(1);
+			expect(fetchSpy).not.toHaveBeenCalled();
+			// No package manager is run at all, under any name.
+			expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+			// The message has to carry the remedy, or the user is told only
+			// that something failed.
+			const reported = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+			expect(reported).toContain("WASMEDGE_AGENT_DOWNLOAD_BASE_URL");
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it.each([
+		["a host that returns nothing usable", async () => new Response("", { status: 404 })],
+		["offline mode", undefined],
+	])("reports no release instead of installing a registry package: %s", async (_name, fetchImpl) => {
+		// getLatestPiRelease resolves undefined rather than throwing here. That
+		// used to satisfy the shouldRun condition with installSpec = PACKAGE_NAME
+		// -- a bare registry spec under our own name, which the release owns no
+		// entry for.
+		if (fetchImpl) {
+			vi.stubGlobal("fetch", vi.fn(fetchImpl));
+		} else {
+			process.env.PI_OFFLINE = "1";
+		}
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+			expect(process.exitCode).toBe(1);
+			// The assertion that matters: no package manager ran, under any name.
+			expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+			const reported = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+			expect(reported).toContain("no release to install");
+		} finally {
+			errorSpy.mockRestore();
+			delete process.env.PI_OFFLINE;
+		}
+	});
+
+	it.each([
+		["", ["update", "--self"]],
+		[" even with --force", ["update", "--self", "--force"]],
+	])("refuses a version-only manifest%s", async (_name, args) => {
+		// The manifest answers, and names a newer version, but identifies
+		// nothing to install. Filling both blanks from PACKAGE_NAME would put a
+		// bare registry name -- ours, unconfirmed by the host -- on the command
+		// line. --force skips the version comparison, not this.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ version: "999.0.0" })),
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(handlePackageCommand(args)).resolves.toBe(true);
+
+			expect(process.exitCode).toBe(1);
+			expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+			const reported = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+			expect(reported).toContain("neither a tarball nor a package");
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("still updates when the manifest names only a tarball", async () => {
+		// The other half of the actionable rule: no package name, but the host
+		// named the artifact, so the spec came from the host and not from us.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ tarball: "releases/current/wasmedge-agent.tgz", version: "999.0.0" })),
+		);
+
+		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+		const install = mockState.calls.find((call) => call.startsWith("spawn:npm install -g"));
+		expect(install).toBeDefined();
+		expect(install).toContain("wasmedge-agent.tgz");
+	});
+
+	it("does not let --force reach past a missing release", async () => {
+		// --force bypasses the version comparison, not the safety check: there
+		// is no artifact here to force an update to.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("", { status: 404 })),
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(handlePackageCommand(["update", "--self", "--force"])).resolves.toBe(true);
+
+			expect(process.exitCode).toBe(1);
+			expect(mockState.calls.some((call) => call.startsWith("spawn:"))).toBe(false);
+			const reported = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+			expect(reported).toContain("no release to install");
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("still updates when the manifest renames the package without shipping an artifact", async () => {
+		// The legitimate case this must not disable. The version is unchanged,
+		// so only packageRenameRequiresUpdate can start it, and the name it
+		// installs came from the release host rather than from PACKAGE_NAME.
+		const renamedPackage = PACKAGE_NAME === "renamed-agent" ? "renamed-agent-2" : "renamed-agent";
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ packageName: renamedPackage, version: VERSION })),
+		);
+
+		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+		expect(mockState.calls.some((call) => call.startsWith(`spawn:npm install -g ${renamedPackage}`))).toBe(true);
 	});
 
 	it("does not use the no-change sentinel when interactive self-update is cancelled", async () => {
