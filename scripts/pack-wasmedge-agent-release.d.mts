@@ -18,6 +18,29 @@ export declare function writeLegacyAliasShim(packageRoot: string): string;
  *  the package is ready to pack. */
 export declare function missingReleaseArtifacts(packageRoot: string, requiredFiles?: readonly string[]): string[];
 
+/** Every file a published manifest points a consumer at, as package-relative
+ *  paths, sorted: main, types, each bin target, and every string leaf under
+ *  exports. A dist directory's existence says nothing about any of them. */
+export declare function declaredEntryPoints(packageJson: Record<string, unknown>): string[];
+
+/** Build outputs in the package's dist that its release build does not account
+ *  for, as absolute paths, sorted. `packageDir` is the workspace directory
+ *  whose rules apply; omitting it checks against the compiled src mapping
+ *  alone, which is the strict reading. */
+export declare function staleBuildOutputs(packageRoot: string, packageDir?: string): string[];
+
+/** Outputs the package's sources owe dist but did not produce, as absolute
+ *  paths, sorted. A TypeScript source owes a .js, a .d.ts and both map files;
+ *  a .d.ts source owes nothing; every other source is copied under its own
+ *  name and owes itself. Empty when the package is unbuilt: that is
+ *  missingReleaseArtifacts' to report. */
+export declare function missingSourceOutputs(packageRoot: string): string[];
+
+/** Symbolic links anywhere in the package's dist, as absolute paths, sorted.
+ *  No build step writes one, so what a link resolves to is a property of the
+ *  machine that packed it rather than of the package. */
+export declare function symlinkedBuildOutputs(packageRoot: string): string[];
+
 export declare function createReleasePackageJson(
 	sourcePackage: Record<string, unknown>,
 	packageName: string,

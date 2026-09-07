@@ -10,13 +10,14 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readdirSync,
 	renameSync,
 	readFileSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -230,10 +231,302 @@ export function missingReleaseArtifacts(packageRoot, requiredFiles = []) {
 	return missing;
 }
 
-function requireBuiltPackage(packageDir) {
-	const dist = join(packagePath(packageDir), "dist");
-	if (!existsSync(dist)) {
-		throw new Error(`Missing ${dist}. Run npm run build before packing a release.`);
+/** Every file a published manifest points a consumer at, as package-relative
+ *  paths, sorted and deduplicated: `main`, `types`, each `bin` target, and
+ *  every string leaf under `exports`.
+ *
+ *  A dist directory is not evidence that a package was built. An empty one
+ *  satisfied every check here while the manifest went on promising an import
+ *  path, a declaration file, and -- for the AI package -- a `pi-ai` command
+ *  and a dozen provider subpaths. That tarball installs and then fails on
+ *  first use, and npm reports it at neither pack nor install time.
+ *
+ *  Pure and exported so the covering test can drive it against a manifest it
+ *  controls, the way missingReleaseArtifacts is. */
+export function declaredEntryPoints(packageJson) {
+	const paths = new Set();
+	const add = (value) => {
+		if (typeof value === "string") paths.add(value.replace(/^\.\//, ""));
+	};
+	const walk = (node) => {
+		if (typeof node === "string") add(node);
+		else if (node && typeof node === "object") for (const value of Object.values(node)) walk(value);
+	};
+	add(packageJson.main);
+	add(packageJson.types);
+	walk(packageJson.bin);
+	walk(packageJson.exports);
+	return [...paths].sort();
+}
+
+/** Entry points the packer writes into the staged package rather than reads
+ *  out of the build, so the built tree is not expected to hold them. */
+const PACKER_WRITTEN_ENTRY_POINTS = new Set([PUBLIC_LEGACY_BIN_TARGET]);
+
+/** How each part of a built `dist` maps back to what produced it.
+ *
+ *  Neither tsgo nor the asset copies remove the output of a source file that
+ *  was renamed or deleted, and the packer copies `dist` whole -- so a reused
+ *  workspace publishes the leftovers. That is not hypothetical here: the
+ *  rebrand renamed a logo module under src/themes and a built theme JSON, and
+ *  a tarball packed over the pre-rebrand dist carried both old names into a
+ *  release. The branding audit cannot see them, because it reads tracked
+ *  source files and these are build output.
+ *
+ *  Two things decide which rules apply, and getting either wrong turns the
+ *  check off exactly where it is needed:
+ *
+ *  Whose build. Only coding-agent's build writes anything but tsgo output.
+ *  ai, agent and tui have no bundle, no skills tree and no runtime copy, so
+ *  giving them coding-agent's exemptions meant a stale file at one of those
+ *  paths was waved through in the three packages that can never legitimately
+ *  hold one.
+ *
+ *  Which build mode. The release workflow runs `npm run build` and packs that,
+ *  never `npm run build:binary`. So there are no rules for what build:binary
+ *  writes -- not dist/pi, not the flattened theme, assets and export-html
+ *  copies, not the docs and examples trees, not the manifest copy in the dist
+ *  root. Modelling them as legitimate let a workspace that had once run
+ *  build:binary pack all of it into an npm tarball, because the ordinary build
+ *  neither replaces nor removes any of it. They fall to the last rule and are
+ *  reported, which is what they are: output of a build this release is not
+ *  making.
+ *
+ *  `kind` is how an output relates to its source. `generated` means the build
+ *  writes or replaces the whole tree on every run, so nothing under it can
+ *  outlive its source, and `by` names the step that owns it. `compiled` means
+ *  tsgo's src/-shaped output, which copy-assets writes its mirrored assets
+ *  into as well; an output name may differ from its source's, so foo.js may
+ *  come from foo.ts.
+ *
+ *  The last rule claims everything the ones above it do not and demands a
+ *  source under src/, so every file in dist is accounted for and the default
+ *  is the strict one. A build step that starts writing somewhere new fails the
+ *  next release until it is given a rule, which is the safe direction to fail.
+ *  A missing source directory means the source is gone -- never a licence to
+ *  skip it.
+ *
+ *  `source` is relative to the package root. The longest matching path wins,
+ *  so the order here is for reading only. */
+const COMPILED_SOURCE_RULES = [{ path: "", kind: "compiled", source: "src" }];
+
+const CODING_AGENT_DIST_RULES = [
+	{ path: "bundle", kind: "generated", by: "scripts/bundle.mjs, which empties it first" },
+	{ path: "skills", kind: "generated", by: "copy-assets, which removes it before copying" },
+	{ path: "wasmedge-agent-runtime", kind: "generated", by: "copy-assets, which removes it before copying" },
+	...COMPILED_SOURCE_RULES,
+];
+
+/** The rules for one release package's dist, by its workspace directory.
+ *
+ *  Anything but coding-agent gets the compiled mapping and nothing else. An
+ *  unknown package gets it too, so a package added to releasePackages without
+ *  a thought here is checked strictly rather than leniently. */
+function distContentRules(packageDir) {
+	return packageDir === "coding-agent" ? CODING_AGENT_DIST_RULES : COMPILED_SOURCE_RULES;
+}
+
+/** The rule covering `relativePath`, a dist-relative path spelled with "/".
+ *
+ *  Longest matching path wins. The "" rule matches everything, so there is
+ *  always one. */
+function distContentRule(relativePath, rules) {
+	let match;
+	for (const rule of rules) {
+		const claims = rule.path === "" || relativePath === rule.path || relativePath.startsWith(`${rule.path}/`);
+		if (claims && (!match || rule.path.length > match.path.length)) match = rule;
+	}
+	return match;
+}
+
+/** Source suffixes that could have produced a given compiler output suffix.
+ *
+ *  Checked longest first, so `.d.ts.map` is not read as a `.js.map`. A `.js`
+ *  may be compiled from .ts/.tsx or copied verbatim into the mirrored tree --
+ *  src/core/export-html holds three copied ones -- so it maps to itself as
+ *  well.
+ *
+ *  Anything not listed keeps its own name: .json, .png, .css, .html, .md,
+ *  .wasm, and whatever a later build step writes next. That default is what
+ *  makes a new asset type safe without an edit here. */
+const COMPILED_OUTPUT_SUFFIXES = [
+	[".d.ts.map", [".ts", ".tsx"]],
+	[".js.map", [".js", ".ts", ".tsx"]],
+	[".d.ts", [".ts", ".tsx"]],
+	[".js", [".js", ".ts", ".tsx"]],
+];
+
+/** The paths, relative to the source directory, that could have produced the
+ *  compiler output at `relativePath`. */
+function sourceCandidates(relativePath) {
+	for (const [suffix, sourceSuffixes] of COMPILED_OUTPUT_SUFFIXES) {
+		if (!relativePath.endsWith(suffix)) continue;
+		const base = relativePath.slice(0, -suffix.length);
+		return sourceSuffixes.map((sourceSuffix) => `${base}${sourceSuffix}`);
+	}
+	return [relativePath];
+}
+
+/** Every regular file and every symbolic link under `dir`, as absolute paths.
+ *
+ *  Links are leaves: collected, never followed. A link cannot loop the walk,
+ *  and a link to a directory cannot smuggle a tree past the rules -- which is
+ *  what happened when the walk asked isFile() and isDirectory() and a link
+ *  answered no to both, so it was not walked and not collected either. */
+function treeEntries(dir, found = { files: [], links: [] }) {
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isSymbolicLink()) found.links.push(path);
+		else if (entry.isDirectory()) treeEntries(path, found);
+		else if (entry.isFile()) found.files.push(path);
+	}
+	return found;
+}
+
+/** Build outputs in `dist` that this package's release build does not account
+ *  for, as absolute paths, sorted.
+ *
+ *  `packageDir` is the workspace directory whose rules apply; omitting it
+ *  checks against the compiled mapping alone, which is the strict reading.
+ *
+ *  Pure and exported so the covering test can drive it against a directory it
+ *  controls, the way missingReleaseArtifacts is. */
+export function staleBuildOutputs(packageRoot, packageDir = "") {
+	const dist = join(packageRoot, "dist");
+	if (!isFilesystemKind(dist, "directory")) return [];
+	const rules = distContentRules(packageDir);
+
+	const stale = [];
+	for (const file of treeEntries(dist).files) {
+		const relativePath = relative(dist, file).split(sep).join("/");
+		const rule = distContentRule(relativePath, rules);
+		if (rule.kind === "generated") continue;
+		const sourceRoot = join(packageRoot, rule.source);
+		const remainder = relativePath.slice(rule.path.length).replace(/^\//, "");
+		const candidates = sourceCandidates(remainder).map((candidate) => join(sourceRoot, candidate));
+		if (!candidates.some((candidate) => isFilesystemKind(candidate, "file"))) stale.push(file);
+	}
+	return stale.sort();
+}
+
+/** What one TypeScript source emits, given tsconfig.base.json's declaration,
+ *  declarationMap and sourceMap. The emitted .js and .d.ts each carry a
+ *  //# sourceMappingURL comment naming their map, so a package that ships
+ *  without them ships a dangling reference. */
+const COMPILER_OUTPUT_SUFFIXES = [".js", ".d.ts", ".js.map", ".d.ts.map"];
+
+/** Outputs a package's sources owe `dist` but did not produce, as absolute
+ *  paths, sorted.
+ *
+ *  The mirror of staleBuildOutputs, which asks only whether each output still
+ *  has a source. That direction says nothing about a build that stopped part
+ *  way: a dist holding index.js and index.d.ts satisfied every check here
+ *  while the sibling modules index.js imports at run time were absent, so the
+ *  package installed and then failed on the consumer's first import -- which
+ *  npm reports at neither pack nor install time.
+ *
+ *  Every source under src/ owes something, and what it owes follows from its
+ *  extension alone. Every package compiles with rootDir src, outDir dist,
+ *  declaration, declarationMap and sourceMap, so a .ts owes four files under
+ *  the same relative path; a .d.ts is a source that compiles to nothing and
+ *  the build tsconfigs exclude it; and everything else -- the themes, the
+ *  image, the HTML export template and its vendored scripts -- is copied under
+ *  its own name and owes exactly itself.
+ *
+ *  That last rule is why there are no globs here. copy-assets names each
+ *  directory it copies, but the fact underneath is simpler: every
+ *  non-TypeScript source in src/ is copied into dist/ at the same relative
+ *  path. Restating the globs would put a second copy of the build script in
+ *  this file, and every earlier version of this model that tried to describe
+ *  build steps step by step described one of them wrong.
+ *
+ *  Generated trees -- the bundle's chunks, the skills copy, the Rust runtime
+ *  -- have no source under src/ and are not checked here. Their contents are
+ *  guaranteed instead by buildForRelease, which empties dist and rebuilds it
+ *  immediately before any of this runs.
+ *
+ *  Pure and exported so the covering test can drive it against a directory it
+ *  controls, the way missingReleaseArtifacts is. */
+export function missingSourceOutputs(packageRoot) {
+	const src = join(packageRoot, "src");
+	const dist = join(packageRoot, "dist");
+	// A missing dist is missingReleaseArtifacts' failure to report, and it
+	// names the remedy. Two errors for one cause would only bury it.
+	if (!isFilesystemKind(src, "directory") || !isFilesystemKind(dist, "directory")) return [];
+
+	const missing = [];
+	for (const file of treeEntries(src).files) {
+		const relativePath = relative(src, file).split(sep).join("/");
+		if (relativePath.endsWith(".d.ts")) continue;
+		const owed = relativePath.endsWith(".ts")
+			? COMPILER_OUTPUT_SUFFIXES.map((suffix) => `${relativePath.slice(0, -".ts".length)}${suffix}`)
+			: [relativePath];
+		for (const output of owed) {
+			const target = join(dist, output);
+			if (!isFilesystemKind(target, "file")) missing.push(target);
+		}
+	}
+	return missing.sort();
+}
+
+/** Symbolic links anywhere in `dist`, as absolute paths, sorted.
+ *
+ *  No build step writes one, so a link here came from somewhere else, and what
+ *  it resolves to is a fact about this machine rather than about the package.
+ *  Separate from staleBuildOutputs because the remedy is different: a rule
+ *  cannot make a link legitimate.
+ *
+ *  Pure and exported so the covering test can drive it against a directory it
+ *  controls, the way missingReleaseArtifacts is. */
+export function symlinkedBuildOutputs(packageRoot) {
+	const dist = join(packageRoot, "dist");
+	if (!isFilesystemKind(dist, "directory")) return [];
+	return treeEntries(dist).links.sort();
+}
+
+/** At most `limit` of `paths`, with a count of the rest.
+ *
+ *  A build that stopped part way can be missing hundreds of files, and an
+ *  error that lists every one of them is an error nobody reads. */
+function describePaths(paths, limit = 10) {
+	if (paths.length <= limit) return paths.join(", ");
+	return `${paths.slice(0, limit).join(", ")}, and ${paths.length - limit} more`;
+}
+
+/** Refuses to pack `packageDir` unless its build output matches the manifest
+ *  about to be published for it. */
+function requireBuiltPackage(packageDir, packageJson) {
+	const packageRoot = packagePath(packageDir);
+	const required = declaredEntryPoints(packageJson).filter((path) => !PACKER_WRITTEN_ENTRY_POINTS.has(path));
+	const missing = missingReleaseArtifacts(packageRoot, required);
+	if (missing.length > 0) {
+		throw new Error(
+			`Missing ${describePaths(missing)}. The manifest about to be published declares these, and the ` +
+				"release build did not produce them.",
+		);
+	}
+	const unbuilt = missingSourceOutputs(packageRoot);
+	if (unbuilt.length > 0) {
+		throw new Error(
+			`No build output for sources that owe it: ${describePaths(unbuilt)}. Every entry point the ` +
+				"manifest declares is present, so this is a build that stopped part way, and the package " +
+				"would install and then fail on the first import of a module that is not here.",
+		);
+	}
+	const stale = staleBuildOutputs(packageRoot, packageDir);
+	if (stale.length > 0) {
+		throw new Error(
+			`Build output the release build does not account for: ${describePaths(stale)}. dist was empty ` +
+				"before this build, so a build step writes something this model does not describe. " +
+				"Give it a rule in DIST_CONTENT_RULES.",
+		);
+	}
+	const links = symlinkedBuildOutputs(packageRoot);
+	if (links.length > 0) {
+		throw new Error(
+			`Symbolic link in build output: ${describePaths(links)}. No build step writes one, so what this ` +
+				"resolves to is a property of the machine that packed it. Replace it with the file it names.",
+		);
 	}
 }
 
@@ -283,7 +576,7 @@ export function createReleasePackageJson(sourcePackage, packageName, releaseVers
 
 	if (packageName === publicPackageName) {
 		packageJson.bin = {
-			[publicCommandName]: "dist/bundle/cli.js",
+			[publicCommandName]: PUBLIC_BIN_TARGET,
 			// Compatibility alias, one release only. See the CHANGELOG's Unreleased
 			// section: warnIfLegacyAlias() in config.ts warns on stderr when the CLI
 			// is invoked through this name, and that warning is unreachable unless
@@ -341,6 +634,37 @@ function sha256File(path) {
 	return hash.digest("hex");
 }
 
+/** Empties every workspace's dist and rebuilds it, before anything here reads
+ *  a single file.
+ *
+ *  Every check below inspects paths, and no check on paths can see the failure
+ *  that matters most: output that is present, is named correctly, has a live
+ *  source, and was compiled from an older version of it. Build, edit a
+ *  TypeScript file, pack -- and the stale .js and .d.ts satisfy the stale
+ *  check, which asks whether a source exists, and the completeness check,
+ *  which asks whether the path exists. Neither asks whether the content is
+ *  current, and no amount of path modelling ever will.
+ *
+ *  It also settles the trees no model can enumerate. The bundle's chunk names
+ *  come from content hashes, so nothing outside esbuild can say what should be
+ *  there; the skills copy and the Rust runtime tree come from outside src/. A
+ *  clean rebuild answers for all three by construction, which is what the
+ *  alternative -- a manifest the build writes and the packer verifies -- would
+ *  have bought at the price of a second build system.
+ *
+ *  So the checks below are not what makes the release correct. They are a
+ *  tripwire on the build that just ran: if a build step silently stops
+ *  emitting something, or starts writing somewhere this file does not model,
+ *  the pack fails rather than shipping the difference.
+ *
+ *  There is deliberately no flag to skip this. A flag to skip it is the hole
+ *  it closes. */
+function buildForRelease() {
+	console.log("Emptying every workspace's dist and rebuilding, so the pack matches the sources...");
+	run("npm", ["run", "clean", "--workspaces", "--if-present"], root);
+	run("npm", ["run", "build"], root);
+}
+
 function main() {
 	const args = parseArgs(process.argv.slice(2));
 	const sourcePackages = new Map(
@@ -351,10 +675,6 @@ function main() {
 	);
 	const cliPackage = sourcePackages.get("coding-agent");
 	const releaseVersion = args.version || normalizeVersion(process.env.WASMEDGE_AGENT_VERSION || cliPackage.version);
-
-	for (const releasePackage of releasePackages) {
-		requireBuiltPackage(releasePackage.packageDir);
-	}
 
 	// Dependency keys stay on the source package names so existing compiled imports
 	// keep resolving, while release package names and artifact filenames are branded.
@@ -380,24 +700,42 @@ function main() {
 		internalPackageUrls.set(sourcePackageName, releaseTarballUrl(args.baseUrl, releaseVersion, artifactFile));
 	}
 
+	// Checked before the build, so a bad --out-dir costs an error rather than
+	// an error preceded by a full rebuild.
+	assertSafeOutputDir(args.outDir);
+	buildForRelease();
+
+	// Built before anything is staged, because the manifest is what says which
+	// files the package has to carry: main, types, the bin targets and every
+	// exports subpath. Checking a dist directory's existence instead let an
+	// empty one through while the manifest promised all of them.
+	const packageJsons = new Map(
+		releasePackages.map((releasePackage) => [
+			releasePackage.packageDir,
+			createReleasePackageJson(
+				sourcePackages.get(releasePackage.packageDir),
+				packageNames.get(releasePackage.packageDir),
+				releaseVersion,
+				internalPackageUrls,
+			),
+		]),
+	);
+
+	for (const releasePackage of releasePackages) {
+		requireBuiltPackage(releasePackage.packageDir, packageJsons.get(releasePackage.packageDir));
+	}
+
 	const stagingRoot = join(args.outDir, "packages");
 	const artifactsDir = join(args.outDir, "artifacts");
-	assertSafeOutputDir(args.outDir);
 	rmSync(args.outDir, { force: true, recursive: true });
 	mkdirSync(stagingRoot, { recursive: true });
 	mkdirSync(artifactsDir, { recursive: true });
 
 	const tarballs = [];
 	for (const releasePackage of releasePackages) {
-		const sourcePackage = sourcePackages.get(releasePackage.packageDir);
 		const packageName = packageNames.get(releasePackage.packageDir);
 		const stagingDir = join(stagingRoot, releasePackage.packageDir);
-		const packageJson = createReleasePackageJson(
-			sourcePackage,
-			packageName,
-			releaseVersion,
-			internalPackageUrls,
-		);
+		const packageJson = packageJsons.get(releasePackage.packageDir);
 
 		copyPackageContents(packagePath(releasePackage.packageDir), stagingDir, packageJson);
 		if (packageName === publicPackageName) {
