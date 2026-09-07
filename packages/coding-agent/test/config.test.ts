@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { delimiter, join } from "path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, it, test } from "vitest";
 import {
 	APP_NAME,
 	APP_TITLE,
@@ -10,10 +10,15 @@ import {
 	ENV_AGENT_DIR,
 	ENV_LEGACY_SESSION_DIR,
 	ENV_SESSION_DIR,
+	getProjectConfigDir,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getSessionsDir,
 	getUpdateInstruction,
+	LEGACY_NAME_WARNINGS,
+	readLegacyEnv,
+	warnIfLegacyAlias,
+	withCurrentLegacyWarnings,
 } from "../src/config.js";
 import { getDefaultSessionDir } from "../src/core/session-manager.js";
 
@@ -439,6 +444,55 @@ describe("session paths", () => {
 		expect(getSessionsDir("/agent")).toBe(join(homedir(), "wasmedge-agent-sessions"));
 	});
 
+	test("prefers a current long name over the deprecated short one", () => {
+		// The collision the pair-by-pair resolution got wrong: both are set,
+		// one is a name we still support and one is a name we are asking
+		// people to drop, and the deprecated one used to win.
+		const current = join(tmpdir(), `current-session-root-${Date.now()}`);
+		const legacy = join(tmpdir(), `legacy-session-root-${Date.now()}`);
+		delete process.env[ENV_SESSION_DIR];
+		process.env[ENV_LEGACY_SESSION_DIR] = current;
+		process.env.PRIME_AGENT_SESSION_DIR = legacy;
+
+		try {
+			expect(getSessionsDir("/agent")).toBe(current);
+		} finally {
+			delete process.env.PRIME_AGENT_SESSION_DIR;
+		}
+	});
+
+	test("falls back to the deprecated short name when no current name is set", () => {
+		const legacy = join(tmpdir(), `legacy-only-root-${Date.now()}`);
+		delete process.env[ENV_SESSION_DIR];
+		delete process.env[ENV_LEGACY_SESSION_DIR];
+		process.env.PRIME_AGENT_SESSION_DIR = legacy;
+
+		try {
+			expect(getSessionsDir("/agent")).toBe(legacy);
+			expect(LEGACY_NAME_WARNINGS.some((warning) => warning.includes("PRIME_AGENT_SESSION_DIR"))).toBe(true);
+		} finally {
+			delete process.env.PRIME_AGENT_SESSION_DIR;
+			LEGACY_NAME_WARNINGS.length = 0;
+		}
+	});
+
+	test("keeps the short name ahead of the long one among the deprecated names", () => {
+		const shortName = join(tmpdir(), `legacy-short-root-${Date.now()}`);
+		const longName = join(tmpdir(), `legacy-long-root-${Date.now()}`);
+		delete process.env[ENV_SESSION_DIR];
+		delete process.env[ENV_LEGACY_SESSION_DIR];
+		process.env.PRIME_AGENT_SESSION_DIR = shortName;
+		process.env.PRIME_AGENT_CODING_AGENT_SESSION_DIR = longName;
+
+		try {
+			expect(getSessionsDir("/agent")).toBe(shortName);
+		} finally {
+			delete process.env.PRIME_AGENT_SESSION_DIR;
+			delete process.env.PRIME_AGENT_CODING_AGENT_SESSION_DIR;
+			LEGACY_NAME_WARNINGS.length = 0;
+		}
+	});
+
 	test("uses the env session root as the default session dir", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "pi-session-root-"));
 		const cwd = join(tempDir, "project");
@@ -448,5 +502,134 @@ describe("session paths", () => {
 		const sessionDir = getDefaultSessionDir(cwd, join(tempDir, "agent"));
 
 		expect(sessionDir).toBe(sessionRoot);
+	});
+});
+
+describe("legacy env fallback", () => {
+	afterEach(() => {
+		delete process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;
+		delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+		LEGACY_NAME_WARNINGS.length = 0;
+	});
+
+	it("reads the legacy name when the current one is unset, and warns once", () => {
+		process.env.PRIME_AGENT_CODING_AGENT_DIR = "/example/legacy";
+		expect(readLegacyEnv("WASMEDGE_AGENT_CODING_AGENT_DIR")).toBe("/example/legacy");
+		readLegacyEnv("WASMEDGE_AGENT_CODING_AGENT_DIR");
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(1);
+		expect(LEGACY_NAME_WARNINGS[0]).toContain("PRIME_AGENT_CODING_AGENT_DIR");
+	});
+
+	it("prefers the current name and does not warn when both are set", () => {
+		process.env.WASMEDGE_AGENT_CODING_AGENT_DIR = "/example/new";
+		process.env.PRIME_AGENT_CODING_AGENT_DIR = "/example/legacy";
+		expect(readLegacyEnv("WASMEDGE_AGENT_CODING_AGENT_DIR")).toBe("/example/new");
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(0);
+	});
+
+	it("returns undefined when neither is set", () => {
+		expect(readLegacyEnv("WASMEDGE_AGENT_CODING_AGENT_DIR")).toBeUndefined();
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(0);
+	});
+
+	it("has no legacy mapping for internal or test variables", () => {
+		process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER = "1";
+		expect(readLegacyEnv("WASMEDGE_AGENT_INTERNAL_DAEMON_WORKER")).toBeUndefined();
+		delete process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER;
+	});
+});
+
+describe("legacy command alias", () => {
+	it("warns when invoked through the legacy name", () => {
+		const written: string[] = [];
+		expect(warnIfLegacyAlias("/usr/local/bin/prime-agent", (m) => written.push(m))).toBe(true);
+		expect(written).toHaveLength(1);
+		expect(written[0]).toContain("wasmedge-agent");
+		expect(written[0].endsWith("\n")).toBe(true);
+	});
+
+	it("says nothing under the canonical name", () => {
+		const written: string[] = [];
+		expect(warnIfLegacyAlias("/usr/local/bin/wasmedge-agent", (m) => written.push(m))).toBe(false);
+		expect(written).toHaveLength(0);
+	});
+
+	it("says nothing for an empty argv[1]", () => {
+		const written: string[] = [];
+		expect(warnIfLegacyAlias("", (m) => written.push(m))).toBe(false);
+		expect(written).toHaveLength(0);
+	});
+});
+
+describe("project-local config dir", () => {
+	const dirs: string[] = [];
+
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+		LEGACY_NAME_WARNINGS.length = 0;
+	});
+
+	function project(): string {
+		const dir = mkdtempSync(join(tmpdir(), "wasmedge-project-"));
+		dirs.push(dir);
+		return dir;
+	}
+
+	it("prefers the current directory when it exists", () => {
+		const cwd = project();
+		mkdirSync(join(cwd, ".wasmedge-agent"), { recursive: true });
+		mkdirSync(join(cwd, ".prime", "agent"), { recursive: true });
+		expect(getProjectConfigDir(cwd)).toBe(join(cwd, ".wasmedge-agent"));
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(0);
+	});
+
+	it("falls back to the legacy directory and warns once", () => {
+		const cwd = project();
+		mkdirSync(join(cwd, ".prime", "agent"), { recursive: true });
+		expect(getProjectConfigDir(cwd)).toBe(join(cwd, ".prime", "agent"));
+		getProjectConfigDir(cwd);
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(1);
+		expect(LEGACY_NAME_WARNINGS[0]).toContain(".prime");
+	});
+
+	it("returns the current directory when neither exists, without warning", () => {
+		const cwd = project();
+		expect(getProjectConfigDir(cwd)).toBe(join(cwd, ".wasmedge-agent"));
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(0);
+	});
+});
+
+describe("withCurrentLegacyWarnings", () => {
+	afterEach(() => {
+		LEGACY_NAME_WARNINGS.length = 0;
+	});
+
+	it("returns the snapshot unchanged when nothing new was pushed since it was taken", () => {
+		LEGACY_NAME_WARNINGS.push("warning A");
+		const snapshot = ["warning A", "unrelated extension warning"];
+		expect(withCurrentLegacyWarnings(snapshot)).toEqual(snapshot);
+	});
+
+	it("includes a warning pushed into LEGACY_NAME_WARNINGS after the snapshot was taken", () => {
+		const snapshot = ["warning A", "unrelated extension warning"];
+		LEGACY_NAME_WARNINGS.push("warning A");
+		// Simulates a late push -- e.g. a --resume session in a different
+		// project's cwd -- that happens after the snapshot array already
+		// exists but before the fresh union is computed.
+		LEGACY_NAME_WARNINGS.push("late warning B");
+		const result = withCurrentLegacyWarnings(snapshot);
+		expect(result).toContain("late warning B");
+		expect(result).toContain("unrelated extension warning");
+	});
+
+	it("never duplicates an entry the snapshot and LEGACY_NAME_WARNINGS both carry", () => {
+		LEGACY_NAME_WARNINGS.push("warning A");
+		const snapshot = ["warning A"];
+		const result = withCurrentLegacyWarnings(snapshot);
+		expect(result).toEqual(["warning A"]);
+	});
+
+	it("returns an empty array when neither side has anything", () => {
+		expect(withCurrentLegacyWarnings([])).toEqual([]);
 	});
 });

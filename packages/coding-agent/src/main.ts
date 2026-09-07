@@ -33,7 +33,17 @@ import {
 	SessionSelectorError,
 	SessionSelectorNotFoundError,
 } from "./cli/session-resolver.js";
-import { APP_NAME, expandTildePath, getAgentDir, getLogsDir, getSessionDirEnvOverride, VERSION } from "./config.js";
+import {
+	APP_NAME,
+	expandTildePath,
+	getAgentDir,
+	getLogsDir,
+	getSessionDirEnvOverride,
+	resolveLegacyNameWarningsEarly,
+	VERSION,
+	warnIfLegacyAlias,
+	withCurrentLegacyWarnings,
+} from "./config.js";
 import {
 	type AgentSessionRuntimeConfig,
 	mergeAgentSessionRuntimeConfig,
@@ -70,7 +80,12 @@ import { canonicalSessionPath, SessionAlreadyActiveError } from "./core/session-
 import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
-import { runMigrations, showDeprecationWarnings } from "./migrations.js";
+import {
+	migrateAgentDirIfNeeded,
+	reportDeprecationWarningsNonInteractively,
+	runMigrations,
+	showDeprecationWarnings,
+} from "./migrations.js";
 import { isDaemonCatalogProcess, runDaemonCatalogProcess } from "./modes/daemon/daemon-catalog-process.js";
 import { deserializeDaemonError } from "./modes/daemon/daemon-errors.js";
 import { collectDaemonClientEnv, collectDaemonLaunchEnv } from "./modes/daemon/daemon-protocol.js";
@@ -1025,6 +1040,10 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	// Must precede every getAgentDir() consumer, including the log sink below,
+	// and must not sit behind the early return at isDaemonCatalogProcess().
+	migrateAgentDirIfNeeded();
+	warnIfLegacyAlias(process.argv[1] ?? "", (message) => process.stderr.write(message));
 	// packages/tui cannot import our config (the dependency runs the other
 	// way), so the host hands it the diagnostics directory.
 	process.env.PI_TUI_LOG_DIR ??= getLogsDir();
@@ -1126,9 +1145,27 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	}
 
+	// Must precede runMigrations()'s deprecationWarnings snapshot below, and
+	// must not rely on that function's own internals to populate it -- see
+	// resolveLegacyNameWarningsEarly()'s doc comment in config.ts. Needs cwd,
+	// so it runs here rather than at the top of main() alongside
+	// migrateAgentDirIfNeeded() -- nothing before this point consumes
+	// LEGACY_NAME_WARNINGS.
+	resolveLegacyNameWarningsEarly(cwd);
 	// Run migrations (pass cwd for project-local migrations)
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
+	// The interactive channel below (showDeprecationWarnings) blocks on a
+	// keypress inside the TUI's alternate screen, so it only ever runs for
+	// appMode === "interactive". Every other mode gets this terse stderr
+	// counterpart instead, or a legacy env var's fallback would be silently
+	// correct but never flagged as deprecated.
+	if (appMode !== "interactive") {
+		reportDeprecationWarningsNonInteractively(deprecationWarnings, (message) => process.stderr.write(message));
+	}
+	// The interactive display below runs much later than this snapshot -- see
+	// withCurrentLegacyWarnings()'s doc comment in config.ts for why it, not
+	// the raw deprecationWarnings local, is what gets shown there.
 
 	const agentDir = getAgentDir();
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
@@ -1344,8 +1381,9 @@ export async function main(args: string[], options?: MainOptions) {
 		initTheme(settingsManager.getTheme(), true);
 		time("initTheme");
 
-		if (deprecationWarnings.length > 0) {
-			await showDeprecationWarnings(deprecationWarnings);
+		const freshDeprecationWarnings = withCurrentLegacyWarnings(deprecationWarnings);
+		if (freshDeprecationWarnings.length > 0) {
+			await showDeprecationWarnings(freshDeprecationWarnings);
 		}
 
 		reportDiagnostics(prepared.diagnostics);
@@ -1606,8 +1644,11 @@ export async function main(args: string[], options?: MainOptions) {
 	time("initTheme");
 
 	// Show deprecation warnings in interactive mode
-	if (appMode === "interactive" && deprecationWarnings.length > 0) {
-		await showDeprecationWarnings(deprecationWarnings);
+	if (appMode === "interactive") {
+		const freshDeprecationWarnings = withCurrentLegacyWarnings(deprecationWarnings);
+		if (freshDeprecationWarnings.length > 0) {
+			await showDeprecationWarnings(freshDeprecationWarnings);
+		}
 	}
 
 	const scopedModels = [...session.scopedModels];

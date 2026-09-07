@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { appendRotatingLog, getAgentTracesLogPath, getSessionsDir, VERSION } from "../config.js";
+import { appendRotatingLog, getAgentTracesLogPath, getSessionsDir, readLegacyEnv, VERSION } from "../config.js";
 import { readFirstLineSync } from "../utils/file-lines.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
@@ -132,7 +132,7 @@ export interface AgentTraceUploadAllResult {
 }
 
 function stringEnv(name: string): string | undefined {
-	const value = process.env[name];
+	const value = readLegacyEnv(name);
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 

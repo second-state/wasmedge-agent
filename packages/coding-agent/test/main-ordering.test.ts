@@ -26,6 +26,23 @@ describe("main() startup order", () => {
 		expect(migrate).toBeLessThan(logSink);
 		expect(migrate).toBeLessThan(catalogReturn);
 	});
+
+	it("resolves legacy-aware env and project-dir getters before runMigrations snapshots their warnings", () => {
+		// getSessionDirEnvOverride() has no early caller of its own the way
+		// getAgentDir() gets one for free from migrateAgentDirIfNeeded(), and
+		// getProjectConfigDir(cwd) has none either. Migration steps inside
+		// runMigrations happen to call both today (via getSessionsDir() and
+		// migrateExtensionSystem() respectively, for unrelated reasons), but
+		// that is exactly the kind of accident this ordering guard exists to
+		// not depend on -- see resolveLegacyNameWarningsEarly()'s doc comment
+		// in config.ts.
+		const resolveEarly = source.indexOf("resolveLegacyNameWarningsEarly(");
+		const runMigrationsCall = source.indexOf("runMigrations(cwd)");
+
+		expect(resolveEarly).toBeGreaterThan(-1);
+		expect(runMigrationsCall).toBeGreaterThan(-1);
+		expect(resolveEarly).toBeLessThan(runMigrationsCall);
+	});
 });
 
 /** runCli() is the real process entry: the shipped bin calls it, and it starts

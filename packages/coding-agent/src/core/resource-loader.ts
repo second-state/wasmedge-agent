@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { CONFIG_DIR_NAME, getBundledSkillsDir } from "../config.js";
+import { getBundledSkillsDir, getProjectConfigDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
@@ -648,11 +648,15 @@ export class DefaultResourceLoader implements ResourceLoader {
 			join(this.agentDir, "themes"),
 			join(this.agentDir, "extensions"),
 		];
+		// Resolved once and reused below: this method runs per resource, so a
+		// separate getProjectConfigDir() call per root would recheck the
+		// filesystem four times for a single answer.
+		const projectConfigDir = getProjectConfigDir(this.cwd);
 		const projectRoots = [
-			join(this.cwd, CONFIG_DIR_NAME, "skills"),
-			join(this.cwd, CONFIG_DIR_NAME, "prompts"),
-			join(this.cwd, CONFIG_DIR_NAME, "themes"),
-			join(this.cwd, CONFIG_DIR_NAME, "extensions"),
+			join(projectConfigDir, "skills"),
+			join(projectConfigDir, "prompts"),
+			join(projectConfigDir, "themes"),
+			join(projectConfigDir, "extensions"),
 		];
 
 		for (const root of agentRoots) {
@@ -714,7 +718,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const themes: Theme[] = [];
 		const diagnostics: ResourceDiagnostic[] = [];
 		if (includeDefaults) {
-			const defaultDirs = [join(this.agentDir, "themes"), join(this.cwd, CONFIG_DIR_NAME, "themes")];
+			const defaultDirs = [join(this.agentDir, "themes"), join(getProjectConfigDir(this.cwd), "themes")];
 
 			for (const dir of defaultDirs) {
 				this.loadThemesFromDir(dir, themes, diagnostics);
@@ -860,7 +864,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private discoverSystemPromptFile(): string | undefined {
-		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "SYSTEM.md");
+		const projectPath = join(getProjectConfigDir(this.cwd), "SYSTEM.md");
 		if (existsSync(projectPath)) {
 			return projectPath;
 		}
@@ -874,7 +878,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private discoverAppendSystemPromptFile(): string | undefined {
-		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "APPEND_SYSTEM.md");
+		const projectPath = join(getProjectConfigDir(this.cwd), "APPEND_SYSTEM.md");
 		if (existsSync(projectPath)) {
 			return projectPath;
 		}

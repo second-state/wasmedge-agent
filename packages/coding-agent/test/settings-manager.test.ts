@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { homedir } from "os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { LEGACY_NAME_WARNINGS } from "../src/config.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
@@ -548,5 +549,42 @@ describe("SettingsManager", () => {
 			await manager.flush();
 			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")).idleEvictionMinutes).toBe("off");
 		});
+	});
+});
+
+describe("SettingsManager project-local fallback (.prime/agent)", () => {
+	const dirs: string[] = [];
+
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+		LEGACY_NAME_WARNINGS.length = 0;
+	});
+
+	function isolatedDirs(): { agentDir: string; projectDir: string } {
+		const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-settings-fallback-"));
+		dirs.push(root);
+		const agentDir = join(root, "agent");
+		const projectDir = join(root, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		return { agentDir, projectDir };
+	}
+
+	it("still reads project settings from the legacy .prime/agent directory, and warns once", async () => {
+		const { agentDir, projectDir } = isolatedDirs();
+		mkdirSync(join(projectDir, ".prime", "agent"), { recursive: true });
+		writeFileSync(join(projectDir, ".prime", "agent", "settings.json"), JSON.stringify({ theme: "legacy-theme" }));
+
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getProjectSettings().theme).toBe("legacy-theme");
+		expect(LEGACY_NAME_WARNINGS).toHaveLength(1);
+		expect(LEGACY_NAME_WARNINGS[0]).toContain(join(".prime", "agent"));
+
+		manager.setProjectSkillPaths(["./local-skills"]);
+		await manager.flush();
+		expect(existsSync(join(projectDir, ".wasmedge-agent"))).toBe(false);
+		const saved = JSON.parse(readFileSync(join(projectDir, ".prime", "agent", "settings.json"), "utf8"));
+		expect(saved.theme).toBe("legacy-theme");
+		expect(saved.skills).toEqual(["./local-skills"]);
 	});
 });

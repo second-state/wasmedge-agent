@@ -673,6 +673,7 @@ wasmedge-agent --thinking high "Solve this complex problem"
 | `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` | Bound parallel cell compiles across sessions in one process |
 | `WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL` | `1` makes postinstall vendor and prebuild the workspace template |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
+| `PRIME_AGENT_*` | Deprecated. A `WASMEDGE_AGENT_*` name that existed before the rename still falls back to its `PRIME_AGENT_*` spelling for one release, and warns on stderr when it does. Names this fork introduced (`CARGO`, `WASMEDGE`, `TEMPLATE_DIR`, `MAX_CONCURRENT_BUILDS`, `BOOTSTRAP_ON_INSTALL`) never had one |
 
 The remaining `PI_*` variables in this table are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.wasmedge-agent` configuration path.
 

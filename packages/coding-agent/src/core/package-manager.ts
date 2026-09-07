@@ -27,7 +27,7 @@ import type { Readable } from "node:stream";
 import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
-import { CONFIG_DIR_NAME, getBundledSkillsDir } from "../config.js";
+import { getBundledSkillsDir, getProjectConfigDir } from "../config.js";
 import { shouldUseWindowsShell } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
@@ -879,7 +879,7 @@ export class DefaultPackageManager implements PackageManager {
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
 
 		const globalBaseDir = this.agentDir;
-		const projectBaseDir = join(this.cwd, CONFIG_DIR_NAME);
+		const projectBaseDir = getProjectConfigDir(this.cwd);
 
 		for (const resourceType of RESOURCE_TYPES) {
 			const target = this.getTargetMap(accumulator, resourceType);
@@ -1845,7 +1845,7 @@ export class DefaultPackageManager implements PackageManager {
 			return this.getTemporaryDir("npm");
 		}
 		if (scope === "project") {
-			return join(this.cwd, CONFIG_DIR_NAME, "npm");
+			return join(getProjectConfigDir(this.cwd), "npm");
 		}
 		return join(this.getGlobalNpmRoot(), "..");
 	}
@@ -1872,7 +1872,7 @@ export class DefaultPackageManager implements PackageManager {
 			return join(this.getTemporaryDir("npm"), "node_modules", source.name);
 		}
 		if (scope === "project") {
-			return join(this.cwd, CONFIG_DIR_NAME, "npm", "node_modules", source.name);
+			return join(getProjectConfigDir(this.cwd), "npm", "node_modules", source.name);
 		}
 		return join(this.getGlobalNpmRoot(), source.name);
 	}
@@ -1882,7 +1882,7 @@ export class DefaultPackageManager implements PackageManager {
 			return this.getTemporaryDir(`git-${source.host}`, source.path);
 		}
 		if (scope === "project") {
-			return join(this.cwd, CONFIG_DIR_NAME, "git", source.host, source.path);
+			return join(getProjectConfigDir(this.cwd), "git", source.host, source.path);
 		}
 		return join(this.agentDir, "git", source.host, source.path);
 	}
@@ -1892,7 +1892,7 @@ export class DefaultPackageManager implements PackageManager {
 			return undefined;
 		}
 		if (scope === "project") {
-			return join(this.cwd, CONFIG_DIR_NAME, "git");
+			return join(getProjectConfigDir(this.cwd), "git");
 		}
 		return join(this.agentDir, "git");
 	}
@@ -1907,7 +1907,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private getBaseDirForScope(scope: SourceScope): string {
 		if (scope === "project") {
-			return join(this.cwd, CONFIG_DIR_NAME);
+			return getProjectConfigDir(this.cwd);
 		}
 		if (scope === "user") {
 			return this.agentDir;

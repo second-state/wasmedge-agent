@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join, resolve } from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { LEGACY_NAME_WARNINGS } from "../src/config.js";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
 import {
 	formatSkillsForPrompt,
@@ -574,6 +575,39 @@ describe("skills", () => {
 			expect(skillMap.get("calendar")?.sourceInfo.source).toBe("first");
 			expect(collisionWarnings).toHaveLength(1);
 			expect(collisionWarnings[0].message).toContain("name collision");
+		});
+	});
+
+	describe("project-local fallback (.prime/agent)", () => {
+		const emptyAgentDir = resolve(__dirname, "fixtures/empty-agent");
+		const dirs: string[] = [];
+
+		afterEach(() => {
+			for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+			LEGACY_NAME_WARNINGS.length = 0;
+		});
+
+		it("still discovers project skills under the legacy .prime/agent directory, and warns once", () => {
+			const cwd = mkdtempSync(join(tmpdir(), "wasmedge-agent-project-skills-"));
+			dirs.push(cwd);
+			const legacySkillDir = join(cwd, ".prime", "agent", "skills", "legacy-skill");
+			mkdirSync(legacySkillDir, { recursive: true });
+			writeFileSync(
+				join(legacySkillDir, "SKILL.md"),
+				"---\nname: legacy-skill\ndescription: Lives under the pre-rebrand project directory.\n---\n\nBody.\n",
+			);
+
+			const { skills, diagnostics } = loadSkills({
+				agentDir: emptyAgentDir,
+				cwd,
+				skillPaths: [],
+				includeDefaults: true,
+			});
+
+			expect(skills.map((s) => s.name)).toContain("legacy-skill");
+			expect(diagnostics).toHaveLength(0);
+			expect(LEGACY_NAME_WARNINGS).toHaveLength(1);
+			expect(LEGACY_NAME_WARNINGS[0]).toContain(join(".prime", "agent"));
 		});
 	});
 });

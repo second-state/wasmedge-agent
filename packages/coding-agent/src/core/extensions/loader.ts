@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
+import { getAgentDir, getProjectConfigDir, isBunBinary } from "../../config.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -575,8 +575,8 @@ export async function discoverAndLoadExtensions(
 		}
 	};
 
-	// 1. Project-local extensions: cwd/${CONFIG_DIR_NAME}/extensions/
-	const localExtDir = path.join(cwd, CONFIG_DIR_NAME, "extensions");
+	// 1. Project-local extensions: getProjectConfigDir(cwd)/extensions/
+	const localExtDir = path.join(getProjectConfigDir(cwd), "extensions");
 	addPaths(discoverExtensionsInDir(localExtDir));
 
 	// 2. Global extensions: agentDir/extensions/

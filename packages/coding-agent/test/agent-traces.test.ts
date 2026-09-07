@@ -90,6 +90,7 @@ async function advanceTimersUntil(condition: () => boolean): Promise<void> {
 describe("agent trace upload", () => {
 	let tempDir: string;
 	let originalTraceApiKey: string | undefined;
+	let originalLegacyTraceApiKey: string | undefined;
 	let originalPrimeApiKey: string | undefined;
 	let originalTraceBaseUrl: string | undefined;
 	let originalPrimeBaseUrl: string | undefined;
@@ -100,10 +101,12 @@ describe("agent trace upload", () => {
 		originalAgentDir = process.env[ENV_AGENT_DIR];
 		process.env[ENV_AGENT_DIR] = tempDir;
 		originalTraceApiKey = process.env.WASMEDGE_AGENT_TRACES_API_KEY;
+		originalLegacyTraceApiKey = process.env.PRIME_AGENT_TRACES_API_KEY;
 		originalPrimeApiKey = process.env.PRIME_API_KEY;
 		originalTraceBaseUrl = process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
 		originalPrimeBaseUrl = process.env.PRIME_API_BASE_URL;
 		delete process.env.WASMEDGE_AGENT_TRACES_API_KEY;
+		delete process.env.PRIME_AGENT_TRACES_API_KEY;
 		delete process.env.PRIME_API_KEY;
 		delete process.env.WASMEDGE_AGENT_TRACES_BASE_URL;
 		delete process.env.PRIME_API_BASE_URL;
@@ -121,6 +124,11 @@ describe("agent trace upload", () => {
 			delete process.env.WASMEDGE_AGENT_TRACES_API_KEY;
 		} else {
 			process.env.WASMEDGE_AGENT_TRACES_API_KEY = originalTraceApiKey;
+		}
+		if (originalLegacyTraceApiKey === undefined) {
+			delete process.env.PRIME_AGENT_TRACES_API_KEY;
+		} else {
+			process.env.PRIME_AGENT_TRACES_API_KEY = originalLegacyTraceApiKey;
 		}
 		if (originalPrimeApiKey === undefined) {
 			delete process.env.PRIME_API_KEY;

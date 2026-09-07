@@ -1,3 +1,4 @@
+import { readLegacyEnv } from "../config.js";
 import { getPiUserAgent } from "./pi-user-agent.js";
 
 const DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev";
@@ -86,10 +87,9 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 }
 
 function getPrimeAgentDownloadBaseUrl(): string {
-	return (process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL?.trim() || DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL).replace(
-		/\/+$/,
-		"",
-	);
+	return (
+		readLegacyEnv("WASMEDGE_AGENT_DOWNLOAD_BASE_URL")?.trim() || DEFAULT_WASMEDGE_AGENT_DOWNLOAD_BASE_URL
+	).replace(/\/+$/, "");
 }
 
 function normalizeReleaseVersion(version: string): string {
