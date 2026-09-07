@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      checks: read
     outputs:
       beta_version: ${{ steps.context.outputs.beta_version }}
       build_ref: ${{ steps.context.outputs.build_ref }}
@@ -63,6 +64,22 @@ jobs:
             fi
             production_version="${INPUT_RELEASE_TAG#v}"
             build_ref="$GITHUB_SHA_VALUE"
+            # A manual release names a version and builds whatever the default
+            # branch points at now, which are two independent choices. The R2
+            # objects under releases/v<version> go up immutable for a year, so
+            # running one a second time after the branch has moved replaces a
+            # published version's bytes with another commit's -- while the tag
+            # goes on naming the original, and caches go on serving whichever
+            # they hold. Refuse unless the tag that already exists is this
+            # commit; a version with no tag yet is free.
+            if git rev-parse -q --verify "refs/tags/v${production_version}^{commit}" >/dev/null 2>&1; then
+              tagged_sha=$(git rev-parse "refs/tags/v${production_version}^{commit}")
+              if [ "$tagged_sha" != "$GITHUB_SHA_VALUE" ]; then
+                echo "v${production_version} already exists and names ${tagged_sha}, but this run builds ${GITHUB_SHA_VALUE}." >&2
+                echo "Release a new version, or re-run this workflow from the tagged commit." >&2
+                exit 1
+              fi
+            fi
             publish_production=true
           elif [ "$REF_TYPE" = tag ]; then
             production_version="${REF_NAME#v}"
@@ -111,6 +128,46 @@ jobs:
           echo "Build ref: $build_ref"
           echo "Production: $publish_production ${production_version:+v${production_version}}"
           echo "Beta: $publish_beta ${beta_version:+v${beta_version}}"
+
+      # `npm run build` and `npm run check` are what the build job runs, and
+      # check runs no tests -- it is biome, tsgo, and the render and audit
+      # scripts. Everything a release is actually about is covered by tests and
+      # by nothing else: the config-directory move, the compatibility alias and
+      # the legacy environment names, postinstall, the update path, the
+      # release-pack manifest, and the immutable guards above. So the release
+      # workflow could publish a commit whose test suite was red, or whose
+      # suite had not finished, and every check it does run would pass.
+      #
+      # Running the suite here would be a second copy of ci.yml's matrix --
+      # seven shards plus the Rust cell job on two platforms -- kept in step by
+      # hand. Requiring ci.yml's own aggregate result for this exact commit
+      # asks the same question of the run that already answered it.
+      #
+      # It fails closed. A conclusion this step could not read is not a
+      # conclusion that says the tests passed, and neither is a missing one:
+      # ci.yml runs on pushes to the default branch and on pull requests, so a
+      # commit with no run is a commit nothing has tested.
+      - name: Require a green CI run for the commit being released
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! gh api "repos/${REPO}/commits/${BUILD_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "build-check-test") | .conclusion] | first // "missing"' \
+            > "${RUNNER_TEMP}/ci-conclusion" 2> "${RUNNER_TEMP}/ci-conclusion.err"; then
+            echo "Could not read the check runs for ${BUILD_SHA}; refusing to release." >&2
+            cat "${RUNNER_TEMP}/ci-conclusion.err" >&2
+            exit 1
+          fi
+
+          conclusion=$(cat "${RUNNER_TEMP}/ci-conclusion")
+          if [ "$conclusion" != success ]; then
+            echo "CI for ${BUILD_SHA} is '${conclusion}', not 'success'; refusing to release." >&2
+            echo "The release workflow runs no tests of its own. Wait for CI, or fix it, and re-run." >&2
+            exit 1
+          fi
+          echo "CI for ${BUILD_SHA}: success."
 
   build:
     runs-on: ubuntu-latest
@@ -252,19 +309,42 @@ jobs:
             echo "Release v${PRODUCTION_VERSION}" > /tmp/release-notes.md
           fi
 
-      - name: Publish production channel to R2
+      # Both destinations are asked before either is written to. A release is
+      # published to two places that have to agree about what v<version> is,
+      # and the R2 half used to go first: the immutable artifacts went up,
+      # latest.json and stable began advertising them, and only then did the
+      # GitHub guard get a say. Its refusal -- or an unreadable answer, which
+      # refuses too -- left the bucket announcing a release GitHub did not
+      # have.
+      #
+      # The case is not hypothetical. Repacking an old version against a new
+      # R2_PUBLIC_BASE_URL changes the tarball bytes, because the packer records
+      # that host in the package. The tag check passes, the new bucket's prefix
+      # is empty and accepts them, and the release's existing GitHub assets are
+      # the only thing left that objects.
+      - name: Guard the production release destinations
         if: env.PUBLISH_PRODUCTION == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRODUCTION_DIR=release-artifacts/production
           RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
-          TARBALL="$PRODUCTION_DIR/wasmedge-agent-${PRODUCTION_VERSION}.tgz"
 
-          test -f "$TARBALL"
+          test -f "$PRODUCTION_DIR/wasmedge-agent-${PRODUCTION_VERSION}.tgz"
           test -f "$PRODUCTION_DIR/SHA256SUMS"
           test -f "$PRODUCTION_DIR/stable"
           test -f "$PRODUCTION_DIR/latest.json"
           test -n "$R2_BUCKET"
           test -n "$R2_ENDPOINT_URL"
+
+          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$PRODUCTION_DIR"
+          sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" "v${PRODUCTION_VERSION}" "$PRODUCTION_DIR"
+
+      - name: Publish immutable production artifacts to R2
+        if: env.PUBLISH_PRODUCTION == 'true'
+        run: |
+          PRODUCTION_DIR=release-artifacts/production
+          RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
 
           for artifact in "$PRODUCTION_DIR"/*.tgz; do
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
@@ -277,26 +357,6 @@ jobs:
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
             --cache-control 'public, max-age=31536000, immutable'
-
-          aws s3 cp "$PRODUCTION_DIR/latest.json" "s3://${R2_BUCKET}/latest.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control no-cache
-
-          aws s3 cp "$PRODUCTION_DIR/stable" "s3://${R2_BUCKET}/stable" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control no-cache
-
-          aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
-
-          aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
 
       - name: Create production GitHub release
         if: env.PUBLISH_PRODUCTION == 'true'
@@ -320,19 +380,73 @@ jobs:
               "$PRODUCTION_DIR"/*
           fi
 
-      - name: Publish immutable beta artifacts to R2
+      # Last, because these are what announce the release. Until they move, a
+      # run that fails partway has published immutable objects nobody is
+      # pointed at, which is recoverable; move them first and a failure leaves
+      # every installer fetching a release that may not be finished.
+      - name: Advance the production pointers
+        if: env.PUBLISH_PRODUCTION == 'true'
+        run: |
+          PRODUCTION_DIR=release-artifacts/production
+
+          aws s3 cp "$PRODUCTION_DIR/latest.json" "s3://${R2_BUCKET}/latest.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
+            --cache-control no-cache
+
+          aws s3 cp "$PRODUCTION_DIR/stable" "s3://${R2_BUCKET}/stable" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/x-shellscript \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/x-shellscript \
+            --cache-control no-cache
+
+      # Both destinations first, for the reason the production pair has: the
+      # beta channel pointer, the installers and the beta tag all move in the
+      # step below, and a guard that runs after them refuses only once they
+      # already name a build the GitHub release does not carry.
+      #
+      # Beta tarballs carry the same one-year immutable policy as production
+      # ones, so a rebuilt beta of an already-published version is the same
+      # unfixable replacement. The beta GitHub release is a rolling pointer
+      # rather than an archive -- the current beta's tarball plus SHA256SUMS,
+      # beta and beta.json, three files whose names never change and whose
+      # contents do every run -- so those three are declared rolling and
+      # skipped, and the tarball beside them is compared like any other. Each
+      # beta version keeps its own immutable copy under releases/v<version>/,
+      # which is where the archive actually lives.
+      - name: Guard the beta release destinations
         if: env.PUBLISH_BETA == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BETA_DIR=release-artifacts/beta
           RELEASE_PREFIX="releases/v${BETA_VERSION}"
-          TARBALL="$BETA_DIR/wasmedge-agent-${BETA_VERSION}.tgz"
 
-          test -f "$TARBALL"
+          test -f "$BETA_DIR/wasmedge-agent-${BETA_VERSION}.tgz"
           test -f "$BETA_DIR/SHA256SUMS"
           test -f "$BETA_DIR/beta"
           test -f "$BETA_DIR/beta.json"
           test -n "$R2_BUCKET"
           test -n "$R2_ENDPOINT_URL"
+
+          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$BETA_DIR"
+          sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" beta "$BETA_DIR" \
+            "SHA256SUMS beta beta.json"
+
+      - name: Publish immutable beta artifacts to R2
+        if: env.PUBLISH_BETA == 'true'
+        run: |
+          BETA_DIR=release-artifacts/beta
+          RELEASE_PREFIX="releases/v${BETA_VERSION}"
 
           for artifact in "$BETA_DIR"/*.tgz; do
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
@@ -359,6 +473,49 @@ jobs:
           fi
 
           BETA_DIR=release-artifacts/beta
+          printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/beta" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/beta" \
+              -F sha="$BUILD_REF" \
+              -F force=true >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/tags/beta \
+              -f sha="$BUILD_REF" >/dev/null
+          fi
+
+          if gh release view beta --repo "$GITHUB_REPOSITORY" --json name >/dev/null 2>&1; then
+            gh release edit beta \
+              --title "Beta (v${BETA_VERSION})" \
+              --target "$BUILD_REF" \
+              --notes-file /tmp/beta-release-notes.md \
+              --prerelease
+          else
+            gh release create beta \
+              --title "Beta (v${BETA_VERSION})" \
+              --target "$BUILD_REF" \
+              --notes-file /tmp/beta-release-notes.md \
+              --prerelease
+          fi
+
+          # Upload, then prune -- not the other way round. Deleting every asset
+          # first left the beta release empty for as long as the uploads took,
+          # and empty for good if the job died in between.
+          gh release upload beta "$BETA_DIR"/* --clobber
+
+          current=" $(for artifact in "$BETA_DIR"/*; do printf '%s ' "$(basename "$artifact")"; done)"
+          gh release view beta --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            while read -r asset_name; do
+              case "$current" in
+                *" $asset_name "*) continue ;;
+              esac
+              gh release delete-asset beta "$asset_name" --repo "$GITHUB_REPOSITORY" --yes
+            done
+
+          # Last, once both destinations carry this build. Moving these first
+          # meant a later refusal left beta.json, the beta channel file and the
+          # installers naming a build the GitHub release did not have.
           aws s3 cp "$BETA_DIR/beta.json" "s3://${R2_BUCKET}/beta.json" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type application/json \
@@ -379,34 +536,4 @@ jobs:
             --content-type text/x-shellscript \
             --cache-control no-cache
 
-          printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
-
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/beta" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/beta" \
-              -F sha="$BUILD_REF" \
-              -F force=true >/dev/null
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref=refs/tags/beta \
-              -f sha="$BUILD_REF" >/dev/null
-          fi
-
-          if release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/beta" --jq .id 2>/dev/null); then
-            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --jq '.[].id' | while read -r asset_id; do
-              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
-            done
-            gh release edit beta \
-              --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
-              --notes-file /tmp/beta-release-notes.md \
-              --prerelease
-          else
-            gh release create beta \
-              --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
-              --notes-file /tmp/beta-release-notes.md \
-              --prerelease
-          fi
-
-          gh release upload beta "$BETA_DIR"/* --clobber
           echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"
