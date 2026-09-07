@@ -45,8 +45,8 @@ describe("release package manifest", () => {
 		readFileSync(join(repoRoot, "packages", "coding-agent", "package.json"), "utf-8"),
 	) as Record<string, unknown>;
 
-	function releaseManifest(packageName: string): Record<string, unknown> {
-		return createReleasePackageJson(sourcePackage, packageName, "9.9.9", new Map());
+	function releaseManifest(packageName: string, downloadBaseUrl?: string): Record<string, unknown> {
+		return createReleasePackageJson(sourcePackage, packageName, "9.9.9", new Map(), downloadBaseUrl);
 	}
 
 	it("installs the canonical command and the legacy alias, each at its own entry", () => {
@@ -530,6 +530,47 @@ describe("release package manifest", () => {
 		mkdirSync(join(packageRoot, "src"), { recursive: true });
 
 		expect(staleBuildOutputs(packageRoot)).toEqual([]);
+	});
+
+	it("records the host the release is published to, so an install can find its own updates", () => {
+		// The workflow knows the bucket, packs with it and renders it into the
+		// installer -- and the installed CLI kept none of it, so the update
+		// check silently did not run and `update` failed with "No release host
+		// is configured" until the user exported the variable by hand, for
+		// every invocation.
+		const manifest = releaseManifest("wasmedge-agent", "https://releases.example.test/");
+		const piConfig = manifest.piConfig as Record<string, unknown>;
+
+		expect(piConfig.downloadBaseUrl).toBe("https://releases.example.test/");
+	});
+
+	it("reads that host back under the name config.ts looks for", () => {
+		// Two files, one field name, and a mismatch is silent: the manifest
+		// carries a host nothing reads, and the CLI goes on behaving like a
+		// source checkout. Pinned by reading the source rather than by
+		// importing it, because config.ts resolves the value at module load
+		// from this repository's own package.json, which has no such field.
+		const configSource = readFileSync(join(repoRoot, "packages", "coding-agent", "src", "config.ts"), "utf-8");
+
+		expect(configSource).toContain("pkg.piConfig?.downloadBaseUrl");
+	});
+
+	it("leaves the internal workspace packages without a release host", () => {
+		// Only the public package installs a command that can update itself.
+		for (const packageName of ["wasmedge-agent-ai", "wasmedge-agent-core", "wasmedge-agent-tui"]) {
+			const piConfig = releaseManifest(packageName, "https://releases.example.test/").piConfig as
+				| Record<string, unknown>
+				| undefined;
+			expect(piConfig?.downloadBaseUrl).toBeUndefined();
+		}
+	});
+
+	it("records nothing when the packer was given no host", () => {
+		// The covering tests above call the packer directly; main() cannot,
+		// because parseArgs refuses to run without --base-url.
+		const piConfig = releaseManifest("wasmedge-agent").piConfig as Record<string, unknown>;
+
+		expect(piConfig.downloadBaseUrl).toBeUndefined();
 	});
 
 	it("points piConfig at the renamed command and config directory", () => {

@@ -37,12 +37,17 @@
   `prime-agent.worker_recovery`, `prime-agent.update_restart` and
   `prime-agent.update_complete` session entry types that `/refine` history,
   worker recovery and update restarts are stored under.
-- The in-app update check no longer has a built-in release host. The renamed
-  constant still held upstream's release bucket, so a WasmEdge Agent build
-  offered upstream's version as an update and `/update` installed upstream's
-  `prime-agent` tarball over it. The check is disabled until
-  `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` is set, and `update` now reports that and
-  stops. It used to fall back to a global package-manager install of its own
+- The in-app update check asks the host a release was published to, which the
+  release packer records in the package itself. There is no built-in default
+  any more: the renamed constant still held upstream's release bucket, so a
+  WasmEdge Agent build offered upstream's version as an update and `/update`
+  installed upstream's `prime-agent` tarball over it. An official install
+  therefore checks for updates with nothing to configure, and
+  `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` overrides the recorded host. A build that
+  was not packed for release -- a source checkout, or your own `npm run build`
+  -- records none, so its check is disabled until that variable is set and
+  `update` reports that and stops. It used to fall back to a global
+  package-manager install of its own
   package name, which the release owns no registry entry for. The same applies
   whenever the check identifies no release at all -- offline mode,
   `PI_SKIP_VERSION_CHECK`, a host that answers with an error, a manifest with

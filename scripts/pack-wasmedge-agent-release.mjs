@@ -560,7 +560,7 @@ function releaseScripts(sourceScripts) {
 	};
 }
 
-export function createReleasePackageJson(sourcePackage, packageName, releaseVersion, internalPackageUrls) {
+export function createReleasePackageJson(sourcePackage, packageName, releaseVersion, internalPackageUrls, downloadBaseUrl) {
 	const packageJson = {
 		...sourcePackage,
 		name: packageName,
@@ -596,6 +596,18 @@ export function createReleasePackageJson(sourcePackage, packageName, releaseVers
 			...(packageJson.piConfig || {}),
 			name: publicCommandName,
 			configDir: ".wasmedge-agent",
+			// The host this release is being published to, carried by the
+			// artifact that goes there. Without it an official install has no
+			// release host at all: the workflow knows the bucket, renders it
+			// into the installer, and the installed CLI kept nothing -- so the
+			// update check silently did not run and `update` failed with "No
+			// release host is configured" until the user exported
+			// WASMEDGE_AGENT_DOWNLOAD_BASE_URL by hand, for every invocation.
+			//
+			// Only the public package, and only from the --base-url this script
+			// already refuses to run without, so it is the host that actually
+			// received these bytes rather than a second copy of it in source.
+			...(downloadBaseUrl ? { downloadBaseUrl } : {}),
 		};
 	}
 
@@ -717,6 +729,7 @@ function main() {
 				packageNames.get(releasePackage.packageDir),
 				releaseVersion,
 				internalPackageUrls,
+				args.baseUrl,
 			),
 		]),
 	);

@@ -477,6 +477,7 @@ interface PackageJson {
 	piConfig?: {
 		name?: string;
 		configDir?: string;
+		downloadBaseUrl?: string;
 	};
 }
 
@@ -493,6 +494,22 @@ export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".prime/agent";
 export const VERSION: string = pkg.version || "0.0.0";
+
+/** Where this build's own releases are published, or "" in a source checkout.
+ *
+ *  Written into the manifest by scripts/pack-wasmedge-agent-release.mjs, from
+ *  the --base-url it is already required to be given, so a packed release
+ *  carries the host it was actually published to and cannot carry any other.
+ *  A checkout has no such field and gets "", which self-disables the update
+ *  check the way a missing host should.
+ *
+ *  It has to travel with the build rather than being compiled in: the release
+ *  workflow is what knows the bucket, and a constant in source would be a
+ *  second copy of it to keep in step -- the copy that was upstream's release
+ *  bucket before the rebrand, and would have offered upstream's build as an
+ *  update to this one. Nothing here is a fallback to a URL this fork does not
+ *  own; the value is either the one that published this artifact or nothing. */
+export const RELEASE_DOWNLOAD_BASE_URL: string = pkg.piConfig?.downloadBaseUrl?.trim() || "";
 
 // e.g., PI_CODING_AGENT_DIR or WASMEDGE_AGENT_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${envPrefix}_CODING_AGENT_DIR`;
