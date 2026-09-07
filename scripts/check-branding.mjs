@@ -78,8 +78,11 @@ import { readFileSync } from "node:fs";
  *  copyright line, the fork's attribution, the artwork credit, and the Prime
  *  Inference sign-in copy, where the vendor really is the subject. */
 const FORBIDDEN = [
-	{ re: /PRIME_AGENT_/, label: "PRIME_AGENT_ environment prefix" },
-	{ re: /prime_agent_/, label: "branded shell identifier prefix prime_agent_" },
+	// One case-insensitive pattern for the underscored prefix rather than two
+	// case-sensitive ones. They were split so an uppercase env name and a
+	// lowercase shell identifier could carry different labels, and the split
+	// was a hole: PRIME_Agent_ matched neither.
+	{ re: /prime_agent_/i, label: "branded identifier prefix prime_agent_ / PRIME_AGENT_ (any case)" },
 	{ re: /\.prime\/agent/, label: "legacy config directory .prime/agent" },
 	{
 		re: /["']\.prime["']/,
@@ -93,7 +96,9 @@ const FORBIDDEN = [
 		re: /prime-(?:butterfly|logo)/,
 		label: "brand-asset filename or module (prime-butterfly, prime-logo)",
 	},
-	{ re: /prime-agent/, label: "legacy command or package name prime-agent" },
+	// Case-insensitive: the case-sensitive form let Prime-Agent and PRIME-AGENT
+	// through, which is visible product branding in the surface a reader sees.
+	{ re: /prime-agent/i, label: "legacy command or package name prime-agent (any case)" },
 	{
 		// The CamelCase spelling, which no other pattern could see: twenty
 		// identifiers across ten source files -- wasmEdgeAgentMeta, the ACP
@@ -112,16 +117,310 @@ const FORBIDDEN = [
 	// already catch, and the only additional hits in the tree are two poc/
 	// variables naming upstream's own binary.
 	{ re: /\bprime agent\b/i, label: "legacy product display name Prime Agent (any case)" },
+	// The product name is not the only way to name the product. Two comments
+	// described the interface as "the prime brand TUI" -- prose, in active
+	// source, in a file the rename otherwise went through -- and every pattern
+	// above missed it, because none of them is the word the sentence used.
+	// Branding wording gets its own rule for the same reason the display name
+	// is case-folded: it is the spelling someone reaches for when they are
+	// writing about the product rather than calling it.
+	{
+		re: /\bprime[-\s]brand/i,
+		label: "legacy product branding wording (Prime brand, Prime-branded, any case)",
+	},
 	{ re: /Prime Intellect/, label: "upstream vendor display name Prime Intellect" },
 	{
-		re: /ai\.primeintellect\.wasmedge-agent/,
+		re: /ai\.primeintellect\.wasmedge-agent/i,
 		label: 'wrongly rebranded ACP _meta namespace (the wire value is "ai.primeintellect.prime-agent")',
 	},
 	{
-		re: /wasmedge-agent-traces/,
+		re: /wasmedge-agent-traces/i,
 		label: 'wrongly rebranded traces provider id (the wire value is "prime-agent-traces")',
 	},
+	// Upstream's package identity, at the places that name it rather than the
+	// manifests that declare it. REQUIRED pins each of the four names in its
+	// own package.json, which stops the declaration being renamed; nothing
+	// stopped a doc, an install command, or an import from naming a rebranded
+	// spelling instead -- a package nothing publishes, in the one line a
+	// reader is most likely to copy and run.
+	{
+		re: /@[a-z0-9-]*wasmedge[a-z0-9-]*\//,
+		label: "rebranded package scope (the packages stay under @earendil-works)",
+	},
+	{
+		re: /@earendil-works\/(?!pi-)/,
+		label: "rebranded package name under @earendil-works (every one of ours is pi-*)",
+	},
+	// The third way to misname a package, and the one the two rules above
+	// leave open: keep the pi-* name and move it to a scope that is not ours.
+	// `@other/pi-ai` is neither a wasmedge scope nor a non-pi name under
+	// @earendil-works, and the manifest pins go on passing because the four
+	// declarations are still intact -- so a doc, an install command, a path
+	// mapping or an import could point at a package nobody publishes and the
+	// audit would agree. The names are listed rather than matched as pi-*,
+	// because pi-* is upstream's whole namespace and a reference to one of
+	// their packages under their own scope is not our business.
+	//
+	// @mariozechner is exempt: it is upstream's own scope for these very
+	// packages, the one the fork renamed away from, and a reference to a
+	// package that really is published there -- a recorded session fixture
+	// predating the rename holds a hundred of them -- is history rather than a
+	// defect. The lookahead also skips the wasmedge scopes, which the rule
+	// above already reports: one line, one violation.
+	{
+		re: /@(?!earendil-works\/|mariozechner\/)(?![a-z0-9-]*wasmedge)[a-z0-9-]+\/pi-(?:agent-core|coding-agent|ai|tui)\b/,
+		label: "one of our package names under another scope (they are published under @earendil-works)",
+	},
+	// The rest of the preserved wire values. Each already has an allowlist
+	// entry pinning its correct literal, which stops the value being *renamed
+	// away*; nothing stopped a doc, a test, or a client from being written
+	// against the rebranded spelling instead. The failure is silent in a
+	// different way for each: a tool call the client cannot correlate, a
+	// handshake compared by exact equality that never matches, and a session
+	// entry a reload or an export classifies as nothing at all.
+	//
+	// Case-insensitive, here and for the two mirrors above. Every one of these
+	// contracts is compared byte for byte at the other end, so a case variant
+	// is exactly as broken as the lowercase spelling and, being the form a
+	// human writes when they are thinking of the product rather than the
+	// protocol, is the likelier way to write it: `WasmEdge-Agent-traces` in a
+	// doc, `WASMEDGE-AGENT.daemon` in a client. The correct literal elsewhere
+	// still satisfies the pin, so nothing else notices. Unlike the product
+	// name, these have no legitimate spelling in any case for the pattern to
+	// start double-reporting.
+	{
+		re: /wasmedge-agent-bash/i,
+		label: 'wrongly rebranded ACP bash tool-call id prefix (the wire value is "prime-agent-bash")',
+	},
+	{
+		re: /wasmedge-agent\.daemon/i,
+		label: 'wrongly rebranded daemon protocol name (the wire value is "prime-agent.daemon")',
+	},
+	{
+		re: /wasmedge-agent\.(?:worker_recovery|update_restart|update_complete|refinement)/i,
+		label: 'wrongly rebranded persisted session entry type (the wire values are "prime-agent.<type>")',
+	},
 ];
+
+/** Our environment namespace, closed.
+ *
+ *  The spec keeps the upstream PI_* lineage along with the `pi` command and the
+ *  @earendil-works/pi-* dependency names, and the way that lineage breaks is a
+ *  PI_* name reappearing under our prefix. Enumerating the PI_* names to forbid
+ *  the rebranded spelling of each was the first attempt, and it can only ever
+ *  cover the names someone remembered: PI_SPAWN_HOOK sat in an example
+ *  extension the whole time, so PI_SPAWN_HOOK -> WASMEDGE_AGENT_SPAWN_HOOK
+ *  passed. Every name upstream adds in a future sync has the same hole.
+ *
+ *  Turning it around closes it. This is the list of names that are ours, and a
+ *  WASMEDGE_AGENT_* name that is not on it fails -- whatever it was called
+ *  before, and whether or not anyone thought to enumerate that. The cost is
+ *  that adding one of our own variables means adding it here, which is the
+ *  right cost: our environment surface is a thing worth having written down.
+ *
+ *  WASMEDGE_AGENT_INTERNAL_* and WASMEDGE_AGENT_TEST_* are covered by prefix.
+ *  The spec renames internal and test variables outright, with no compatibility
+ *  window, precisely because no user sets them; enumerating each daemon handle
+ *  and test marker here would be churn with no reader. The gap that leaves --
+ *  a PI_* name rebranded into one of those two prefixes -- is what the pins in
+ *  REQUIRED catch from the other side. */
+const PRODUCT_ENV_NAMES = new Set([
+	"WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL",
+	"WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL",
+	"WASMEDGE_AGENT_BUILD_ID",
+	"WASMEDGE_AGENT_BUILD_ID_ENV",
+	"WASMEDGE_AGENT_CARGO",
+	"WASMEDGE_AGENT_CMD",
+	"WASMEDGE_AGENT_CODING_AGENT_DIR",
+	"WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR",
+	"WASMEDGE_AGENT_DOWNLOAD_BASE_URL",
+	"WASMEDGE_AGENT_INSTALLER_PLAIN",
+	"WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE",
+	"WASMEDGE_AGENT_KERNEL_FORKSERVER",
+	"WASMEDGE_AGENT_KERNEL_VENV",
+	"WASMEDGE_AGENT_LAUNCHER_PATH",
+	"WASMEDGE_AGENT_LAUNCHER_PATH_ENV",
+	"WASMEDGE_AGENT_LEGACY_ALIAS",
+	"WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS",
+	"WASMEDGE_AGENT_META_NAMESPACE",
+	"WASMEDGE_AGENT_NODE_INSTALLED_STANDALONE",
+	"WASMEDGE_AGENT_OWNED_TEST",
+	"WASMEDGE_AGENT_PACKAGE",
+	"WASMEDGE_AGENT_PACKAGE_NAME",
+	"WASMEDGE_AGENT_RELEASE_CHANNEL",
+	"WASMEDGE_AGENT_SESSION_DIR",
+	"WASMEDGE_AGENT_SHELL_PROFILE",
+	"WASMEDGE_AGENT_SPLASH_PREVIEW_FRAMES",
+	"WASMEDGE_AGENT_STANDALONE_NODE_BIN",
+	"WASMEDGE_AGENT_STRESS_WORKERS",
+	"WASMEDGE_AGENT_TEMPLATE_DIR",
+	"WASMEDGE_AGENT_TOOLCHAIN",
+	"WASMEDGE_AGENT_TRACES_API_KEY",
+	"WASMEDGE_AGENT_TRACES_BASE_URL",
+	"WASMEDGE_AGENT_TRACES_PROVIDER_ID",
+	"WASMEDGE_AGENT_TRACES_PROVIDER_NAME",
+	"WASMEDGE_AGENT_VERSION",
+	"WASMEDGE_AGENT_WASMEDGE",
+	"WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS",
+	"WASMEDGE_AGENT_WEBSEARCH_TIMEOUT",
+]);
+
+const PRODUCT_ENV_PREFIXES = ["WASMEDGE_AGENT_INTERNAL_", "WASMEDGE_AGENT_TEST_"];
+const PRODUCT_ENV_RE = /\bWASMEDGE_AGENT_[A-Z0-9_]+/g;
+
+function unregisteredProductEnvNames(line) {
+	const names = [];
+	for (const [name] of line.matchAll(PRODUCT_ENV_RE)) {
+		if (PRODUCT_ENV_NAMES.has(name)) continue;
+		if (PRODUCT_ENV_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+		if (!names.includes(name)) names.push(name);
+	}
+	return names;
+}
+
+/** Every rule's verdict on one line. The key identifies the rule that fired, so
+ *  the seam pass can tell a hit it has already reported from a new one. */
+function hitsFor(line) {
+	const hits = FORBIDDEN.filter(({ re }) => re.test(line)).map(({ re, label }) => ({
+		key: String(re),
+		label,
+	}));
+	for (const name of unregisteredProductEnvNames(line)) {
+		hits.push({
+			key: `env:${name}`,
+			label: `${name} is not one of our environment names (add it to PRODUCT_ENV_NAMES, or do not take a PI_* name)`,
+		});
+	}
+	return hits;
+}
+
+/** Values that must still be where they are load-bearing.
+ *
+ *  FORBIDDEN plus the allowlist pins a value that is *renamed*: the allowlist
+ *  entry naming its exact literal goes dead, and main() reports a dead entry.
+ *  Neither can see a value that is simply gone, and neither sees one whose
+ *  literal was never forbidden in the first place -- api.primeintellect.ai is
+ *  a vendor's host, not our branding, so no pattern here has any reason to
+ *  match it, and it could be replaced with a WasmEdge URL without one word
+ *  from this audit. What the request would reach then is nobody's endpoint.
+ *
+ *  So: the literal, where it has to be, and the reason it is not ours to
+ *  change. A rename that keeps something working still has to say so here,
+ *  which is the point -- these are contracts with programs outside this build.
+ *
+ *  The glob is the load-bearing part, not decoration. "Somewhere in the tree"
+ *  is satisfied by a test that asserts the value and a doc that mentions it,
+ *  and both of those are edited in the same commit as the rename they
+ *  describe: a pin that broad passes the exact change it exists to catch. So
+ *  each value is pinned to the code that must still carry it -- the module for
+ *  a single literal, `packages/*\/src/**` for a name whose readers move around
+ *  as upstream syncs land.
+ *
+ *  The PI_* names are here as well as in the pattern above because the two
+ *  catch different halves. The pattern catches the new name appearing; this
+ *  catches the old one leaving. A rename does both, and either alone is
+ *  enough to fail it. */
+const REQUIRED = [
+	{
+		literal: "https://api.primeintellect.ai",
+		glob: "packages/coding-agent/src/core/prime-inference-auth.ts",
+		why: "the Prime Intellect API host the traces client and the whoami probe post to",
+	},
+	{
+		literal: "https://app.primeintellect.ai",
+		glob: "packages/coding-agent/src/core/prime-inference-auth.ts",
+		why: "the Prime Intellect sign-in host the browser auth flow opens",
+	},
+	// Upstream's package identity, which the spec keeps for the same reason it
+	// keeps the PI_* names: DESIGN.md section 7.1 retains the lineage, and these
+	// are what npm resolves and what a `pi` on someone's PATH still runs. The
+	// display name beside each of them is ours and is rebranded, which is
+	// exactly why they need pinning: nothing about renaming the scope or the
+	// bin looks like leftover branding to a stale-literal check.
+	{
+		literal: '"@earendil-works/pi-coding-agent"',
+		glob: "packages/coding-agent/package.json",
+		why: "the published package name",
+	},
+	{ literal: '"@earendil-works/pi-ai"', glob: "packages/ai/package.json", why: "the published package name" },
+	{
+		literal: '"@earendil-works/pi-agent-core"',
+		glob: "packages/agent/package.json",
+		why: "the published package name",
+	},
+	{ literal: '"@earendil-works/pi-tui"', glob: "packages/tui/package.json", why: "the published package name" },
+	{
+		literal: '"pi": "dist/bundle/cli.js"',
+		glob: "packages/coding-agent/package.json",
+		why: "the source bin, which the release packer renames to wasmedge-agent and the source keeps",
+	},
+	{ literal: '"pi-ai": "./dist/cli.js"', glob: "packages/ai/package.json", why: "the source bin" },
+	// The PI_* lineage the spec keeps, one line per name so a removal names
+	// itself.
+	//
+	// Three names are deliberately absent. PI_CODING_AGENT_DIR survives only as
+	// upstream's example in a comment and in a packages/ai test that sets it
+	// for a reader this fork's envPrefix no longer produces -- the live name is
+	// WASMEDGE_AGENT_CODING_AGENT_DIR. PI_AI_ANTIGRAVITY_VERSION and
+	// PI_NO_HARDWARE_CURSOR appear only in released changelog entries, which
+	// are records of what upstream shipped rather than contracts this build
+	// holds; pinning a historical record would stop it from ageing out.
+	...[
+		"PI_CACHE_RETENTION",
+		"PI_CLEAR_ON_SHRINK",
+		"PI_CODING_AGENT",
+		"PI_DEBUG_REDRAW",
+		"PI_FULLSCREEN",
+		"PI_HARDWARE_CURSOR",
+		"PI_MCP_OAUTH_CALLBACK_PORT",
+		"PI_OAUTH_CALLBACK_HOST",
+		"PI_OFFLINE",
+		"PI_PACKAGE_DIR",
+		"PI_SHARE_VIEWER_URL",
+		"PI_SKIP_VERSION_CHECK",
+		"PI_STARTUP_BENCHMARK",
+		"PI_TIMING",
+		"PI_TUI_DEBUG",
+		"PI_TUI_LOG_DIR",
+		"PI_TUI_WRITE_LOG",
+	].map((literal) => ({
+		literal,
+		glob: "packages/*/src/**",
+		why: "an upstream PI_* environment name the rebrand keeps, read from source",
+	})),
+	// The rest of the lineage, which lives outside packages/*/src: a fixture
+	// contract, a suite opt-out, an example extension, and two names our own
+	// code must never set. They are no less upstream's for not being in src,
+	// and the one this list was widened for -- PI_SPAWN_HOOK -- was invisible
+	// while the pins stopped at src.
+	{
+		literal: "PI_AGENT_DIR",
+		glob: "packages/coding-agent/**",
+		why: "upstream's own pre-rename agent directory, named by the session migration script and its fixture",
+	},
+	{
+		literal: "PI_NO_LOCAL_LLM",
+		glob: "packages/ai/test/**",
+		why: "the opt-out the AI suite reads to skip its local-model tests",
+	},
+	{
+		literal: "PI_TEST_INHERIT_ENV",
+		glob: "packages/ai/test/**",
+		why: "the provider-env scrubber's opt-out, declared as INHERIT_ENV_NAME",
+	},
+	{
+		literal: "PI_SPAWN_HOOK",
+		glob: "packages/coding-agent/examples/extensions/**",
+		why: "the marker the bash-spawn-hook example puts in a child's environment",
+	},
+	{
+		literal: "PI_WSL_CLIPBOARD_IMAGE_PATH",
+		glob: "packages/coding-agent/test/**",
+		why: "upstream's WSL clipboard path, asserted absent -- the pin keeps the assertion, not the variable",
+	},
+];
+
+const REQUIRED_RES = REQUIRED.map((entry) => ({ ...entry, pathRe: globToRegExp(entry.glob) }));
 
 /** Matches an entire line unconditionally. Used only by the whole-file
  *  historical-record and self-reference exemptions (policy categories 2 and
@@ -295,10 +594,12 @@ const ALLOWLIST = [
 			/PRIME_AGENT_CODING_AGENT_DIR/,
 			/PRIME_AGENT_INTERNAL_DAEMON_WORKER/,
 			/PRIME_AGENT_SESSION_DIR/,
+			/PRIME_AGENT_TRACES_API_KEY/,
+			/PRIME_AGENT_WEBSEARCH_TIMEOUT/,
 			/"\/usr\/local\/bin\/prime-agent"/,
 		],
 		reason:
-			"the covering test for the one-release compatibility window must set and assert the exact legacy names readLegacyEnv and warnIfLegacyAlias fall back to (rule R3); the two session-dir names are the pair whose precedence against the current names is the whole point of those tests; only these five literal values are exempt -- a bare PRIME_AGENT_ or prime-agent added anywhere else in this file still fails",
+			"the covering test for the one-release compatibility window must set and assert the exact legacy names readLegacyEnv and warnIfLegacyAlias fall back to (rule R3); the two session-dir names are the pair whose precedence against the current names is the whole point of those tests, and the traces and websearch names are the ones no startup path reads, which is what the eager sweep exists to cover; only these seven literal values are exempt -- a bare PRIME_AGENT_ or prime-agent added anywhere else in this file still fails",
 	},
 	{
 		glob: "packages/coding-agent/test/migrations.test.ts",
@@ -687,14 +988,33 @@ function maskAllowed(path, line) {
 export function scanFile(path, text) {
 	const violations = [];
 	const usedEntries = new Set();
+
+	// The name is a public surface too, and nothing was reading it. Every
+	// pattern here was applied to what a file contains and never to what it is
+	// called, so assets/brand/prime-logo.svg passed the audit outright: an
+	// image, a generated module or a fixture need not repeat its own name
+	// anywhere inside itself, and the two brand-asset patterns exist precisely
+	// to catch filenames.
+	//
+	// Same patterns, same allowlist, reported at line 0 -- the violation is the
+	// name rather than anything in the file.
+	const { masked: maskedPath, contributing: pathEntries } = maskAllowed(path, path);
+	const pathHits = hitsFor(maskedPath);
+	if (pathHits.length < hitsFor(path).length) {
+		for (const index of pathEntries) usedEntries.add(index);
+	}
+	for (const { label } of pathHits) {
+		violations.push({ path, line: 0, label: `${label}, in the file name`, text: path });
+	}
+
 	const lines = text.split("\n");
 	const scopedPaths = changelogScopedPaths(path, lines);
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
-		const rawHits = FORBIDDEN.filter(({ re }) => re.test(line));
+		const rawHits = hitsFor(line);
 		if (rawHits.length === 0) continue;
 		const { masked, contributing } = maskAllowed(scopedPaths?.[i] ?? path, line);
-		const maskedHits = FORBIDDEN.filter(({ re }) => re.test(masked));
+		const maskedHits = hitsFor(masked);
 		if (maskedHits.length < rawHits.length) {
 			for (const index of contributing) usedEntries.add(index);
 		}
@@ -717,21 +1037,22 @@ export function scanFile(path, text) {
 	// exemption from reading as stale.
 	for (let i = 0; i + 1 < lines.length; i++) {
 		const joined = `${lines[i].trimEnd()} ${lines[i + 1].trimStart()}`;
-		const rawHits = FORBIDDEN.filter(({ re }) => re.test(joined));
+		const rawHits = hitsFor(joined);
 		if (rawHits.length === 0) continue;
 		// The left line's scope. A phrase cannot meaningfully straddle the
 		// heading that would put the two lines in different ones.
 		const scanPath = scopedPaths?.[i] ?? path;
 		const { masked, contributing } = maskAllowed(scanPath, joined);
-		const maskedHits = FORBIDDEN.filter(({ re }) => re.test(masked));
+		const maskedHits = hitsFor(masked);
 		if (maskedHits.length < rawHits.length) {
 			for (const index of contributing) usedEntries.add(index);
 		}
 		if (maskedHits.length === 0) continue;
 		const leftMasked = maskAllowed(scanPath, lines[i]).masked;
 		const rightMasked = maskAllowed(scopedPaths?.[i + 1] ?? path, lines[i + 1]).masked;
-		for (const { re, label } of maskedHits) {
-			if (re.test(leftMasked) || re.test(rightMasked)) continue;
+		const alreadyReported = new Set([...hitsFor(leftMasked), ...hitsFor(rightMasked)].map((hit) => hit.key));
+		for (const { key, label } of maskedHits) {
+			if (alreadyReported.has(key)) continue;
 			violations.push({
 				path,
 				line: i + 1,
@@ -759,8 +1080,8 @@ function selfTest() {
 	const failures = [];
 	const cases = [
 		["src/a.ts", "const x = process.env.PRIME_AGENT_HOME;", 1],
-		// The shell spelling. Case matters: the uppercase env names install.sh
-		// still falls back to are a separate, allowlisted concern.
+		// The shell spelling, which is the same pattern now: one report, not
+		// two, for either case.
 		["install.sh", "prime_agent_screen_title=$1", 1],
 		["install.sh", "wasmedge_agent_screen_title=$1", 0],
 		["src/a.ts", 'join(home, ".prime/agent")', 1],
@@ -769,6 +1090,10 @@ function selfTest() {
 		// The case-folded form, which the case-sensitive pattern could not see.
 		["packages/coding-agent/docs/skills.md", 'web_search::run("prime agent skills")?;', 1],
 		["packages/coding-agent/docs/skills.md", 'web_search::run("WasmEdge Agent skills")?;', 0],
+		// Branding wording, which names the product without using its name.
+		["src/a.ts", " * Footer component for the prime brand TUI.", 1],
+		["src/a.ts", "// a Prime-branded theme", 1],
+		["src/a.ts", " * Footer component for the WasmEdge Agent TUI.", 0],
 		// Word boundaries: the underscored and hyphenated spellings stay the
 		// business of their own patterns, and do not double-report here.
 		["poc/bench/run.ts", "const FORK_PRIME_AGENT = join(REPO, \"wasmedge-agent.sh\");", 0],
@@ -845,11 +1170,93 @@ function selfTest() {
 		// Wrongly-new branding: a preserved wire value rebranded by mistake is
 		// as broken as a stale one, and looks clean to every stale-only check.
 		["packages/coding-agent/docs/acp.md", '"ai.primeintellect.wasmedge-agent": {', 1],
+		["packages/coding-agent/docs/acp.md", 'toolCallId: "wasmedge-agent-bash-1"', 1],
+		["packages/coding-agent/docs/daemon.md", 'protocol: { name: "wasmedge-agent.daemon" }', 1],
+		// The allowlist entries beside these pin one exact quoted literal each,
+		// so the file that legitimately carries the preserved value gains no
+		// cover for the rebranded one.
+		[
+			"packages/coding-agent/src/core/messages.ts",
+			'export const UPDATE_RESTART_CUSTOM_TYPE = "wasmedge-agent.update_restart";',
+			1,
+		],
+		[
+			"packages/coding-agent/test/session-wire-custom-types.test.ts",
+			'expect(WORKER_RECOVERY_CUSTOM_TYPE).toBe("wasmedge-agent.worker_recovery");',
+			1,
+		],
+		[
+			"packages/coding-agent/src/core/refinement/refinement.ts",
+			'export const REFINEMENT_CUSTOM_TYPE = "wasmedge-agent.refinement";',
+			1,
+		],
 		// The correct key is the one the code emits, and the doc may publish it.
 		["packages/coding-agent/docs/acp.md", '    "ai.primeintellect.prime-agent": {', 0],
 		["packages/coding-agent/docs/acp.md", "Prime Agent sends this", 1],
 		[".gitignore", ".prime/agent/", 0],
 		["src/a.ts", 'const id = "wasmedge-agent-traces";', 1],
+		// The name of the file, with nothing in it. An image or a generated
+		// module need not repeat its own name, and the two brand-asset patterns
+		// exist to catch exactly this.
+		["assets/brand/prime-logo.svg", "<svg/>", 1],
+		["packages/coding-agent/src/themes/prime-butterfly.ts", "export const LOGO = [];", 1],
+		["assets/brand/wasmedge-logo.svg", "<svg/>", 0],
+		// Prime Inference's own modules keep their names; nothing here matches
+		// a bare "prime".
+		["packages/coding-agent/src/core/prime-inference-auth.ts", "export const X = 1;", 0],
+		// Upstream's package identity, at a use site rather than in a manifest.
+		// The install line in a README is the one a reader copies and runs.
+		["README.md", "npm install @wasmedge/wasmedge-agent", 1],
+		["README.md", "npm install -g @wasmedge-agent/coding-agent", 1],
+		["src/a.ts", 'import { Agent } from "@earendil-works/wasmedge-agent-core";', 1],
+		["README.md", "npm install @earendil-works/pi-coding-agent", 0],
+		["src/a.ts", 'import type { Message } from "@earendil-works/pi-ai";', 0],
+		// Our name, someone else's scope: a package nobody publishes, in the
+		// line a reader copies and runs. Once each, not once per rule.
+		["README.md", "npm install @other/pi-ai", 1],
+		["src/a.ts", 'import { Tui } from "@acme-fork/pi-tui";', 1],
+		["docs/x.md", "npm install @wasmedge/pi-coding-agent", 1],
+		["tsconfig.json", '"@earendil-works/pi-agent-core": ["packages/agent/src"]', 0],
+		// Upstream's own namespace under their own scope is not ours to police.
+		["src/a.ts", 'import { thing } from "@mariozechner/pi-proxy";', 0],
+		["src/a.ts", 'import { Tui } from "@mariozechner/pi-tui";', 0],
+		// A case variant of each preserved wire family. Every one of these is
+		// compared byte for byte at the other end, so the case that reads like
+		// the product name is as broken as the lowercase spelling.
+		["README.md", "id: WasmEdge-Agent-traces", 1],
+		["docs/acp.md", "protocol: WASMEDGE-AGENT.daemon", 1],
+		["docs/acp.md", 'toolCallId: "WasmEdge-Agent-bash-1"', 1],
+		["docs/acp.md", 'meta: "ai.primeintellect.WasmEdge-Agent"', 1],
+		["src/a.ts", 'type: "WasmEdge-Agent.worker_recovery"', 1],
+		// The published fork command is not a package scope and is unaffected.
+		["README.md", "curl -fsSL https://example.test/install.sh | sh -s -- wasmedge-agent", 0],
+		// Case variants of the product name, which the case-sensitive patterns
+		// let through in the surface a reader actually sees.
+		["README.md", "Use Prime-Agent", 1],
+		["README.md", "USE PRIME-AGENT", 1],
+		["install.sh", "PRIME_Agent_screen_title=$1", 1],
+		// A PI_* name taken into our namespace. The doc telling users to export
+		// the new one is the case the pin cannot see: the old literal is still
+		// in the source, so nothing is missing.
+		["packages/coding-agent/README.md", "| `WASMEDGE_AGENT_OFFLINE` | Disable startup network |", 1],
+		["src/a.ts", "if (process.env.WASMEDGE_AGENT_SKIP_VERSION_CHECK) return;", 1],
+		["src/a.ts", "process.env.WASMEDGE_AGENT_TUI_LOG_DIR ??= getLogsDir();", 1],
+		["src/a.ts", "process.env.PI_TUI_LOG_DIR ??= getLogsDir();", 0],
+		// The name that was invisible while this was a list of PI_* suffixes to
+		// forbid: nobody enumerated the example extension's marker.
+		["src/a.ts", 'env: { ...env, WASMEDGE_AGENT_SPAWN_HOOK: "1" },', 1],
+		// ...and a name nothing has ever been called, which the closed list
+		// rejects on the same grounds: it is not ours until it is written down.
+		["src/a.ts", "const x = process.env.WASMEDGE_AGENT_NEW_IDEA;", 1],
+		// Registered names, including the ones that were PRIME_AGENT_* and share
+		// a prefix with the rejected spellings above.
+		["src/a.ts", "const dir = process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;", 0],
+		["src/a.ts", "const dir = process.env.WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR;", 0],
+		["src/a.ts", 'const pkg = readLegacyEnv("WASMEDGE_AGENT_PACKAGE");', 0],
+		// Internal and test variables are ours by prefix: the spec renames them
+		// outright, because no user sets them.
+		["src/a.ts", "process.env.WASMEDGE_AGENT_INTERNAL_DAEMON_WORKER = \"1\";", 0],
+		["src/a.ts", "process.env.WASMEDGE_AGENT_TEST_KEEP_ALIVE = \"1\";", 0],
 		// ...but the renamed identifiers around the traces provider id are correct
 		// and must not trip it: different separators, different case.
 		["src/a.ts", 'export const WASMEDGE_AGENT_TRACES_PROVIDER_ID = "prime-agent-traces";', 1],
@@ -980,6 +1387,7 @@ function main() {
 
 	const violations = [];
 	const matchedAllow = new Set();
+	const foundRequired = new Set();
 	for (const path of tracked) {
 		let text;
 		try {
@@ -990,12 +1398,19 @@ function main() {
 		const { violations: fileViolations, usedEntries } = scanFile(path, text);
 		violations.push(...fileViolations);
 		for (const index of usedEntries) matchedAllow.add(index);
+		for (const { literal, pathRe } of REQUIRED_RES) {
+			if (!foundRequired.has(literal) && pathRe.test(path) && text.includes(literal)) {
+				foundRequired.add(literal);
+			}
+		}
 	}
 
 	const stale = ALLOWLIST.filter((_, index) => !matchedAllow.has(index));
+	const missing = REQUIRED.filter((entry) => !foundRequired.has(entry.literal));
 	const failures = [
 		...violations.map((v) => `${v.path}:${v.line} ${v.label} -- ${v.text}`),
 		...stale.map((e) => `stale allowlist entry suppresses nothing: ${e.glob} (${e.reason})`),
+		...missing.map((e) => `preserved value is gone from ${e.glob}: ${e.literal} (${e.why})`),
 	];
 
 	if (failures.length > 0) {
@@ -1004,7 +1419,7 @@ function main() {
 		return;
 	}
 	console.log(
-		`check-branding: clean (${tracked.length} tracked files, ${ALLOWLIST.length} allowlist entries)`,
+		`check-branding: clean (${tracked.length} tracked files, ${ALLOWLIST.length} allowlist entries, ${REQUIRED.length} pinned values)`,
 	);
 }
 
