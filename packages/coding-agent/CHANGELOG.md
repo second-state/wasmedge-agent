@@ -54,7 +54,15 @@
   `config`, `--version`, `--help`, `--export` -- now print the deprecation
   warnings collected during startup, on stderr. They used to return before the
   reporter ran, so a legacy environment variable or a config directory left in
-  the old location was handled correctly and never mentioned.
+  the old location was handled correctly and never mentioned. Startup errors
+  (a bad argument, an unusable `--cwd`, a bare `--resume`) print them too, and
+  so do the interactive failures that exit before the TUI could show them: an
+  unknown `--resume` selector, no active agent matching `--attach`, an active
+  agent that cannot be looked up, a fork that cannot be created, a stored
+  session working directory that no longer exists, and a stale background
+  service that cannot be taken over. Declining to fork a session from another
+  project, and cancelling the missing-working-directory prompt, report them
+  too and still exit 0.
 - Identifiers still spelling the old product name in CamelCase were renamed:
   `primeAgentMeta` is `wasmEdgeAgentMeta`, the ACP `_meta` interfaces are
   `WasmEdgeAgent*Meta`, and the traces helpers are `*WasmEdgeAgentTraces*`.
@@ -66,7 +74,9 @@
   it.
 - The built-in `prime` theme is now `wasmedge`. A settings file that still
   names `prime` keeps loading it for one release and warns on stderr; the old
-  name stops working after the next release.
+  name stops working after the next release. That warning now reaches print,
+  RPC, ACP and daemon-client runs, which previously accepted the old name
+  silently because the theme is not resolved until after their one report.
 - The OAuth callback page in the browser now says WasmEdge Agent. It titled
   its tab "Prime Intellect authentication successful" for every Anthropic,
   OpenAI Codex and MCP login, none of which involve Prime Inference. The

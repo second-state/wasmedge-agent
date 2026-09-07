@@ -226,12 +226,6 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "packages/coding-agent/test/legacy-alias-invocation.test.ts",
-		allow: [/"prime-agent"/, /'prime-agent' is deprecated/, /PRIME_AGENT_CODING_AGENT_DIR/, /PRIME_AGENT_SESSION_DIR/],
-		reason:
-			"the covering test asserts the generated bin map still installs the legacy command for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable on a real install at all, and pins the alias's own entry-point path by value -- comparing the constant with itself would let a rename move the file out from under the bin entry. Only that quoted key-and-target pair and that quoted path, both of which the packer is allowed to emit, are exempt here",
-	},
-	{
-		glob: "packages/coding-agent/test/legacy-alias-invocation.test.ts",
 		allow: [
 			/"prime-agent"/,
 			/'prime-agent' is deprecated/,
@@ -386,9 +380,6 @@ const ALLOWLIST = [
 	{
 		glob: "scripts/pack-wasmedge-agent-release.mjs",
 		allow: [/"prime-agent": PUBLIC_LEGACY_BIN_TARGET/, /"dist\/bundle\/prime-agent\.js"/],
-		reason:
-			"the packed manifest installs the legacy command as a second bin for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable at all -- without this entry the CHANGELOG's promise that prime-agent keeps working is unbacked. That command needs an entry point of its own, because Windows npm shims launch node with the target path and an alias sharing the canonical entry cannot tell it was invoked as the alias. Only that one bin-map entry, in the form naming the shared constant, and that constant's own quoted path are exempt, so the artifact names and the default package name in the same file still fail if they regress",
-		allow: [/"prime-agent": "dist\/bundle\/cli\.js"/],
 		reason:
 			"the packed manifest installs the legacy command as a second bin for the one-release window (rule R3), which is what makes warnIfLegacyAlias reachable at all -- without this entry the CHANGELOG's promise that prime-agent keeps working is unbacked. That command needs an entry point of its own, because Windows npm shims launch node with the target path and an alias sharing the canonical entry cannot tell it was invoked as the alias. Only that one bin-map entry, in the form naming the shared constant, and that constant's own quoted path are exempt, so the artifact names and the default package name in the same file still fail if they regress",
 	},
@@ -632,28 +623,6 @@ const ALLOWLIST = [
 		allow: [ANY_LINE],
 		reason: "released sections only; AGENTS.md forbids rewriting them. Unreleased lines are scanned as CHANGELOG.md#unreleased and this glob cannot reach them",
 	},
-	{
-		glob: "packages/coding-agent/docs/acp.md",
-		allow: [/"ai\.primeintellect\.prime-agent"/],
-		reason: "the doc must publish the exact _meta namespace acp-meta.ts emits (rule R1); a client written from a rebranded key would look up something the agent never sends and silently see no metadata",
-	},
-	{
-		glob: ".gitignore",
-		allow: [/\.prime\/agent\//],
-		reason: "the legacy project-local config dir stays ignored until project-local migration lands (rule R3), so a developer's pre-rebrand directory does not surface as untracked in the meantime",
-	},
-	{
-		glob: "poc/**",
-		allow: [/prime-agent/, /PRIME_AGENT_/, /~\/\.prime\/agent/],
-		reason: "poc/ is the Phase 0 proof of concept that runs against stock upstream prime-agent -- a different program, with its own command name, its own PRIME_AGENT_* env vars and its own config dir. Naming it is naming upstream, not naming us (rule R1). Only those three upstream literals are exempt: 'Prime Agent' as a display name still fails here, as do this fork's own group-F paths",
-	},
-	{
-		glob: "assets/brand/wasmedge-butterfly*.svg",
-		allow: [/upstream's Prime Agent butterfly/],
-		reason:
-			"TEMPORARY 2026-09-03: the brand marks are renamed but not redrawn -- the artwork is still upstream's, and each SVG carries a dated comment saying so. Only that disclosure line is exempt (rule R2). Deleting the comment makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is",
-	},
-	{ glob: "**/CHANGELOG.md", allow: [ANY_LINE], reason: "released sections; AGENTS.md forbids rewriting them" },
 	{ glob: "DESIGN.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
 	{ glob: "REPORT.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
 	{ glob: "docs/m*-*.md", allow: [ANY_LINE], reason: "dated milestone reports; historical record" },
@@ -837,7 +806,6 @@ function selfTest() {
 		[
 			"packages/coding-agent/src/core/refinement/refinement.ts",
 			'export const REFINEMENT_CUSTOM_TYPE = "prime-agent.refinement";',
-			'export const LEGACY_REFINEMENT_CUSTOM_TYPE = "prime-agent.refinement";',
 			0,
 		],
 		// Only refinement.ts's persisted customType survives; the product name in
@@ -870,7 +838,6 @@ function selfTest() {
 		[
 			"packages/coding-agent/test/session-wire-custom-types.test.ts",
 			'expect(WORKER_RECOVERY_CUSTOM_TYPE).toBe("prime-agent.worker_recovery");',
-			'expect(LEGACY_REFINEMENT_CUSTOM_TYPE).toBe("prime-agent.refinement");',
 			0,
 		],
 		// refinement.test.ts's exemption is that one asserted value, not its prose.

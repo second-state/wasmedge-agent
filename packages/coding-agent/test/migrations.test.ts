@@ -29,6 +29,8 @@ import {
 	migrateLegacySessionDirsToSessionRoot,
 	migrateSessionsFromAgentRoot,
 	reportDeprecationWarningsNonInteractively,
+	reportStartupWarnings,
+	resetReportedLegacyWarnings,
 	runMigrations,
 } from "../src/migrations.js";
 import { legacyDaemonEndpoint } from "../src/modes/daemon/daemon-socket-dir.js";
@@ -946,5 +948,56 @@ describe("legacy project-local config dir reaches the deprecation snapshot", () 
 		const projectDirWarning = deprecationWarnings.find((w) => w.includes(join(".prime", "agent")));
 		expect(projectDirWarning).toBeDefined();
 		expect(projectDirWarning).toContain(".wasmedge-agent");
+	});
+});
+
+/** A source guard, like the ones in main-ordering.test.ts, and for the same
+ *  reason: the property is invisible where this test runs. Node's stderr is
+ *  synchronous for a pipe on Linux and for a TTY on every POSIX platform, so a
+ *  behavioural test here passes whether the bytes go through the descriptor or
+ *  the stream. The truncation it protects against appears on macOS with the
+ *  output redirected, and in a Windows terminal -- the cases a startup exit is
+ *  least able to notice it has lost its warnings in. */
+describe("startup warnings survive the exit that follows them", () => {
+	const source = readFileSync(join(__dirname, "..", "src", "migrations.ts"), "utf-8");
+
+	it("reports through the synchronous writer, not a stream closure", () => {
+		expect(source).toContain("reportDeprecationWarningsNonInteractively(pending, writeStderrSync)");
+	});
+
+	it("writes on the descriptor process.stderr points at", () => {
+		const start = source.indexOf("function writeStderrSync(");
+		expect(start).toBeGreaterThan(-1);
+		const body = source.slice(start, source.indexOf("\n}\n", start));
+		// The descriptor rather than a hardcoded 2, so a caller that redirected
+		// the stream is still written where the stream points.
+		expect(body).toContain("writeSync(process.stderr.fd");
+	});
+
+	it("falls back to the stream when the descriptor cannot be written", () => {
+		// Better a warning that might not survive an immediate exit than no
+		// warning at all.
+		const real = process.stderr;
+		const written: string[] = [];
+		const stub = Object.create(real, {
+			fd: { value: -1, configurable: true },
+			write: {
+				value: (chunk: string) => {
+					written.push(String(chunk));
+					return true;
+				},
+				configurable: true,
+			},
+		});
+		Object.defineProperty(process, "stderr", { value: stub, configurable: true });
+		try {
+			resetReportedLegacyWarnings();
+			reportStartupWarnings(["an example legacy name is deprecated"]);
+		} finally {
+			Object.defineProperty(process, "stderr", { value: real, configurable: true });
+			resetReportedLegacyWarnings();
+		}
+
+		expect(written.join("")).toContain("an example legacy name is deprecated");
 	});
 });

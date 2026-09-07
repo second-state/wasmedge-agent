@@ -79,4 +79,67 @@ describe("postinstall agent-dir ordering", () => {
 		expect(readFileSync(join(target, "auth.json"), "utf-8")).toBe('{"anthropic":{}}');
 		expect(existsSync(legacy)).toBe(false);
 	});
+
+	it("reports the both-directories warning it collects", async () => {
+		// This process never reaches main(), so main()'s reporter never runs
+		// for it. Without a drain of its own the never-clobber rule is silent
+		// here, and `npm install -g` is what creates the state it describes.
+		const base = mkdtempSync(join(tmpdir(), "wasmedge-postinstall-"));
+		tempDirs.push(base);
+		const legacy = join(base, ".prime", "agent");
+		const target = join(base, ".wasmedge-agent");
+		mkdirSync(legacy, { recursive: true });
+		mkdirSync(target, { recursive: true });
+		vi.mocked(homedir).mockReturnValue(base);
+		process.env[ENV_AGENT_DIR] = target;
+		process.env.WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL = "1";
+		delete process.env.WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL;
+		const written: string[] = [];
+		const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+			written.push(String(chunk));
+			return true;
+		});
+
+		try {
+			await import("../src/postinstall.js");
+		} finally {
+			stderrSpy.mockRestore();
+		}
+
+		const reported = written.join("");
+		expect(reported).toContain(legacy);
+		expect(reported).toContain(target);
+		// Reported once, not once per drain point.
+		expect(written.filter((line) => line.includes("both exist"))).toHaveLength(1);
+		// The legacy tree is still there, untouched, which is what the warning
+		// exists to tell the user.
+		expect(existsSync(legacy)).toBe(true);
+	});
+
+	it("reports a legacy bootstrap variable it fell back to", async () => {
+		const base = mkdtempSync(join(tmpdir(), "wasmedge-postinstall-"));
+		tempDirs.push(base);
+		const target = join(base, ".wasmedge-agent");
+		vi.mocked(homedir).mockReturnValue(base);
+		process.env[ENV_AGENT_DIR] = target;
+		delete process.env.WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL;
+		delete process.env.WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL;
+		process.env.PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL = "1";
+		const written: string[] = [];
+		const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+			written.push(String(chunk));
+			return true;
+		});
+
+		try {
+			await import("../src/postinstall.js");
+		} finally {
+			stderrSpy.mockRestore();
+			delete process.env.PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL;
+		}
+
+		expect(written.join("")).toContain("PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL is deprecated");
+		// The fallback was honoured, so the bootstrap really ran.
+		expect(existsSync(join(target, "bin"))).toBe(true);
+	});
 });

@@ -48,6 +48,7 @@ import type { AgentSessionRuntimeMetadata } from "./core/agent-session-runtime.j
 import { type CustomMessage, isSessionSlashCommand, UPDATE_COMPLETE_CUSTOM_TYPE } from "./core/messages.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
+import { drainLegacyNameWarnings } from "./migrations.js";
 import { DaemonClient, type DaemonHello } from "./modes/daemon/daemon-client.js";
 import {
 	DAEMON_PROTOCOL_VERSION,
@@ -1469,6 +1470,14 @@ export async function handleConfigCommand(args: string[]): Promise<boolean> {
 		agentDir,
 	});
 
+	// This command ends the process itself rather than returning to main(), so
+	// main()'s drain never runs for it -- and it is a command that queues
+	// warnings while it runs: SettingsManager.create() above can resolve the
+	// legacy project directory, and selectConfig() initialises the theme, which
+	// can resolve the renamed built-in. Without this, `config` accepted both
+	// compatibility fallbacks in silence. selectConfig's own ctrl+c exit drains
+	// too, and the run-level bookkeeping stops the two repeating each other.
+	drainLegacyNameWarnings();
 	process.exit(0);
 }
 

@@ -230,6 +230,20 @@ describe("legacy command alias, end to end", () => {
 		expect(result.stdout).not.toContain("deprecated");
 	}, 120_000);
 
+	it("warns before an early-return command exits", async () => {
+		// --version prints and calls process.exit() directly. This notice comes
+		// from a different writer than the migration warnings, and a stream
+		// write still buffered at that call is discarded wherever stderr is
+		// asynchronous -- a pipe on macOS, a terminal on Windows -- which is
+		// every redirected or captured run on those platforms.
+		const result = await runAs("prime-agent", ["--version"]);
+
+		expect(result.code).toBe(0);
+		expect(result.stderr).toContain("'prime-agent' is deprecated");
+		expect(result.stderr).toContain(VERSION);
+		expect(result.stdout).toBe("");
+	}, 120_000);
+
 	it("says nothing under the canonical name", async () => {
 		const result = await runAs("wasmedge-agent", ["doctor", "--json"]);
 
@@ -439,6 +453,64 @@ describe("deprecation warnings on a failing startup", () => {
 		expect(result.stderr).toContain("Stored session working directory does not exist");
 		expect(occurrences(result.stderr, "both exist, so nothing was migrated")).toBe(1);
 	}, 120_000);
+
+	it("reports them when an @file argument names a file that is not there", async () => {
+		// The @file read happens below the point where interactive mode decides
+		// to hold its warnings back for the TUI, and a missing file means that
+		// TUI never opens. processFileArguments used to exit the process itself
+		// here, so the whole set went with it.
+		const result = await runAs(
+			"wasmedge-agent",
+			["@/wasmedge-agent-no-such-directory/prompt.md"],
+			{
+				...bothAgentDirectories(),
+				// Same reason as the --resume test above: keeps the failure in
+				// this process instead of handing the run to a daemon.
+				PI_STARTUP_BENCHMARK: "1",
+			},
+			undefined,
+			{ interactive: true },
+		);
+
+		expect(result.signal).toBeNull();
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("File not found");
+		expect(occurrences(result.stderr, "both exist, so nothing was migrated")).toBe(1);
+		expect(result.stdout).toBe("");
+	}, 120_000);
+
+	// chmod cannot deny root, and Windows ignores the mode bits entirely.
+	const modeBitsDenyReads = process.platform !== "win32" && process.getuid?.() !== 0;
+
+	(modeBitsDenyReads ? it : it.skip)(
+		"reports them when an @file argument names a file it cannot read",
+		async () => {
+			// The other half of the same exit, and the half that got away: this
+			// file exists, so access() succeeds, and the failure lands inside MIME
+			// detection -- which opens every nonempty file before the text read is
+			// reached. That error was not a FileArgumentError, so it went straight
+			// past prepareInitialMessage's instanceof check and took the warnings
+			// with it.
+			const env = bothAgentDirectories();
+			const unreadable = join(env.HOME as string, "unreadable.md");
+			writeFileSync(unreadable, "# not for you\n", { mode: 0o000 });
+
+			const result = await runAs(
+				"wasmedge-agent",
+				[`@${unreadable}`],
+				{ ...env, PI_STARTUP_BENCHMARK: "1" },
+				undefined,
+				{ interactive: true },
+			);
+
+			expect(result.signal).toBeNull();
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain("Could not read file");
+			expect(occurrences(result.stderr, "both exist, so nothing was migrated")).toBe(1);
+			expect(result.stdout).toBe("");
+		},
+		120_000,
+	);
 
 	it("reports them when interactive startup fails before the TUI can show them", async () => {
 		// Interactive mode skips the reporter every other mode gets, because
