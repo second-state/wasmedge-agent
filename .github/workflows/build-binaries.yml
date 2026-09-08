@@ -425,25 +425,19 @@ jobs:
           # only way a year-long immutable URL can be published without a
           # window in which someone else's bytes are the ones being replaced.
           for artifact in "$PRODUCTION_DIR"/*.tgz; do
-            aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
-              --endpoint-url "$R2_ENDPOINT_URL" \
-              --content-type application/gzip \
-              --cache-control 'public, max-age=31536000, immutable'
+            sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+              "${RELEASE_PREFIX}/$(basename "$artifact")" "$artifact" application/gzip
           done
 
-          aws s3 cp "$PRODUCTION_DIR/SHA256SUMS" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/SHA256SUMS" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control 'public, max-age=31536000, immutable'
+          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "${RELEASE_PREFIX}/SHA256SUMS" "$PRODUCTION_DIR/SHA256SUMS" text/plain
 
           # Beside the tarballs it describes. An install that names a version
           # resolves no channel, so this is the only thing that can tell it
           # which package each of those files contains; the copy at the channel
           # name below is the same object, and is what a channel install reads.
-          aws s3 cp "$PRODUCTION_DIR/release.json" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/release.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control 'public, max-age=31536000, immutable'
+          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "${RELEASE_PREFIX}/release.json" "$PRODUCTION_DIR/release.json" application/json
 
       - name: Create production GitHub release
         if: env.PUBLISH_PRODUCTION == 'true'
@@ -554,24 +548,18 @@ jobs:
           # Conditional creation, for the reason the production objects have:
           # a beta prefix is immutable for a year too.
           for artifact in "$BETA_DIR"/*.tgz; do
-            aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
-              --endpoint-url "$R2_ENDPOINT_URL" \
-              --content-type application/gzip \
-              --cache-control 'public, max-age=31536000, immutable'
+            sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+              "${RELEASE_PREFIX}/$(basename "$artifact")" "$artifact" application/gzip
           done
 
-          aws s3 cp "$BETA_DIR/SHA256SUMS" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/SHA256SUMS" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control 'public, max-age=31536000, immutable'
+          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "${RELEASE_PREFIX}/SHA256SUMS" "$BETA_DIR/SHA256SUMS" text/plain
 
           # Beside the tarballs, for the reason the production copy is there:
           # an install of this version resolves no channel and has nothing else
           # to hold these files to.
-          aws s3 cp "$BETA_DIR/release.json" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/release.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control 'public, max-age=31536000, immutable'
+          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "${RELEASE_PREFIX}/release.json" "$BETA_DIR/release.json" application/json
 
       - name: Publish the beta GitHub release
         if: env.PUBLISH_BETA == 'true'
