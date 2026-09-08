@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, not only the ones that target main. A stacked pull
+  # request has the branch below it as its base, so a filter on main meant the
+  # stack's upper pull requests reported no checks at all -- and the whole
+  # point of splitting a change into a stack is reviewing each piece on its
+  # own evidence. Pushes stay on main, so a branch still gets one run per pull
+  # request rather than two.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
