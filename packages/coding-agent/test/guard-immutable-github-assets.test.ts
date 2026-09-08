@@ -74,10 +74,9 @@ function localRelease(): string {
 	return dir;
 }
 
-function runGuard(mode: string, assets: string, downloadBytes = TARBALL_BYTES, rolling?: string) {
+function runGuard(mode: string, assets: string, downloadBytes = TARBALL_BYTES) {
 	const bin = stubGh(mode, assets, downloadBytes);
 	const args = [GUARD, "acme/wasmedge-agent", "v0.7.0", localRelease()];
-	if (rolling !== undefined) args.push(rolling);
 	try {
 		const stdout = execFileSync("sh", args, {
 			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
@@ -145,23 +144,12 @@ describe("guard-immutable-github-assets.sh", () => {
 		expect(output).toContain(evidence);
 	});
 
-	it("leaves declared rolling assets alone", () => {
-		// The beta release's SHA256SUMS, beta and beta.json keep their names and
-		// change their contents every run. Guarding them would refuse every beta
-		// publish; the tarball beside them still gets compared.
-		const { status, output } = runGuard(
-			"ok",
-			"SHA256SUMS",
-			"checksums from another build",
-			"SHA256SUMS beta beta.json",
-		);
-
-		expect(status).toBe(0);
-		expect(output).toContain("0 existing asset(s) match");
-	});
-
-	it("still compares an asset that is not declared rolling", () => {
-		const { status, output } = runGuard("ok", "SHA256SUMS", "checksums from another build", "beta beta.json");
+	it("compares every asset the run is about to upload", () => {
+		// Nothing is exempt any more. The exemption existed for the beta
+		// release's rolling pointer files, and each beta now publishes under a
+		// tag of its own, so an asset that already exists under this tag with
+		// different bytes is a replacement whatever its name is.
+		const { status, output } = runGuard("ok", "SHA256SUMS", "checksums from another build");
 
 		expect(status).toBe(1);
 		expect(output).toContain("different bytes");

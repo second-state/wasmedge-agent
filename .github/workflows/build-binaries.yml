@@ -440,19 +440,15 @@ jobs:
             --cache-control no-cache
 
       # Both destinations first, for the reason the production pair has: the
-      # beta channel pointer, the installers and the beta tag all move in the
-      # step below, and a guard that runs after them refuses only once they
-      # already name a build the GitHub release does not carry.
+      # beta channel pointer and the installers move in the step below, and a
+      # guard that runs after them refuses only once they already name a build
+      # the GitHub release does not carry.
       #
       # Beta tarballs carry the same one-year immutable policy as production
       # ones, so a rebuilt beta of an already-published version is the same
-      # unfixable replacement. The beta GitHub release is a rolling pointer
-      # rather than an archive -- the current beta's tarball plus SHA256SUMS,
-      # beta and beta.json, three files whose names never change and whose
-      # contents do every run -- so those three are declared rolling and
-      # skipped, and the tarball beside them is compared like any other. Each
-      # beta version keeps its own immutable copy under releases/v<version>/,
-      # which is where the archive actually lives.
+      # unfixable replacement. The GitHub side is checked the same way now
+      # that each beta has a tag of its own: nothing there is rolling, so
+      # nothing is exempt from the comparison.
       - name: Guard the beta release destinations
         if: env.PUBLISH_BETA == 'true'
         env:
@@ -469,8 +465,7 @@ jobs:
           test -n "$R2_ENDPOINT_URL"
 
           sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$BETA_DIR"
-          sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" beta "$BETA_DIR" \
-            "SHA256SUMS beta beta.json"
+          sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" "v${BETA_VERSION}" "$BETA_DIR"
 
       - name: Publish immutable beta artifacts to R2
         if: env.PUBLISH_BETA == 'true'
@@ -490,7 +485,7 @@ jobs:
             --content-type text/plain \
             --cache-control 'public, max-age=31536000, immutable'
 
-      - name: Advance beta release
+      - name: Publish the beta GitHub release
         if: env.PUBLISH_BETA == 'true'
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -505,43 +500,23 @@ jobs:
           BETA_DIR=release-artifacts/beta
           printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
 
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/beta" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/beta" \
-              -F sha="$BUILD_REF" \
-              -F force=true >/dev/null
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref=refs/tags/beta \
-              -f sha="$BUILD_REF" >/dev/null
-          fi
-
-          if gh release view beta --repo "$GITHUB_REPOSITORY" --json name >/dev/null 2>&1; then
-            gh release edit beta \
-              --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
-              --notes-file /tmp/beta-release-notes.md \
-              --prerelease
-          else
-            gh release create beta \
-              --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
-              --notes-file /tmp/beta-release-notes.md \
-              --prerelease
-          fi
-
-          # Upload, then prune -- not the other way round. Deleting every asset
-          # first left the beta release empty for as long as the uploads took,
-          # and empty for good if the job died in between.
-          gh release upload beta "$BETA_DIR"/* --clobber
-
-          current=" $(for artifact in "$BETA_DIR"/*; do printf '%s ' "$(basename "$artifact")"; done)"
-          gh release view beta --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            while read -r asset_name; do
-              case "$current" in
-                *" $asset_name "*) continue ;;
-              esac
-              gh release delete-asset beta "$asset_name" --repo "$GITHUB_REPOSITORY" --yes
-            done
+          # One tag per build, and nothing is ever overwritten. This used to be
+          # a rolling pointer: the beta tag force-moved onto each build, then
+          # SHA256SUMS, beta and beta.json clobbered one at a time under names
+          # that never changed. A failure partway left that tag holding some of
+          # this build and some of the last, while claiming to be one build.
+          #
+          # beta_version already ends in the run, the attempt and the commit,
+          # so the tag below is one no other build can take. A create that
+          # fails partway leaves an incomplete release under a tag nothing
+          # points at yet -- the channel pointer moves in the step after this
+          # one -- so a half-finished beta is invisible rather than installable.
+          gh release create "v${BETA_VERSION}" \
+            --title "Beta (v${BETA_VERSION})" \
+            --target "$BUILD_REF" \
+            --notes-file /tmp/beta-release-notes.md \
+            --prerelease \
+            "$BETA_DIR"/*
 
           # Last, once both destinations carry this build. Moving these first
           # meant a later refusal left beta.json, the beta channel file and the

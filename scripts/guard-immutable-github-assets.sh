@@ -18,16 +18,15 @@
 # because the bucket is new. Only the release's existing assets still remember
 # what v<version> was.
 #
-# Usage: guard-immutable-github-assets.sh <repo> <tag> <local-dir> [rolling...]
+# Usage: guard-immutable-github-assets.sh <repo> <tag> <local-dir>
 #
 # Only the assets this run is about to upload are considered. A release may
 # legitimately carry others, and those are not this run's business.
 #
-# `rolling` is a space-separated list of asset names that are meant to change:
-# a pointer file whose name is fixed and whose contents name the current
-# release. The beta release carries three. They are excluded by name rather
-# than by heuristic, because getting this wrong in either direction is bad --
-# guarding them refuses every publish, and guarding nothing protects none.
+# Every one of them is guarded. There used to be an exemption for the beta
+# release's rolling pointer files, which is gone with the rolling release
+# itself: each beta now publishes under a tag of its own, so no asset of any
+# release is expected to change.
 #
 # It fails closed, and that has to include the question of whether the release
 # exists at all. One request answers both -- does this tag have a release, and
@@ -42,7 +41,6 @@ set -eu
 repo=${1:?repository (owner/name) required}
 tag=${2:?release tag required}
 local_dir=${3:?local release directory required}
-rolling=${4:-}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -63,9 +61,6 @@ replaced=0
 for artifact in "$local_dir"/*; do
 	[ -f "$artifact" ] || continue
 	name=$(basename "$artifact")
-	case " $rolling " in
-		*" $name "*) continue ;;
-	esac
 	grep -qxF "$name" "$work/assets" || continue
 
 	rm -f "$work/$name"
