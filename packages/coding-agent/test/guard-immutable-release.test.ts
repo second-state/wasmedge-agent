@@ -8,6 +8,7 @@ const GUARD = join(__dirname, "..", "..", "..", "scripts", "guard-immutable-rele
 const PREFIX = "releases/v0.7.0";
 const TARBALL = "wasmedge-agent-0.7.0.tgz";
 const SUMS = "abc123  wasmedge-agent-0.7.0.tgz\n";
+const MANIFEST = '{"version":"v0.7.0"}';
 
 const dirs: string[] = [];
 
@@ -47,6 +48,8 @@ case "$3" in
 ' > "$4" ;;
       *) printf '%s' '${SUMS}' > "$4" ;;
     esac ;;
+  *"/release.json")
+    printf '%s' '${MANIFEST}' > "$4" ;;
   *)
     case "${mode}" in
       differentTarball) printf '%s' 'not the tarball' > "$4" ;;
@@ -66,6 +69,10 @@ function localRelease(): string {
 	dirs.push(dir);
 	writeFileSync(join(dir, TARBALL), "tarball");
 	writeFileSync(join(dir, "SHA256SUMS"), SUMS);
+	// The release manifest goes up under the prefix too: an install that names
+	// a version resolves no channel, so this is what tells it which package
+	// each of these files contains.
+	writeFileSync(join(dir, "release.json"), MANIFEST);
 	return dir;
 }
 
@@ -84,7 +91,7 @@ function runGuard(mode: string, listing: string): { status: number; output: stri
 	}
 }
 
-const BOTH_KEYS = `${PREFIX}/${TARBALL}\t${PREFIX}/SHA256SUMS`;
+const BOTH_KEYS = `${PREFIX}/${TARBALL}\t${PREFIX}/SHA256SUMS\t${PREFIX}/release.json`;
 
 describe("guard-immutable-release.sh", () => {
 	it("publishes when the version has never been published", () => {

@@ -101,6 +101,18 @@
   name, and nothing about what is inside them, so a release assembled with one
   artifact under another's name, or a manifest advertising a version its own
   package does not carry, passed every check and installed the wrong thing.
+- A release channel is one object. `install.sh` resolves it from the same JSON
+  manifest the installed agent's update check reads, rather than from a
+  one-line text file published beside it: a publication that moved one and
+  stopped before the other left fresh installs and installed agents resolving
+  different releases. That manifest also names the package behind each
+  artifact, so the installer holds every package it stages to the package the
+  release says it is, not only to a matching checksum. Every release publishes
+  that manifest under its own prefix as well, as `release.json`, because an
+  install that names a version resolves no channel and so had nothing to hold
+  those packages to: it fetches the release's own copy, and refuses to install
+  if it cannot read one or if the manifest says nothing about a file it
+  fetched.
 - Commands that return early -- `doctor` and the other public commands,
   `config`, `--version`, `--help`, `--export` -- now print the deprecation
   warnings collected during startup, on stderr. They used to return before the

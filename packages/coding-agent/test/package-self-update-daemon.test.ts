@@ -790,8 +790,8 @@ describe("self-update daemon restart", () => {
 			vi.stubGlobal(
 				"fetch",
 				stubReleaseWithDependency([
-					{ file: "wasmedge-agent-99.0.0.tgz", sha256: ROOT_WITH_DEPENDENCY_SHA256 },
-					{ file: DEPENDENCY, sha256: DEPENDENCY_SHA256 },
+					{ file: "wasmedge-agent-99.0.0.tgz", package: PACKAGE_NAME, sha256: ROOT_WITH_DEPENDENCY_SHA256 },
+					{ file: DEPENDENCY, package: "wasmedge-agent-ai", sha256: DEPENDENCY_SHA256 },
 				]),
 			);
 
@@ -808,7 +808,9 @@ describe("self-update daemon restart", () => {
 			// this closes.
 			vi.stubGlobal(
 				"fetch",
-				stubReleaseWithDependency([{ file: "wasmedge-agent-99.0.0.tgz", sha256: ROOT_WITH_DEPENDENCY_SHA256 }]),
+				stubReleaseWithDependency([
+					{ file: "wasmedge-agent-99.0.0.tgz", package: PACKAGE_NAME, sha256: ROOT_WITH_DEPENDENCY_SHA256 },
+				]),
 			);
 
 			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -832,7 +834,9 @@ describe("self-update daemon restart", () => {
 			// npm to fetch, unpack and run a postinstall script from unchecked.
 			vi.stubGlobal(
 				"fetch",
-				stubRelease({ tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", sha256: TARBALL_SHA256 }] }),
+				stubRelease({
+					tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", package: PACKAGE_NAME, sha256: TARBALL_SHA256 }],
+				}),
 			);
 
 			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
@@ -863,7 +867,7 @@ describe("self-update daemon restart", () => {
 			vi.stubGlobal(
 				"fetch",
 				stubRelease({
-					tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", sha256: TARBALL_SHA256 }],
+					tarballs: [{ file: "wasmedge-agent-99.0.0.tgz", package: PACKAGE_NAME, sha256: TARBALL_SHA256 }],
 					body: Buffer.from("something else entirely"),
 				}),
 			);

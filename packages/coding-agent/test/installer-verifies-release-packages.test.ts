@@ -78,7 +78,35 @@ function stageRelease(): { workDir: string; releaseDir: string; downloadDir: str
 	});
 
 	writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
+	writeReleaseManifest(workDir, releaseDir, [
+		[ROOT_TARBALL, "wasmedge-agent"],
+		[AI_TARBALL, "wasmedge-agent-ai"],
+		[TUI_TARBALL, "wasmedge-agent-tui"],
+		[CORE_TARBALL, "wasmedge-agent-core"],
+	]);
 	return { workDir, releaseDir, downloadDir };
+}
+
+/** What the release published: the version, and the package behind each
+ *  artifact file.
+ *
+ *  Written twice, as the publication writes it: once where a channel install
+ *  reads it, and once inside the release, which is the copy an install that
+ *  named a version has to fetch for itself. */
+function writeReleaseManifest(workDir: string, releaseDir: string, packages: [string, string][]): void {
+	const manifest = JSON.stringify({
+		version: `v${VERSION}`,
+		package: "wasmedge-agent",
+		tarballs: packages.map(([file, name]) => ({
+			package: name,
+			file,
+			sha256: createHash("sha256")
+				.update(readFileSync(join(releaseDir, file)))
+				.digest("hex"),
+		})),
+	});
+	writeFileSync(join(workDir, "channel.json"), manifest);
+	writeFileSync(join(releaseDir, "release.json"), manifest);
 }
 
 function writeChecksums(releaseDir: string, files: string[]): void {
@@ -136,6 +164,8 @@ wasmedge_agent_run_quiet_with_animation() {
 	"$@"
 }
 
+wasmedge_agent_channel_manifest="${join(workDir, "channel.json")}"
+
 stage_verified_wasmedge_agent_package "${VERSION}" "${downloadedRoot}" "${join(downloadDir, "SHA256SUMS")}"
 printf '%s\\n' "$wasmedge_agent_install_tarball" > "${resultPath}"
 `,
@@ -159,6 +189,39 @@ printf '%s\\n' "$wasmedge_agent_install_tarball" > "${resultPath}"
 	}
 
 	return { status: 0, output: "", staged: readFileSync(resultPath, "utf-8").trim() };
+}
+
+/** The installer's own functions, with a stub curl serving the release. */
+function runDriver(workDir: string, releaseDir: string, driver: string) {
+	const harness = join(workDir, "driver.sh");
+	writeFileSync(
+		harness,
+		`${harnessPrefix}
+
+wasmedge_agent_run_quiet_with_animation() {
+	shift 3
+	"$@"
+}
+
+${driver}
+`,
+	);
+
+	try {
+		const stdout = execFileSync("sh", ["-c", `sh "${harness}" 2>&1`], {
+			env: {
+				...hostEnv,
+				PATH: `${stubCurl(workDir, releaseDir)}:${process.env.PATH}`,
+				WASMEDGE_AGENT_DOWNLOAD_BASE_URL: BASE_URL,
+			},
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		return { status: 0, output: stdout };
+	} catch (error) {
+		const failure = error as { status?: number; stdout?: string; stderr?: string };
+		return { status: failure.status ?? 1, output: `${failure.stdout ?? ""}${failure.stderr ?? ""}` };
+	}
 }
 
 /** What the installer hands npm, read back out of the tarball it built. */
@@ -254,6 +317,20 @@ describe("installer release package verification", () => {
 		expect(output).toContain("should be wasmedge-agent and contains wasmedge-agent-ai");
 	});
 
+	it("refuses a package the release says is a different package", () => {
+		// The version is this release's and the checksum matches the file, so
+		// only the manifest's own account of which package that file is can
+		// catch it.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+		packageTarball(workDir, AI_TARBALL, { name: "wasmedge-agent-tui", version: VERSION });
+		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
+
+		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("should be wasmedge-agent-ai and contains wasmedge-agent-tui");
+	});
+
 	it("refuses a package whose bytes do not match the checksums", () => {
 		// The whole point. A dependency tarball replaced after SHA256SUMS was
 		// written must stop the install, not install.
@@ -276,6 +353,82 @@ describe("installer release package verification", () => {
 
 		expect(status).not.toBe(0);
 		expect(output).toContain(`checksum for ${CORE_TARBALL} was not found`);
+	});
+
+	it("reads the release manifest when a version was pinned", () => {
+		// An install that names a version resolves no channel, so nothing had
+		// read the object that says which package each of these files is. It
+		// is published inside the release for exactly this.
+		const { workDir, releaseDir } = stageRelease();
+		const manifestPath = join(workDir, "pinned.json");
+
+		const { status, output } = runDriver(
+			workDir,
+			releaseDir,
+			`wasmedge_agent_channel_manifest="${manifestPath}"
+fetch_wasmedge_agent_release_manifest "${VERSION}"
+cat "${manifestPath}"`,
+		);
+
+		expect(status).toBe(0);
+		expect(JSON.parse(output).tarballs).toContainEqual(
+			expect.objectContaining({ file: AI_TARBALL, package: "wasmedge-agent-ai" }),
+		);
+	});
+
+	it("keeps the manifest a channel install already read", () => {
+		// Resolving a channel leaves that manifest behind, and fetching a
+		// second copy of it would be a second chance to be told something
+		// else.
+		const { workDir, releaseDir } = stageRelease();
+		const manifestPath = join(workDir, "channel.json");
+
+		const { status, output } = runDriver(
+			workDir,
+			releaseDir,
+			`wasmedge_agent_channel_manifest="${manifestPath}"
+rm -f "${join(releaseDir, "release.json")}"
+fetch_wasmedge_agent_release_manifest "${VERSION}"
+printf 'kept\n'`,
+		);
+
+		expect(status).toBe(0);
+		expect(output).toContain("kept");
+	});
+
+	it("refuses a pinned install whose release manifest cannot be read", () => {
+		// Failing open here would install three packages held to a digest
+		// alone, which is what publishing the manifest inside the release was
+		// for.
+		const { workDir, releaseDir } = stageRelease();
+
+		const { status, output } = runDriver(
+			workDir,
+			releaseDir,
+			`wasmedge_agent_channel_manifest="${join(workDir, "pinned.json")}"
+rm -f "${join(releaseDir, "release.json")}"
+fetch_wasmedge_agent_release_manifest "${VERSION}"`,
+		);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("release.json");
+		expect(output).toContain("nothing else does");
+	});
+
+	it("refuses an artifact the release manifest does not name", () => {
+		// The manifest is the only thing that can say what a file contains, so
+		// one it says nothing about is one nothing can check.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+		writeReleaseManifest(workDir, releaseDir, [
+			[ROOT_TARBALL, "wasmedge-agent"],
+			[TUI_TARBALL, "wasmedge-agent-tui"],
+			[CORE_TARBALL, "wasmedge-agent-core"],
+		]);
+
+		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain(`does not say which package ${AI_TARBALL} should contain`);
 	});
 
 	it("installs the downloaded tarball as it is when nothing needs resolving", () => {

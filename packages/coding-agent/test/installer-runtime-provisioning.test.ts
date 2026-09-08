@@ -383,6 +383,26 @@ run_wasmedge_agent_doctor`,
 		expect(result.output).toContain("runtime setup above was skipped");
 	});
 
+	it("removes the release manifest directory when the install fails", () => {
+		// It is created before the version is resolved and used until the last
+		// package is staged, so every failure in between used to leave it
+		// behind: the EXIT trap knew only about the download directory.
+		const dir = workspace();
+		const root = join(dir, "temp-root");
+		mkdirSync(root, { recursive: true });
+
+		const result = run(
+			dir,
+			`TMPDIR="${root}"
+wasmedge_agent_install_traps
+wasmedge_agent_channel_dir=$(create_temp_dir)
+exit 1`,
+		);
+
+		expect(result.status).not.toBe(0);
+		expect(readdirSync(root)).toEqual([]);
+	});
+
 	/** Runs a driver with the screen on, waits for `ready`, and interrupts it.
 	 *
 	 *  Returns once the installer has exited, so the assertions afterwards see
@@ -547,6 +567,52 @@ if install_wasmedge_bin_package; then printf 'package\\n' >> "${join(dir, "log")
 
 		expect(result.status).toBe(0);
 		expect(readFileSync(join(dir, "log"), "utf-8")).toContain("fallback");
+	});
+
+	it.each([
+		["stable", "latest.json"],
+		["beta", "beta.json"],
+	])("resolves the %s channel from %s", (channel, file) => {
+		// One object decides what a channel means. It used to be published
+		// twice -- as this JSON and as a one-line text file -- and read once
+		// each way, so a publication that moved one and stopped left fresh
+		// installs and installed agents on different releases.
+		const dir = workspace();
+		const served = join(dir, "served");
+		mkdirSync(served, { recursive: true });
+		writeFileSync(join(served, file), JSON.stringify({ version: "v4.5.6", package: "wasmedge-agent" }));
+		const bin = join(dir, "bin");
+		mkdirSync(bin, { recursive: true });
+		const curl = join(bin, "curl");
+		writeFileSync(
+			curl,
+			`#!/bin/sh
+url=
+out=
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-o) out="$2"; shift 2 ;;
+		-*) shift ;;
+		*) url="$1"; shift ;;
+	esac
+done
+name=\${url##*/}
+[ -f "${served}/$name" ] || exit 22
+cp "${served}/$name" "$out"
+`,
+		);
+		chmodSync(curl, 0o755);
+
+		const result = run(
+			dir,
+			`wasmedge_agent_run_quiet_with_animation() { shift 3; "$@"; }
+wasmedge_agent_channel_manifest="${join(dir, "channel.json")}"
+printf '%s\\n' "$(resolve_wasmedge_agent_version ${channel})"`,
+			bin,
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.output.trim()).toBe("4.5.6");
 	});
 
 	it("does nothing when the runtime bootstrap is off", () => {

@@ -376,7 +376,7 @@ jobs:
           test -f "$PRODUCTION_DIR/wasmedge-agent-${PRODUCTION_VERSION}.tgz"
           test -f "$PRODUCTION_DIR/SHA256SUMS"
           test -f "$PRODUCTION_DIR/stable"
-          test -f "$PRODUCTION_DIR/latest.json"
+          test -f "$PRODUCTION_DIR/release.json"
           test -n "$R2_BUCKET"
           test -n "$R2_ENDPOINT_URL"
 
@@ -419,6 +419,11 @@ jobs:
           PRODUCTION_DIR=release-artifacts/production
           RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
 
+          # Created rather than copied. The guard above compares before this
+          # step and cannot hold across it, so each object is written on the
+          # condition that its key is free -- which is one operation, and the
+          # only way a year-long immutable URL can be published without a
+          # window in which someone else's bytes are the ones being replaced.
           for artifact in "$PRODUCTION_DIR"/*.tgz; do
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
@@ -429,6 +434,15 @@ jobs:
           aws s3 cp "$PRODUCTION_DIR/SHA256SUMS" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/SHA256SUMS" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
+            --cache-control 'public, max-age=31536000, immutable'
+
+          # Beside the tarballs it describes. An install that names a version
+          # resolves no channel, so this is the only thing that can tell it
+          # which package each of those files contains; the copy at the channel
+          # name below is the same object, and is what a channel install reads.
+          aws s3 cp "$PRODUCTION_DIR/release.json" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/release.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
             --cache-control 'public, max-age=31536000, immutable'
 
       - name: Create production GitHub release
@@ -465,16 +479,10 @@ jobs:
         run: |
           PRODUCTION_DIR=release-artifacts/production
 
-          aws s3 cp "$PRODUCTION_DIR/latest.json" "s3://${R2_BUCKET}/latest.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control no-cache
-
-          aws s3 cp "$PRODUCTION_DIR/stable" "s3://${R2_BUCKET}/stable" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control no-cache
-
+          # The installers first. They are rendered with the release host and
+          # name no version, so nothing about them depends on the checks below
+          # -- and moving them out from between those checks and the objects
+          # they gate is what keeps that gap to a single upload.
           aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
@@ -483,6 +491,30 @@ jobs:
           aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
+            --cache-control no-cache
+
+          # Before anything here names this release. The guard ran once before
+          # the artifacts went up, and everything since -- the artifacts, the
+          # tag, the GitHub release -- is time in which another holder of these
+          # credentials could have replaced what these pointers are about to
+          # announce. Nothing under the version prefix has been overwritten by
+          # this run, so a refusal here costs a retry rather than a repair.
+          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "releases/v${PRODUCTION_VERSION}" "$PRODUCTION_DIR"
+
+          # Then the text pointer, and the JSON manifest last. Both install
+          # paths read the JSON -- install.sh to resolve a channel, the
+          # installed agent to check for updates -- so it is the one object
+          # that decides what a channel means, and a publication that stops
+          # partway leaves it naming the release it named before.
+          aws s3 cp "$PRODUCTION_DIR/stable" "s3://${R2_BUCKET}/stable" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
+            --cache-control no-cache
+
+          aws s3 cp "$PRODUCTION_DIR/release.json" "s3://${R2_BUCKET}/latest.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
             --cache-control no-cache
 
       # Both destinations first, for the reason the production pair has: the
@@ -506,7 +538,7 @@ jobs:
           test -f "$BETA_DIR/wasmedge-agent-${BETA_VERSION}.tgz"
           test -f "$BETA_DIR/SHA256SUMS"
           test -f "$BETA_DIR/beta"
-          test -f "$BETA_DIR/beta.json"
+          test -f "$BETA_DIR/release.json"
           test -n "$R2_BUCKET"
           test -n "$R2_ENDPOINT_URL"
 
@@ -519,6 +551,8 @@ jobs:
           BETA_DIR=release-artifacts/beta
           RELEASE_PREFIX="releases/v${BETA_VERSION}"
 
+          # Conditional creation, for the reason the production objects have:
+          # a beta prefix is immutable for a year too.
           for artifact in "$BETA_DIR"/*.tgz; do
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
@@ -531,18 +565,27 @@ jobs:
             --content-type text/plain \
             --cache-control 'public, max-age=31536000, immutable'
 
+          # Beside the tarballs, for the reason the production copy is there:
+          # an install of this version resolves no channel and has nothing else
+          # to hold these files to.
+          aws s3 cp "$BETA_DIR/release.json" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/release.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
+            --cache-control 'public, max-age=31536000, immutable'
+
       - name: Publish the beta GitHub release
         if: env.PUBLISH_BETA == 'true'
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          latest_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)
-          if [ "$latest_main_sha" != "$BUILD_REF" ]; then
-            echo "A newer main commit exists; keeping its beta pointers in place."
-            exit 0
-          fi
-
+          # No freshness check here. This release is addressed by version, and
+          # its immutable objects went up in the step above whether or not main
+          # has moved since: stopping short of the GitHub half would leave the
+          # two destinations disagreeing about what v${BETA_VERSION} is, with no
+          # way to finish it -- a later run publishes a different version. What
+          # a newer main commit has to stop is the channel pointer, and that is
+          # checked immediately before the pointer moves, below.
           BETA_DIR=release-artifacts/beta
           printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
 
@@ -575,16 +618,7 @@ jobs:
           # Last, once both destinations carry this build. Moving these first
           # meant a later refusal left beta.json, the beta channel file and the
           # installers naming a build the GitHub release did not have.
-          aws s3 cp "$BETA_DIR/beta.json" "s3://${R2_BUCKET}/beta.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control no-cache
-
-          aws s3 cp "$BETA_DIR/beta" "s3://${R2_BUCKET}/beta" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control no-cache
-
+          #
           aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
@@ -593,6 +627,36 @@ jobs:
           aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
+            --cache-control no-cache
+
+          # Both questions asked here, before any of these objects names this
+          # build. The branch was last checked before the release above was
+          # written, and main can move in that time: a run that answered it
+          # once published a beta it had already decided was stale. The guard
+          # is re-run for the reason the production one is -- nothing under
+          # this prefix has been overwritten by this run, so a refusal costs a
+          # retry rather than a repair.
+          latest_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)
+          if [ "$latest_main_sha" != "$BUILD_REF" ]; then
+            echo "A newer main commit exists; leaving the beta pointers where they are."
+            echo "v${BETA_VERSION} is published and installable by version; nothing points at it."
+            exit 0
+          fi
+
+          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            "releases/v${BETA_VERSION}" "$BETA_DIR"
+
+          # Then the text pointer, and the JSON manifest last, for the reason
+          # the production pointers have: the JSON is the object both install
+          # paths read, so it is what decides which release this channel means.
+          aws s3 cp "$BETA_DIR/beta" "s3://${R2_BUCKET}/beta" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
+            --cache-control no-cache
+
+          aws s3 cp "$BETA_DIR/release.json" "s3://${R2_BUCKET}/beta.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
             --cache-control no-cache
 
           echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"

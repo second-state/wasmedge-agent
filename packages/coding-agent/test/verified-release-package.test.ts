@@ -72,6 +72,15 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 
 	const digests: Record<string, string> = {};
 	for (const [file, bytes] of files) digests[file] = sha256(bytes);
+	// The manifest names the package behind each artifact, and nothing else
+	// can: the dependency keys above are the source package names, which the
+	// packer deliberately leaves alone so compiled imports keep resolving.
+	const packageNames: Record<string, string> = {
+		[ROOT]: "wasmedge-agent",
+		[AI]: "wasmedge-agent-ai",
+		[TUI]: "wasmedge-agent-tui",
+		[CORE]: "wasmedge-agent-core",
+	};
 
 	const fetchImpl = (async (input: string | URL | Request) => {
 		const url = typeof input === "string" ? input : input.toString();
@@ -79,7 +88,7 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 		return bytes ? new Response(bytes) : new Response(null, { status: 404 });
 	}) as typeof fetch;
 
-	return { workDir, files, digests, fetchImpl };
+	return { workDir, files, digests, packageNames, fetchImpl };
 }
 
 function stagedManifest(
@@ -99,12 +108,13 @@ describe("verified release package", () => {
 		// update path used to check one of them. The other three are
 		// dependencies of it, spelled as URLs, and npm has no integrity
 		// metadata for those.
-		const { workDir, digests, fetchImpl } = stageRelease();
+		const { workDir, digests, packageNames, fetchImpl } = stageRelease();
 
 		const staged = await downloadVerifiedReleasePackage({
 			installSpec: `${BASE}/${ROOT}`,
 			installSha256: digests[ROOT],
 			releaseDigests: digests,
+			releasePackageNames: packageNames,
 			fetchImpl,
 		});
 		cleanups.push(staged.cleanup);
@@ -125,12 +135,13 @@ describe("verified release package", () => {
 		// The core package names the AI package by URL in its own manifest.
 		// Rewriting the root and stopping there left that edge for npm to
 		// fetch, unchecked, which is the thing this exists to prevent.
-		const { workDir, digests, fetchImpl } = stageRelease();
+		const { workDir, digests, packageNames, fetchImpl } = stageRelease();
 
 		const staged = await downloadVerifiedReleasePackage({
 			installSpec: `${BASE}/${ROOT}`,
 			installSha256: digests[ROOT],
 			releaseDigests: digests,
+			releasePackageNames: packageNames,
 			fetchImpl,
 		});
 		cleanups.push(staged.cleanup);
@@ -147,7 +158,7 @@ describe("verified release package", () => {
 		// The digest the root's own dependencies need is present; the one the
 		// core package needs is not. A walk that stops at the root would not
 		// notice.
-		const { digests, fetchImpl } = stageRelease({
+		const { digests, packageNames, fetchImpl } = stageRelease({
 			name: "wasmedge-agent",
 			version: "9.9.9",
 			dependencies: { "@earendil-works/pi-agent-core": `${BASE}/${CORE}` },
@@ -160,6 +171,7 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: withoutAi,
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow(/publishes no SHA-256 for it/);
@@ -170,7 +182,7 @@ describe("verified release package", () => {
 		// and nothing about what is inside them. The manifest names the
 		// package behind each file, and that is what catches a release
 		// assembled with one artifact under another's name.
-		const { workDir, files, digests, fetchImpl } = stageRelease();
+		const { workDir, files, digests, packageNames, fetchImpl } = stageRelease();
 		const swapped = tarball(workDir, AI, { name: "wasmedge-agent-tui", version: "9.9.9" });
 		files.set(AI, swapped);
 
@@ -179,16 +191,36 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: { ...digests, [AI]: sha256(swapped) },
-				releasePackageNames: { [AI]: "wasmedge-agent-ai" },
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow(/should be wasmedge-agent-ai and contains wasmedge-agent-tui/);
 	});
 
+	it("refuses a package the manifest does not name", async () => {
+		// The manifest is the only thing that can say what a file contains: a
+		// digest speaks for the bytes and not the package, and the dependent
+		// keys the dependency by its source package name rather than by the
+		// branded name the artifact carries. One it says nothing about cannot
+		// be checked at all.
+		const { digests, packageNames, fetchImpl } = stageRelease();
+		const { [AI]: _named, ...withoutAiName } = packageNames;
+
+		await expect(
+			downloadVerifiedReleasePackage({
+				installSpec: `${BASE}/${ROOT}`,
+				installSha256: digests[ROOT],
+				releaseDigests: digests,
+				releasePackageNames: withoutAiName,
+				fetchImpl,
+			}),
+		).rejects.toThrow(/does not say which package wasmedge-agent-ai-9\.9\.9\.tgz should contain/);
+	});
+
 	it("refuses a package that is not the release's version", async () => {
 		// Every artifact of a release carries that release's version, so the
 		// package being installed sets what the packages it pulls in must be.
-		const { workDir, files, digests, fetchImpl } = stageRelease();
+		const { workDir, files, digests, packageNames, fetchImpl } = stageRelease();
 		const older = tarball(workDir, AI, { name: "wasmedge-agent-ai", version: "8.8.8" });
 		files.set(AI, older);
 
@@ -197,6 +229,7 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: { ...digests, [AI]: sha256(older) },
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow(/should be version 9\.9\.9 and contains 8\.8\.8/);
@@ -206,13 +239,14 @@ describe("verified release package", () => {
 		// The manifest can advertise one version and point at a package
 		// carrying another; both are internally consistent, and the update
 		// would install something other than what it reported.
-		const { digests, fetchImpl } = stageRelease();
+		const { digests, packageNames, fetchImpl } = stageRelease();
 
 		await expect(
 			downloadVerifiedReleasePackage({
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: digests,
+				releasePackageNames: packageNames,
 				expectedVersion: "10.0.0",
 				fetchImpl,
 			}),
@@ -220,7 +254,7 @@ describe("verified release package", () => {
 	});
 
 	it("refuses a dependency whose bytes do not match the manifest", async () => {
-		const { digests, fetchImpl } = stageRelease();
+		const { digests, packageNames, fetchImpl } = stageRelease();
 		const tampered = { ...digests, [AI]: sha256(Buffer.from("not the package that was published")) };
 
 		await expect(
@@ -228,6 +262,7 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: tampered,
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow(/does not match the checksum/);
@@ -236,7 +271,7 @@ describe("verified release package", () => {
 	it("refuses a dependency the release publishes no digest for", async () => {
 		// An artifact nothing has vouched for is not installable, the same way
 		// install.sh refuses a file SHA256SUMS does not mention.
-		const { digests, fetchImpl } = stageRelease();
+		const { digests, packageNames, fetchImpl } = stageRelease();
 		const withoutAi = { ...digests };
 		delete withoutAi[AI];
 
@@ -245,6 +280,7 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: withoutAi,
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow(/publishes no SHA-256 for it/);
@@ -253,7 +289,7 @@ describe("verified release package", () => {
 	it("installs the downloaded tarball when the release has no packages of its own", async () => {
 		// Nothing to verify beyond the tarball itself, and repacking it would
 		// only be a way to get it wrong.
-		const { digests, fetchImpl } = stageRelease({
+		const { digests, packageNames, fetchImpl } = stageRelease({
 			name: "wasmedge-agent",
 			version: "9.9.9",
 			dependencies: { chalk: "^5.5.0" },
@@ -263,6 +299,7 @@ describe("verified release package", () => {
 			installSpec: `${BASE}/${ROOT}`,
 			installSha256: digests[ROOT],
 			releaseDigests: digests,
+			releasePackageNames: packageNames,
 			fetchImpl,
 		});
 		cleanups.push(staged.cleanup);
@@ -277,12 +314,13 @@ describe("verified release package", () => {
 		// three unchecked packages behind a warning, and install.sh does the
 		// same work with the same tar, so pointing at it is a real
 		// instruction.
-		const { digests, fetchImpl } = stageRelease();
+		const { digests, packageNames, fetchImpl } = stageRelease();
 
 		const failure = downloadVerifiedReleasePackage({
 			installSpec: `${BASE}/${ROOT}`,
 			installSha256: digests[ROOT],
 			releaseDigests: digests,
+			releasePackageNames: packageNames,
 			fetchImpl,
 			tarCommand: "wasmedge-agent-tar-that-is-not-installed",
 		});
@@ -295,7 +333,7 @@ describe("verified release package", () => {
 		// The temporary tree holds a verified tarball and a half-resolved
 		// package. A refused update must not leave either where a later step
 		// could pick it up.
-		const { digests, fetchImpl } = stageRelease();
+		const { digests, packageNames, fetchImpl } = stageRelease();
 		const before = existingUpdateDirs();
 
 		await expect(
@@ -303,6 +341,7 @@ describe("verified release package", () => {
 				installSpec: `${BASE}/${ROOT}`,
 				installSha256: digests[ROOT],
 				releaseDigests: { ...digests, [AI]: sha256(Buffer.from("replaced")) },
+				releasePackageNames: packageNames,
 				fetchImpl,
 			}),
 		).rejects.toThrow();

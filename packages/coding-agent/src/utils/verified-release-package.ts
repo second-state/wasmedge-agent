@@ -197,6 +197,14 @@ async function stageInternalPackages(
  *  file name: the packer happens to name artifacts `<name>-<version>.tgz`, and
  *  a check built on that would reject a release that names its files any other
  *  way while proving nothing the manifest cannot say directly.
+ *
+ *  A package this release pulls in has to be named by the manifest: nothing
+ *  else can say what it is. The dependent's manifest cannot -- it keys the
+ *  dependency by its source package name, while the artifact carries the
+ *  branded one -- and neither can the file name or the digest. The root is the
+ *  exception: an update installs the tarball the manifest points at, so a
+ *  manifest that does not name the package behind it leaves nothing to check
+ *  it against.
  */
 function assertPackageIdentity(
 	options: VerifiedReleasePackageOptions,
@@ -209,9 +217,11 @@ function assertPackageIdentity(
 		throw new Error(`${file} declares no package name and version. Nothing was installed.`);
 	}
 
-	const expectedName =
-		options.releasePackageNames?.[file] ??
-		(file === options.installSpec.split("/").pop() ? options.expectedPackageName : undefined);
+	const isRoot = file === options.installSpec.split("/").pop();
+	const expectedName = options.releasePackageNames?.[file] ?? (isRoot ? options.expectedPackageName : undefined);
+	if (expectedName === undefined && !isRoot) {
+		throw new Error(`The release manifest does not say which package ${file} should contain. Nothing was installed.`);
+	}
 	if (expectedName !== undefined && name !== expectedName) {
 		throw new Error(`${file} should be ${expectedName} and contains ${name}. Nothing was installed.`);
 	}
