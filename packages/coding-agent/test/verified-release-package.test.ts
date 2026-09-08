@@ -82,7 +82,11 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 	return { workDir, files, digests, fetchImpl };
 }
 
-function stagedManifest(workDir: string, tarballPath: string, into = "unpacked"): Record<string, Record<string, string>> {
+function stagedManifest(
+	workDir: string,
+	tarballPath: string,
+	into = "unpacked",
+): Record<string, Record<string, string>> {
 	const unpacked = join(workDir, into);
 	mkdirSync(unpacked, { recursive: true });
 	execFileSync("tar", ["-xzf", tarballPath, "-C", unpacked]);

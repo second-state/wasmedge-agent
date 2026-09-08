@@ -67,6 +67,40 @@
   install instead of running. `update` needs `tar` to do that, and without it
   refuses rather than installing unverified packages, naming `install.sh`,
   which does the same work with the same tar.
+- `install.sh` finishes what it starts, or stops. Both runtime provisioning
+  steps ran as `ensure_... || return 0`, which turned every failure into
+  success and, because the left side of `||` runs with errexit suppressed,
+  kept the commands inside them from failing either: a rustup or WasmEdge
+  install that did not finish left an installer reporting success with no
+  wasm32-wasip1 target and no runtime. Declining a component is still not a
+  failure -- the agent installs, with instructions for the rest. WasmEdge now
+  comes from the `wasmedge-bin` package where a helper can install it, and
+  from the official install script otherwise. After a successful install the
+  agent runs `wasmedge-agent doctor --fix` on itself, which fails the install
+  if it cannot repair what it finds. An option the installer does not
+  implement is refused instead of being read as a release version: it used to
+  resolve `install.sh --check` to the version `--check` and go looking for
+  `releases/v--check/`.
+- `install.sh` reads doctor's report rather than its exit status. It runs
+  `wasmedge-agent doctor --fix` as its last step, and a zero status there
+  never meant a healthy runtime: `--fix` also reaps background services and
+  runs on hosts that will never have a Rust toolchain, so it exits 0 whatever
+  the runtime looks like. The installer and `install.sh --check` read `--json`
+  and name the checks that failed.
+- `install.sh` has the modes issue #3 asks for. `--check` reports on the
+  installed runtime -- Node.js, npm, rustup and the wasm32-wasip1 target,
+  WasmEdge, the command itself and its doctor -- and changes nothing, so a
+  launcher can run it on every invocation. `--yes`, and `--now` under the name
+  issue #5 gives it, answer every prompt with its default for unattended
+  installs. A host with no terminal now installs Node.js rather than printing
+  instructions and stopping, which is what `curl ... | sh` on a clean machine
+  needs; the two runtime prompts had always read it that way. An install that
+  produces no usable command fails instead of reporting success.
+- Both install paths check that a verified package is the package its file
+  name claims. A checksum says the bytes are the ones published under that
+  name, and nothing about what is inside them, so a release assembled with one
+  artifact under another's name, or a manifest advertising a version its own
+  package does not carry, passed every check and installed the wrong thing.
 - Commands that return early -- `doctor` and the other public commands,
   `config`, `--version`, `--help`, `--export` -- now print the deprecation
   warnings collected during startup, on stderr. They used to return before the
