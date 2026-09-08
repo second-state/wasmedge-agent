@@ -487,6 +487,68 @@ wasmedge_agent_run_quiet_with_animation "Installing" "Installing" "detail" \\
 		expect(() => process.kill(grandchild, 0)).toThrow();
 	});
 
+	/** An AUR helper on PATH, answering with `status`. */
+	function stubHelper(dir: string, name: string, status: number): string {
+		const bin = join(dir, "helper-bin");
+		mkdirSync(bin, { recursive: true });
+		const helper = join(bin, name);
+		writeFileSync(helper, `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "${join(dir, "log")}"\nexit ${status}\n`);
+		chmodSync(helper, 0o755);
+		return bin;
+	}
+
+	it("installs the wasmedge-bin package when a helper is available", () => {
+		// Issue #1 fixed the order: the package first, the official installer
+		// as the fallback. It lives in the AUR, so it takes a helper.
+		const dir = workspace();
+
+		const result = run(
+			dir,
+			`wasmedge_agent_screen_enabled=0
+run_wasmedge_install() { printf 'official\\n' >> "${join(dir, "log")}"; }
+install_wasmedge_bin_package`,
+			stubHelper(dir, "yay", 0),
+		);
+
+		expect(result.status).toBe(0);
+		const steps = readFileSync(join(dir, "log"), "utf-8");
+		expect(steps).toContain("yay -S --needed --noconfirm wasmedge-bin");
+		expect(steps).not.toContain("official");
+	});
+
+	it("falls back to the official installer when the helper fails", () => {
+		const dir = workspace();
+
+		const result = run(
+			dir,
+			`wasmedge_agent_screen_enabled=0
+if install_wasmedge_bin_package; then printf 'package\\n' >> "${join(dir, "log")}"; else printf 'fallback\\n' >> "${join(dir, "log")}"; fi`,
+			stubHelper(dir, "yay", 1),
+		);
+
+		expect(result.status).toBe(0);
+		expect(readFileSync(join(dir, "log"), "utf-8")).toContain("fallback");
+		expect(result.output).toContain("could not install wasmedge-bin");
+	});
+
+	it("reports no package path on a host with no helper", () => {
+		// Every host that is not Arch. The official installer is what runs
+		// there, which is what has always run.
+		const dir = workspace();
+		const empty = join(dir, "empty-bin");
+		mkdirSync(empty, { recursive: true });
+
+		const result = run(
+			dir,
+			`wasmedge_agent_screen_enabled=0
+PATH="${empty}"
+if install_wasmedge_bin_package; then printf 'package\\n' >> "${join(dir, "log")}"; else printf 'fallback\\n' >> "${join(dir, "log")}"; fi`,
+		);
+
+		expect(result.status).toBe(0);
+		expect(readFileSync(join(dir, "log"), "utf-8")).toContain("fallback");
+	});
+
 	it("does nothing when the runtime bootstrap is off", () => {
 		const dir = workspace();
 		const log = join(dir, "log");
