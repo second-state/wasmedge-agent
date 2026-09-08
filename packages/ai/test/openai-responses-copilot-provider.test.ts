@@ -3,7 +3,9 @@ import { getModel } from "../src/models.js";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.js";
 import type { Model } from "../src/types.js";
 
-type CapturedHeaders = Headers | string[][] | Record<string, string | readonly string[]> | undefined;
+// Mirror what fetch actually accepts instead of re-spelling it by hand: undici
+// widened the record form of HeadersInit to allow undefined values.
+type CapturedHeaders = RequestInit["headers"];
 
 function getHeader(headers: CapturedHeaders, name: string): string | null {
 	if (!headers) return null;
@@ -16,7 +18,7 @@ function getHeader(headers: CapturedHeaders, name: string): string | null {
 	}
 
 	for (const [key, value] of Object.entries(headers)) {
-		if (key.toLowerCase() === lowerName) return typeof value === "string" ? value : value.join(", ");
+		if (key.toLowerCase() === lowerName) return value ?? null;
 	}
 	return null;
 }

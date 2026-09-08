@@ -12,6 +12,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	type Stats,
 	statSync,
 	writeFileSync,
 } from "fs";
@@ -1003,7 +1004,7 @@ interface SessionInfoCacheEntry {
 const sessionInfoCache = new Map<string, SessionInfoCacheEntry>();
 
 export async function readSessionInfo(filePath: string): Promise<SessionInfo | null> {
-	let stats: Awaited<ReturnType<typeof stat>>;
+	let stats: Stats;
 	try {
 		stats = await stat(filePath);
 	} catch {
@@ -1018,7 +1019,7 @@ export async function readSessionInfo(filePath: string): Promise<SessionInfo | n
 	return info;
 }
 
-async function scanSessionInfo(filePath: string, stats: Awaited<ReturnType<typeof stat>>): Promise<SessionInfo | null> {
+async function scanSessionInfo(filePath: string, stats: Stats): Promise<SessionInfo | null> {
 	try {
 		let header: SessionHeader | undefined;
 		let messageCount = 0;

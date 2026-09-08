@@ -528,7 +528,10 @@ export function installOwnedSessionWorkerOwnerWatch(): void {
 		}
 		ownerGone = true;
 		process.off("disconnect", terminate);
-		if (process.connected) {
+		// process.disconnect only exists when the process was forked with an IPC
+		// channel, which is also the only case where process.connected is true.
+		// The checker cannot link the two, so test the method itself.
+		if (process.connected && process.disconnect) {
 			process.disconnect();
 		}
 		closeOwnerWatch = undefined;
