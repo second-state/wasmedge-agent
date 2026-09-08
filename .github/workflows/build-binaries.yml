@@ -62,7 +62,6 @@ jobs:
           INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           beta_version=
@@ -79,17 +78,31 @@ jobs:
             # Beta names itself from package.json plus this run, the way the
             # inherited push trigger did. Nothing about it is a choice the
             # dispatcher makes, so release_tag is not read here.
+            #
+            # The run, and not the attempt: a re-run finishes the release its
+            # first attempt started. Publishing under a version that moved with
+            # the attempt left the original destination -- immutable objects, a
+            # tag and a GitHub release -- permanently half-published, with the
+            # retry announcing a different release beside it.
             production_version=$(node -p "require('./package.json').version")
             build_ref="$GITHUB_SHA_VALUE"
-            beta_version="${production_version}-beta.${RUN_NUMBER}.${RUN_ATTEMPT}.${GITHUB_SHA_VALUE::7}"
+            beta_version="${production_version}-beta.${RUN_NUMBER}.${GITHUB_SHA_VALUE::7}"
             publish_beta=true
           elif [ "$EVENT_NAME" = workflow_dispatch ]; then
-            if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-              echo "Manual releases must run from the default branch (${DEFAULT_BRANCH}), not ${REF_NAME}." >&2
-              exit 1
-            fi
             if [ -z "$INPUT_RELEASE_TAG" ]; then
               echo "A production release needs release_tag (e.g., v0.0.1)." >&2
+              exit 1
+            fi
+            # From the default branch, or from the tag being published. The
+            # second is how a run that failed partway is finished: a tag names
+            # one commit, so re-running from it rebuilds the same bytes, and
+            # the immutability guards confirm what already went up instead of
+            # replacing it. Without it the only advice this workflow could
+            # give after a partial release -- re-run from the tagged commit --
+            # was advice it then refused to accept, because the branch had
+            # moved and the tag no longer named its head.
+            if [ "$REF_NAME" != "$DEFAULT_BRANCH" ] && [ "$REF_NAME" != "$INPUT_RELEASE_TAG" ]; then
+              echo "Manual releases run from ${DEFAULT_BRANCH} or from ${INPUT_RELEASE_TAG}, not ${REF_NAME}." >&2
               exit 1
             fi
             production_version="${INPUT_RELEASE_TAG#v}"
@@ -118,7 +131,7 @@ jobs:
           else
             production_version=$(node -p "require('./package.json').version")
             build_ref="$GITHUB_SHA_VALUE"
-            beta_version="${production_version}-beta.${RUN_NUMBER}.${RUN_ATTEMPT}.${GITHUB_SHA_VALUE::7}"
+            beta_version="${production_version}-beta.${RUN_NUMBER}.${GITHUB_SHA_VALUE::7}"
             publish_beta=true
 
             previous_version=
@@ -370,6 +383,36 @@ jobs:
           sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$PRODUCTION_DIR"
           sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" "v${PRODUCTION_VERSION}" "$PRODUCTION_DIR"
 
+      # The tag before the bytes. A run that published immutable R2 objects and
+      # then failed before the tag existed stranded the version: retrying from
+      # the default branch after it moved builds different bytes, which the R2
+      # guard refuses, and retrying from the tagged commit was impossible
+      # because there was no tag naming it. Created first, that recovery path
+      # exists for every failure after this point.
+      - name: Create the production tag
+        if: env.PUBLISH_PRODUCTION == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="v${PRODUCTION_VERSION}"
+
+          if tagged_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha 2>/dev/null); then
+            # Resolved through commits/ rather than the ref, so an annotated
+            # tag is compared by the commit it names rather than by its own
+            # object.
+            if [ "$tagged_sha" != "$BUILD_REF" ]; then
+              echo "${RELEASE_TAG} already names ${tagged_sha}, and this run builds ${BUILD_REF}." >&2
+              echo "Release a new version, or re-run this workflow from ${RELEASE_TAG}." >&2
+              exit 1
+            fi
+            echo "${RELEASE_TAG} already names this commit."
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="$BUILD_REF" > /dev/null
+            echo "Created ${RELEASE_TAG} at ${BUILD_REF}."
+          fi
+
       - name: Publish immutable production artifacts to R2
         if: env.PUBLISH_PRODUCTION == 'true'
         run: |
@@ -395,17 +438,20 @@ jobs:
         run: |
           RELEASE_TAG="v${PRODUCTION_VERSION}"
           PRODUCTION_DIR=release-artifacts/production
-          target_args=()
-          if [ "$BUILD_REF" != "$RELEASE_TAG" ]; then
-            target_args=(--target "$BUILD_REF")
-          fi
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* --clobber
+            # Only what is missing, and each asset compared as it is decided
+            # rather than trusted from the guard that ran before the artifacts
+            # went up. Nothing is clobbered: --clobber deletes before it
+            # uploads, which turns a retry into a window where a release that
+            # was complete is missing a file it already had, and leaves it
+            # that way if the retry dies there.
+            sh scripts/publish-github-release-assets.sh "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$PRODUCTION_DIR"
           else
+            # No --target: the step above created the tag, so the release
+            # attaches to a ref that already names this commit.
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
-              "${target_args[@]}" \
               --notes-file /tmp/release-notes.md \
               "$PRODUCTION_DIR"/*
           fi
@@ -506,17 +552,25 @@ jobs:
           # that never changed. A failure partway left that tag holding some of
           # this build and some of the last, while claiming to be one build.
           #
-          # beta_version already ends in the run, the attempt and the commit,
-          # so the tag below is one no other build can take. A create that
+          # beta_version already ends in the run and the commit, so the tag
+          # below is one no other build can take, and a re-run of this run
+          # completes that tag rather than opening a second one. A create that
           # fails partway leaves an incomplete release under a tag nothing
           # points at yet -- the channel pointer moves in the step after this
           # one -- so a half-finished beta is invisible rather than installable.
-          gh release create "v${BETA_VERSION}" \
-            --title "Beta (v${BETA_VERSION})" \
-            --target "$BUILD_REF" \
-            --notes-file /tmp/beta-release-notes.md \
-            --prerelease \
-            "$BETA_DIR"/*
+          if gh release view "v${BETA_VERSION}" >/dev/null 2>&1; then
+            # A re-run of this run, completing what its first attempt left
+            # behind. Each asset is compared as it is decided, and nothing
+            # already published is replaced.
+            sh scripts/publish-github-release-assets.sh "$GITHUB_REPOSITORY" "v${BETA_VERSION}" "$BETA_DIR"
+          else
+            gh release create "v${BETA_VERSION}" \
+              --title "Beta (v${BETA_VERSION})" \
+              --target "$BUILD_REF" \
+              --notes-file /tmp/beta-release-notes.md \
+              --prerelease \
+              "$BETA_DIR"/*
+          fi
 
           # Last, once both destinations carry this build. Moving these first
           # meant a later refusal left beta.json, the beta channel file and the
