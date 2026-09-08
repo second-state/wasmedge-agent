@@ -1782,8 +1782,18 @@ skip_cell_runtime_setup() {
 # template prebuild (vendor + warm) can succeed.
 prepare_rust_toolchain() {
 	[ "$wasmedge_agent_bootstrap_runtime_on_install" = 1 ] || return 0
-	ensure_rustup_and_target || return 0
-	ensure_wasmedge || return 0
+	# Called plainly, so `set -e` applies. These used to run as
+	# `ensure_... || return 0`, which turned every nonzero result into
+	# success and, because a function on the left of || runs with errexit
+	# suppressed, also stopped the commands inside them from failing the
+	# install. A rustup or WasmEdge installer that did not finish left an
+	# install that reported success with no toolchain and no runtime.
+	#
+	# Declining a component is not a failure: those paths report what to run
+	# by hand through skip_cell_runtime_setup and return 0, so the agent still
+	# installs.
+	ensure_rustup_and_target
+	ensure_wasmedge
 }
 
 ensure_rustup_and_target() {
@@ -1815,7 +1825,7 @@ ensure_rustup_and_target() {
 		prompt_status=$?
 		if [ "$prompt_status" -ne 2 ]; then
 			skip_cell_runtime_setup "Install rustup (rustup.rs), then run: rustup target add wasm32-wasip1"
-			return 1
+			return 0
 		fi
 		printf 'No terminal detected; installing Rust with rustup.\n'
 	fi
@@ -1837,9 +1847,22 @@ Adding the wasm32-wasip1 target." \
 	hash -r
 }
 
+# Downloaded, then run. `curl ... | sh` reports the shell's status and not
+# curl's, and POSIX sh has no pipefail to lean on, so a download that ended
+# early -- a truncated script, a proxy error page -- ran as far as it parsed
+# and reported success.
 run_rustup_install() {
-	curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
-		sh -s -- -y --no-modify-path --default-toolchain stable --target wasm32-wasip1
+	rustup_dir=$(create_temp_dir)
+	rustup_status=0
+	if ! curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "$rustup_dir/rustup-init.sh"; then
+		printf 'error: could not download the rustup installer.\n' >&2
+		rustup_status=1
+	elif ! sh "$rustup_dir/rustup-init.sh" -y --no-modify-path --default-toolchain stable --target wasm32-wasip1; then
+		printf 'error: the rustup installer did not finish.\n' >&2
+		rustup_status=1
+	fi
+	rm -rf "$rustup_dir"
+	return "$rustup_status"
 }
 
 ensure_wasmedge() {
@@ -1856,7 +1879,7 @@ ensure_wasmedge() {
 		prompt_status=$?
 		if [ "$prompt_status" -ne 2 ]; then
 			skip_cell_runtime_setup "Install WasmEdge (wasmedge.org), then run any rust cell to finish setup."
-			return 1
+			return 0
 		fi
 		printf 'No terminal detected; installing WasmEdge.\n'
 	fi
@@ -1874,8 +1897,20 @@ Installing to ~/.wasmedge." \
 	fi
 }
 
+# Downloaded, then run, for the reason run_rustup_install is.
 run_wasmedge_install() {
-	curl -fsSL https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash
+	wasmedge_dir=$(create_temp_dir)
+	wasmedge_status=0
+	if ! curl -fsSL https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh \
+		-o "$wasmedge_dir/install_v2.sh"; then
+		printf 'error: could not download the WasmEdge installer.\n' >&2
+		wasmedge_status=1
+	elif ! bash "$wasmedge_dir/install_v2.sh"; then
+		printf 'error: the WasmEdge installer did not finish.\n' >&2
+		wasmedge_status=1
+	fi
+	rm -rf "$wasmedge_dir"
+	return "$wasmedge_status"
 }
 
 install_wasmedge_agent_package() {
