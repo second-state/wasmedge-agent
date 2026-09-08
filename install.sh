@@ -73,6 +73,22 @@ wasmedge_agent_screen_render_lab_width=0
 wasmedge_agent_screen_compact=0
 wasmedge_agent_download_dir=
 wasmedge_agent_bootstrap_runtime_on_install=0
+# --yes and --now: answer every prompt with its default and install. --now is
+# the same mode by issue #5's definition of it, "run the non-interactive
+# installer immediately", and having it mean anything else here would make the
+# launcher's --now and this one two different things under one name.
+wasmedge_agent_assume_yes=0
+# --check: report on the runtime and change nothing.
+wasmedge_agent_check_only=0
+wasmedge_agent_requested_version=
+# The animated helpers run their command in the background and collect its
+# output in a temporary directory. Both are recorded here for the same reason
+# the download directory above is: a Ctrl-C leaves the helper's own cleanup
+# unreached, and what it was running is still running.
+wasmedge_agent_animation_dir=
+wasmedge_agent_animation_pid=
+# Where the doctor report is written, tracked for the same reason.
+wasmedge_agent_doctor_dir=
 wasmedge_agent_screen_title=
 wasmedge_agent_screen_status=
 wasmedge_agent_screen_detail=
@@ -80,6 +96,16 @@ wasmedge_agent_screen_question=
 wasmedge_agent_animation_frame=0
 
 main() {
+	parse_wasmedge_agent_arguments "$@"
+
+	# Before the release host is required: --check reads what is installed and
+	# downloads nothing, so it has to work on a host that has no host
+	# configured.
+	if [ "$wasmedge_agent_check_only" = 1 ]; then
+		check_wasmedge_agent_runtime
+		exit $?
+	fi
+
 	if [ "$wasmedge_agent_base_url" = "$wasmedge_agent_unconfigured_base_url" ]; then
 		printf 'error: installer download URL is not configured.\n' >&2
 		printf 'Set WASMEDGE_AGENT_DOWNLOAD_BASE_URL or use the installer published by the release workflow.\n' >&2
@@ -119,7 +145,7 @@ main() {
 		fi
 	fi
 
-	version="$(resolve_wasmedge_agent_version "$@")"
+	version="$(resolve_wasmedge_agent_version "$wasmedge_agent_requested_version")"
 	tarball_name="$wasmedge_agent_package-$version.tgz"
 	tarball_url="$wasmedge_agent_base_url/releases/v$version/$tarball_name"
 
@@ -136,6 +162,8 @@ main() {
 	install_wasmedge_agent_package "$wasmedge_agent_install_tarball"
 	rm -rf "$download_dir"
 	wasmedge_agent_download_dir=
+
+	run_wasmedge_agent_doctor
 
 	if [ "${WASMEDGE_AGENT_NODE_INSTALLED_STANDALONE:-0}" = 1 ]; then
 		wasmedge_agent_screen "WasmEdge Agent installed" "" "Checking your shell PATH." ""
@@ -165,6 +193,99 @@ EOF
 	fi
 }
 
+# Issue #3's last installer step: the agent repairs and validates its own
+# runtime. Run through the command as installed, so it also answers whether
+# the install produced a command that runs at all.
+#
+# A run that skipped runtime provisioning is a deliberate partial install --
+# skip_cell_runtime_setup has already printed what to do by hand -- so doctor
+# reports there and the install stands. When the runtime was provisioned, a
+# doctor that cannot fix what it found is a failed install, not a successful
+# one with advice.
+run_wasmedge_agent_doctor() {
+	doctor_path=$(command -v "$wasmedge_agent_cmd" 2>/dev/null) || doctor_path=
+	if [ -z "$doctor_path" ]; then
+		# Installed, but not on this shell's PATH yet. npm knows where it put
+		# it, and the PATH guidance further down is about the user's next
+		# shell rather than this step.
+		npm_prefix=$(npm prefix -g 2>/dev/null) || npm_prefix=
+		if [ -n "$npm_prefix" ] && [ -x "$npm_prefix/bin/$wasmedge_agent_cmd" ]; then
+			doctor_path="$npm_prefix/bin/$wasmedge_agent_cmd"
+		fi
+	fi
+	if [ -z "$doctor_path" ]; then
+		# npm reported success and there is no command: the install did not
+		# produce what it was for, and every check below is about a command
+		# that does not exist. Reporting success here also skipped the
+		# --version and doctor workflows issue #3 requires.
+		printf 'error: npm installed %s but no %s command was found on PATH or under the npm prefix.\n' \
+			"$wasmedge_agent_package" "$wasmedge_agent_cmd" >&2
+		exit 1
+	fi
+
+	# Asked for as JSON, and read as data. `doctor --fix` exits 0 whether or
+	# not the runtime it found is healthy, and that is not a defect to fix in
+	# it: --fix also reaps background services, and it is run as a maintenance
+	# command on hosts that have no Rust toolchain and never will. What is
+	# wrong is taking its status for an answer it does not carry, so the
+	# report is what this reads.
+	doctor_status=0
+	wasmedge_agent_doctor_dir=$(create_temp_dir)
+	doctor_report="$wasmedge_agent_doctor_dir/report.json"
+	if [ "$wasmedge_agent_screen_enabled" = 1 ]; then
+		# Written to a file rather than read through a command substitution.
+		# A substitution runs its command in a subshell, and the helper
+		# records the child it started and the directory it made in variables
+		# the traps read: set in a subshell they never reach the trap, so a
+		# Ctrl-C during doctor left it running and its directory behind while
+		# the installer reported itself interrupted.
+		wasmedge_agent_run_capture_with_animation "$doctor_report" \
+			"Checking the installation" \
+			"Checking the installation" \
+			"Running $wasmedge_agent_cmd doctor --fix." \
+			"$doctor_path" doctor --fix --json || doctor_status=$?
+	else
+		printf '\nRunning %s doctor --fix...\n' "$wasmedge_agent_cmd"
+		"$doctor_path" doctor --fix --json > "$doctor_report" || doctor_status=$?
+	fi
+
+	if [ "$doctor_status" -eq 0 ]; then
+		node -e '
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+	let report;
+	try {
+		report = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+	} catch (error) {
+		console.error("error: could not read the doctor report: " + error.message);
+		process.exit(1);
+	}
+	const runtime = Array.isArray(report.runtime) ? report.runtime : [];
+	const failed = runtime.filter((check) => check && check.ok === false);
+	for (const check of failed) console.error("  " + check.name + ": " + check.detail);
+	process.exit(runtime.length > 0 && failed.length === 0 ? 0 : 1);
+});
+' < "$doctor_report" || doctor_status=$?
+	fi
+
+	rm -rf "$wasmedge_agent_doctor_dir"
+	wasmedge_agent_doctor_dir=
+
+	if [ "$doctor_status" -eq 0 ]; then
+		return 0
+	fi
+
+	if [ "$wasmedge_agent_bootstrap_runtime_on_install" = 1 ]; then
+		printf 'error: %s doctor --fix could not repair the runtime it found.\n' "$wasmedge_agent_cmd" >&2
+		exit 1
+	fi
+
+	printf 'Warning: %s doctor --fix reported problems, and the runtime setup above was skipped.\n' \
+		"$wasmedge_agent_cmd" >&2
+	return 0
+}
+
 create_temp_dir() {
 	if command -v mktemp >/dev/null 2>&1; then
 		if tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/wasmedge-agent-install.XXXXXX" 2>/dev/null); then
@@ -183,11 +304,41 @@ wasmedge_agent_install_traps() {
 	trap 'wasmedge_agent_signal_cleanup 143' TERM
 }
 
+# Everything the tracked command started, children before their parent.
+#
+# The animated commands are package managers, npm installs and vendor
+# install scripts, and signalling only the process this shell started
+# leaves what that process started running -- with the terminal restored
+# and the installer gone, which is the state an interrupt is supposed to
+# avoid. Recurses through $1 rather than a variable, because a variable
+# would be the same one in every frame.
+wasmedge_agent_kill_tree() {
+	if command -v ps >/dev/null 2>&1; then
+		for wasmedge_agent_kill_child in $(ps -Ao pid=,ppid= 2>/dev/null |
+			awk -v parent="$1" '$2 == parent { print $1 }'); do
+			wasmedge_agent_kill_tree "$wasmedge_agent_kill_child"
+		done
+	fi
+	kill "$1" 2>/dev/null || true
+}
+
 wasmedge_agent_cleanup() {
 	status=$?
-	if [ -n "${wasmedge_agent_download_dir:-}" ] && [ -d "$wasmedge_agent_download_dir" ]; then
-		rm -rf "$wasmedge_agent_download_dir"
+	# The child first: it holds the directory below open, and on the signal
+	# path it is a curl or a doctor run that nothing else will stop.
+	if [ -n "${wasmedge_agent_animation_pid:-}" ]; then
+		wasmedge_agent_kill_tree "$wasmedge_agent_animation_pid"
+		wait "$wasmedge_agent_animation_pid" 2>/dev/null || true
+		wasmedge_agent_animation_pid=
 	fi
+	for wasmedge_agent_cleanup_dir in \
+		"${wasmedge_agent_animation_dir:-}" \
+		"${wasmedge_agent_doctor_dir:-}" \
+		"${wasmedge_agent_download_dir:-}"; do
+		if [ -n "$wasmedge_agent_cleanup_dir" ] && [ -d "$wasmedge_agent_cleanup_dir" ]; then
+			rm -rf "$wasmedge_agent_cleanup_dir"
+		fi
+	done
 	wasmedge_agent_restore_terminal
 	return "$status"
 }
@@ -742,6 +893,74 @@ wasmedge_agent_animation_detail() {
 	esac
 }
 
+# Animates until a background command exits, and returns that command's status.
+#
+# Every frame is drawn to /dev/tty, or to stderr when there is no terminal, so
+# a caller may run this inside a command substitution and capture the command's
+# own output and nothing else.
+wasmedge_agent_animate_until_exit() {
+	animate_title="$1"
+	animate_status="$2"
+	animate_details="$3"
+	animate_mode="$4"
+	animate_pid="$5"
+
+	wasmedge_agent_animation_frame=0
+	while kill -0 "$animate_pid" 2>/dev/null; do
+		wasmedge_agent_animation_frame=$((wasmedge_agent_animation_frame + 1))
+		animate_display=$(wasmedge_agent_animation_status "$animate_status" "$animate_details" "$animate_mode")
+		wasmedge_agent_screen "$animate_title" "$animate_display" "$(wasmedge_agent_animation_detail "$animate_details")" ""
+		sleep 0.18
+	done
+
+	wait "$animate_pid"
+}
+
+# The same animation, for a command whose output is the point of running it.
+#
+# The quiet helper folds stdout into the file it shows only when the command
+# fails, and then deletes it, so a caller that runs it in a command
+# substitution is handed an empty string. That is what `doctor --fix --json`
+# was read through: a healthy interactive install produced no report, and
+# failed on the report it could not parse. Here stdout stays separate and is
+# printed, and stderr is what gets shown when the command fails.
+wasmedge_agent_run_capture_with_animation() {
+	output_path="$1"
+	title="$2"
+	status="$3"
+	detail="$4"
+	shift 4
+
+	if [ "$wasmedge_agent_screen_enabled" != 1 ]; then
+		printf '%s\n' "$status" >&2
+		"$@" > "$output_path"
+		return
+	fi
+
+	output_dir=$(create_temp_dir)
+	wasmedge_agent_animation_dir="$output_dir"
+	error_file="$output_dir/error"
+	"$@" >"$output_path" 2>"$error_file" &
+	command_pid=$!
+	wasmedge_agent_animation_pid="$command_pid"
+	command_status=0
+	wasmedge_agent_animate_until_exit "$title" "$status" "$detail" pulse "$command_pid" ||
+		command_status=$?
+	# Cleared the moment it is reaped. Held any longer, a signal arriving
+	# while the output below is read would have the trap kill a pid the
+	# system may already have handed to something else.
+	wasmedge_agent_animation_pid=
+
+	if [ "$command_status" -ne 0 ] && [ -s "$error_file" ]; then
+		wasmedge_agent_restore_terminal
+		printf '\n' >&2
+		cat "$error_file" >&2
+	fi
+	wasmedge_agent_animation_dir=
+	rm -rf "$output_dir"
+	return "$command_status"
+}
+
 wasmedge_agent_run_quiet_with_animation() {
 	title="$1"
 	status="$2"
@@ -774,29 +993,22 @@ wasmedge_agent_run_quiet_with_animation_command() {
 	fi
 
 	output_dir=$(create_temp_dir)
+	wasmedge_agent_animation_dir="$output_dir"
 	output_file="$output_dir/output"
 	"$@" >"$output_file" 2>&1 &
 	command_pid=$!
-	wasmedge_agent_animation_frame=0
-
-	while kill -0 "$command_pid" 2>/dev/null; do
-		wasmedge_agent_animation_frame=$((wasmedge_agent_animation_frame + 1))
-		status_display=$(wasmedge_agent_animation_status "$status" "$details" "$status_mode")
-		wasmedge_agent_screen "$title" "$status_display" "$(wasmedge_agent_animation_detail "$details")" ""
-		sleep 0.18
-	done
-
-	if wait "$command_pid"; then
-		command_status=0
-	else
+	wasmedge_agent_animation_pid="$command_pid"
+	command_status=0
+	wasmedge_agent_animate_until_exit "$title" "$status" "$details" "$status_mode" "$command_pid" ||
 		command_status=$?
-	fi
+	wasmedge_agent_animation_pid=
 
 	if [ "$command_status" -ne 0 ] && [ -s "$output_file" ]; then
 		wasmedge_agent_restore_terminal
 		printf '\n' >&2
 		cat "$output_file" >&2
 	fi
+	wasmedge_agent_animation_dir=
 	rm -rf "$output_dir"
 	return "$command_status"
 }
@@ -805,6 +1017,13 @@ wasmedge_agent_prompt_yes_no() {
 	question="$1"
 	detail="$2"
 	input_prompt="$3"
+
+	# --yes and --now: every prompt here offers install as its default, so
+	# unattended means answering them rather than skipping the work behind
+	# them.
+	if [ "$wasmedge_agent_assume_yes" = 1 ]; then
+		return 0
+	fi
 
 	if ( : <>/dev/tty ) 2>/dev/null; then
 		prompt_input=tty
@@ -917,6 +1136,131 @@ run_preflight_checks() {
 	return "$status"
 }
 
+# The installer's modes, from issue #3's installer contract and issue #5's
+# definition of the launcher that drives it.
+#
+#   --check   report on the runtime and change nothing
+#   --yes     answer prompts with their defaults, for unattended installs
+#   --now     the same, spelled the way the launcher spells it
+#
+# Anything else option-shaped is refused rather than read as a version: the
+# version validator accepts hyphens, so `install.sh --check` used to resolve
+# the version `--check` and go looking for
+# releases/v--check/wasmedge-agent---check.tgz, which cannot exist.
+parse_wasmedge_agent_arguments() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--check)
+				wasmedge_agent_check_only=1
+				;;
+			--yes | -y | --now)
+				wasmedge_agent_assume_yes=1
+				;;
+			--help | -h)
+				print_wasmedge_agent_usage
+				exit 0
+				;;
+			-*)
+				printf 'error: unknown option: %s\n' "$1" >&2
+				print_wasmedge_agent_usage >&2
+				exit 1
+				;;
+			*)
+				if [ -n "$wasmedge_agent_requested_version" ]; then
+					printf 'error: unexpected argument: %s\n' "$1" >&2
+					print_wasmedge_agent_usage >&2
+					exit 1
+				fi
+				wasmedge_agent_requested_version="$1"
+				;;
+		esac
+		shift
+	done
+}
+
+print_wasmedge_agent_usage() {
+	cat <<EOF
+usage: install.sh [--check] [--yes|--now] [stable|beta|<version>]
+
+  --check      report on the installed runtime and change nothing
+  --yes,--now  answer prompts with their defaults, for unattended installs
+EOF
+}
+
+# Reports on the runtime issue #5 asks --check to verify: the agent, WasmEdge,
+# the Rust target, and the cell workspace. Reads only -- nothing here installs,
+# repairs, or writes, which is what makes it safe to run from a launcher on
+# every invocation.
+#
+# The agent's own doctor is the last word on the workspace, and it is run
+# without --fix precisely so it stays a report.
+check_wasmedge_agent_runtime() {
+	check_status=0
+
+	if command -v node >/dev/null 2>&1 &&
+		node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 8) ? 0 : 1)' >/dev/null 2>&1; then
+		printf 'ok       Node.js %s\n' "$(node --version)"
+	else
+		printf 'missing  Node.js 22.8.0 or newer\n'
+		check_status=1
+	fi
+
+	if command -v npm >/dev/null 2>&1; then
+		printf 'ok       npm %s\n' "$(npm --version 2>/dev/null)"
+	else
+		printf 'missing  npm\n'
+		check_status=1
+	fi
+
+	if command -v rustup >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/rustup" ]; then
+		if PATH="$HOME/.cargo/bin:$PATH" rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$'; then
+			printf 'ok       rustup with the wasm32-wasip1 target\n'
+		else
+			printf 'missing  the wasm32-wasip1 target (rustup target add wasm32-wasip1)\n'
+			check_status=1
+		fi
+	else
+		printf 'missing  rustup\n'
+		check_status=1
+	fi
+
+	if command -v wasmedge >/dev/null 2>&1 || [ -x "$HOME/.wasmedge/bin/wasmedge" ]; then
+		printf 'ok       WasmEdge\n'
+	else
+		printf 'missing  WasmEdge\n'
+		check_status=1
+	fi
+
+	check_agent_path=$(command -v "$wasmedge_agent_cmd" 2>/dev/null) || check_agent_path=
+	if [ -z "$check_agent_path" ]; then
+		check_npm_prefix=$(npm prefix -g 2>/dev/null) || check_npm_prefix=
+		if [ -n "$check_npm_prefix" ] && [ -x "$check_npm_prefix/bin/$wasmedge_agent_cmd" ]; then
+			check_agent_path="$check_npm_prefix/bin/$wasmedge_agent_cmd"
+		fi
+	fi
+
+	if [ -z "$check_agent_path" ]; then
+		printf 'missing  %s\n' "$wasmedge_agent_cmd"
+		return 1
+	fi
+
+	if check_version=$("$check_agent_path" --version 2>/dev/null); then
+		printf 'ok       %s %s\n' "$wasmedge_agent_cmd" "$check_version"
+	else
+		printf 'missing  a working %s (--version failed)\n' "$wasmedge_agent_cmd"
+		return 1
+	fi
+
+	if "$check_agent_path" doctor >/dev/null 2>&1; then
+		printf 'ok       %s doctor\n' "$wasmedge_agent_cmd"
+	else
+		printf 'missing  a healthy runtime (%s doctor reported problems)\n' "$wasmedge_agent_cmd"
+		check_status=1
+	fi
+
+	return "$check_status"
+}
+
 resolve_wasmedge_agent_version() {
 	if [ "${1:-}" ]; then
 		case "$1" in
@@ -1008,10 +1352,16 @@ install_node_npm_interactive() {
 		prompt_status=$?
 	fi
 	if [ "$prompt_status" -eq 2 ]; then
-		printf 'No terminal detected; install Node.js 22.8.0 or newer and npm, then run this installer again.\n'
-	else
-		printf '\nInstall Node.js 22.8.0 or newer and npm, then run this installer again.\n'
+		# No terminal is not a refusal, and the two runtime prompts below have
+		# always read it that way: `curl ... | sh` on a clean host is the case
+		# this installer exists for, and answering it with instructions to run
+		# the installer again left it unable to install anything at all.
+		printf 'No terminal detected; installing Node.js and npm with %s.\n' "$label"
+		install_node_npm "$method" "$label"
+		return
 	fi
+
+	printf '\nInstall Node.js 22.8.0 or newer and npm, then run this installer again.\n'
 	return 1
 }
 

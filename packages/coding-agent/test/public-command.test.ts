@@ -1,5 +1,9 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SELF_UPDATE_INTERACTIVE_CHILD_ENV } from "../src/config.js";
+import { ENV_AGENT_DIR, SELF_UPDATE_INTERACTIVE_CHILD_ENV } from "../src/config.js";
 
 const mocks = vi.hoisted(() => ({
 	daemonCommands: [] as string[][],
@@ -8,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	reapCalls: [] as Array<[boolean, boolean]>,
 	performReapCalls: [] as boolean[],
 	shutdownCalls: [] as Array<[boolean, boolean]>,
+	runtimeChecks: [] as Array<{ name: string; ok: boolean; detail: string }>,
 }));
 
 vi.mock("../src/cli/daemon-command.js", () => ({
@@ -27,7 +32,7 @@ vi.mock("../src/package-manager-cli.js", () => ({
 
 // Routing tests must not probe the real toolchain or touch the template.
 vi.mock("../src/core/rust-cell/doctor.js", () => ({
-	collectRuntimeChecks: () => [],
+	collectRuntimeChecks: () => mocks.runtimeChecks,
 	fixRuntime: () => [],
 }));
 
@@ -58,6 +63,7 @@ describe("public command routing", () => {
 	beforeEach(() => {
 		mocks.daemonCommands.length = 0;
 		mocks.packageCommands.length = 0;
+		mocks.runtimeChecks.length = 0;
 		mocks.psCalls.length = 0;
 		mocks.reapCalls.length = 0;
 		mocks.performReapCalls.length = 0;
@@ -366,4 +372,64 @@ describe("public command routing", () => {
 		expect(help).not.toContain("Examples:");
 		expect(help).not.toContain("Built-in Tool Names:");
 	});
+});
+
+describe("doctor exit status, end to end", () => {
+	const tempDirs: string[] = [];
+
+	afterEach(() => {
+		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** Runs the real CLI, with a runtime it cannot find anything in. */
+	function runDoctorCli(args: string[]): { status: number; output: string } {
+		const home = mkdtempSync(join(tmpdir(), "doctor-status-"));
+		tempDirs.push(home);
+		const result = spawnSync(
+			process.execPath,
+			[resolve(__dirname, "../../../node_modules/tsx/dist/cli.mjs"), resolve(__dirname, "../src/cli.ts"), ...args],
+			{
+				encoding: "utf-8",
+				env: {
+					...process.env,
+					HOME: home,
+					USERPROFILE: home,
+					// Named, and not there: findCargoBin and its neighbours read
+					// these first, so the checks fail for a reason this test
+					// controls rather than one the host happens to have.
+					WASMEDGE_AGENT_CARGO: join(home, "no-cargo"),
+					WASMEDGE_AGENT_WASMEDGE: join(home, "no-wasmedge"),
+					[ENV_AGENT_DIR]: join(home, "agent"),
+					PATH: join(home, "empty-bin"),
+					PI_SKIP_VERSION_CHECK: "1",
+				},
+			},
+		);
+		return { status: result.status ?? 1, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+	}
+
+	it.each([[["doctor"]], [["doctor", "--fix"]]])(
+		"reports a failing runtime through %s, and exits 0",
+		(args) => {
+			// The status is not the answer and cannot be: --fix also reaps
+			// background services, and it runs on hosts that will never have a
+			// Rust toolchain. install.sh reads the report instead, which is what
+			// this pins -- against the real command, on a runtime it cannot find
+			// anything in.
+			const doctor = runDoctorCli(args);
+
+			expect(doctor.output).toContain("[FAIL]");
+			expect(doctor.status).toBe(0);
+		},
+		60_000,
+	);
+
+	it("carries the same failures as data under --json", () => {
+		// The shape install.sh and install.sh --check read.
+		const doctor = runDoctorCli(["doctor", "--fix", "--json"]);
+
+		expect(doctor.status).toBe(0);
+		const report = JSON.parse(doctor.output) as { runtime: { ok: boolean }[] };
+		expect(report.runtime.some((check) => !check.ok)).toBe(true);
+	}, 60_000);
 });
