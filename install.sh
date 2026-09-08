@@ -2222,7 +2222,7 @@ ensure_wasmedge() {
 
 	if wasmedge_agent_prompt_yes_no \
 		"Install WasmEdge?" \
-		"Runs the official WasmEdge install script (installs to ~/.wasmedge)." \
+		"Uses the wasmedge-bin package where it is available, otherwise the official install script." \
 		"Install? [Y/n]"; then
 		:
 	else
@@ -2232,6 +2232,12 @@ ensure_wasmedge() {
 			return 0
 		fi
 		printf 'No terminal detected; installing WasmEdge.\n'
+	fi
+
+	# The order issue #1 fixed: the package first, the official installer as
+	# the fallback.
+	if install_wasmedge_bin_package; then
+		return 0
 	fi
 
 	if [ "$wasmedge_agent_screen_enabled" = 1 ]; then
@@ -2245,6 +2251,54 @@ Installing to ~/.wasmedge." \
 		printf '\nInstalling WasmEdge...\n\n'
 		run_wasmedge_install
 	fi
+}
+
+# Installs the wasmedge-bin package, and says whether it managed to.
+#
+# The package lives in the AUR, so it takes a helper: pacman alone cannot see
+# it. A host with no helper is every host that is not Arch, and it falls
+# straight through to the official installer that has always run here -- which
+# is also what a helper that fails does, because the fallback exists for
+# exactly that.
+install_wasmedge_bin_package() {
+	wasmedge_helper=
+	for wasmedge_candidate in yay paru; do
+		if command -v "$wasmedge_candidate" >/dev/null 2>&1; then
+			wasmedge_helper="$wasmedge_candidate"
+			break
+		fi
+	done
+	if [ -z "$wasmedge_helper" ]; then
+		return 1
+	fi
+
+	wasmedge_bin_status=0
+	if [ "$wasmedge_agent_screen_enabled" = 1 ]; then
+		# Same shape as the Node.js package installs: authorize sudo on a real
+		# terminal first, because the helper's own prompt would be invisible
+		# behind the animation and would simply hang.
+		wasmedge_agent_screen "Preparing the WasmEdge install" "" "This may ask for your sudo password." ""
+		wasmedge_agent_restore_terminal
+		printf '\n'
+		sudo -v || true
+		wasmedge_agent_run_quiet_with_animation_steps \
+			"Installing WasmEdge" \
+			"Installing WasmEdge" \
+			"Installing the wasmedge-bin package with $wasmedge_helper." \
+			"$wasmedge_helper" -S --needed --noconfirm wasmedge-bin || wasmedge_bin_status=$?
+	else
+		printf '\nInstalling WasmEdge with %s...\n\n' "$wasmedge_helper"
+		"$wasmedge_helper" -S --needed --noconfirm wasmedge-bin || wasmedge_bin_status=$?
+	fi
+
+	if [ "$wasmedge_bin_status" -ne 0 ]; then
+		printf 'Warning: %s could not install wasmedge-bin; using the official WasmEdge installer.\n' \
+			"$wasmedge_helper" >&2
+		return 1
+	fi
+
+	hash -r
+	return 0
 }
 
 # Downloaded, then run, for the reason run_rustup_install is.
