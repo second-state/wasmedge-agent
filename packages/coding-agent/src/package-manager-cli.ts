@@ -1,10 +1,8 @@
-import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import type { ImageContent, TextContent, UserMessage } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { join, resolve, sep } from "path";
+import { readFileSync, rmSync, statSync } from "fs";
+import { resolve, sep } from "path";
 import { selectConfig } from "./cli/config-selector.js";
 import {
 	ensureInteractiveDaemonRunning,
@@ -71,6 +69,7 @@ import {
 	DAEMON_WORKER_SUPERVISOR_SOCKET_ENV,
 } from "./modes/daemon/daemon-worker-protocol.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
+import { downloadVerifiedReleasePackage } from "./utils/verified-release-package.js";
 import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.js";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
@@ -436,6 +435,10 @@ interface SelfUpdatePlan {
 	 *  URL. Absent for a package-name install, where the registry client does
 	 *  its own integrity check. */
 	installSha256?: string;
+	/** Every artifact in the release with its digest, so the packages the
+	 *  installed tarball depends on can be checked too. They are URLs under
+	 *  the same release, and nothing else verifies them. */
+	releaseDigests?: Record<string, string>;
 	/** Why the release check could not run at all. Set means "report this and
 	 *  stop"; it is not the same as `shouldRun: false`, which means the check
 	 *  ran and found nothing newer. */
@@ -513,6 +516,7 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 				shouldRun: true,
 				targetVersion: latestRelease.version,
 				...(latestRelease.installSha256 ? { installSha256: latestRelease.installSha256 } : {}),
+				...(latestRelease.releaseDigests ? { releaseDigests: latestRelease.releaseDigests } : {}),
 			};
 		}
 	} catch (error) {
@@ -536,8 +540,6 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: false };
 }
 
-const SELF_UPDATE_DOWNLOAD_TIMEOUT_MS = 120_000;
-
 /** True for an install spec that is a URL we fetch ourselves.
  *
  *  The other shape a plan can carry is a package name, which the package
@@ -545,44 +547,6 @@ const SELF_UPDATE_DOWNLOAD_TIMEOUT_MS = 120_000;
  *  integrity metadata. This is the shape nothing checks. */
 function isRemoteTarballSpec(installSpec: string): boolean {
 	return /^https?:\/\//i.test(installSpec);
-}
-
-/** Fetches a release tarball, verifies it against the manifest's digest, and
- *  writes it where the package manager can install it from.
- *
- *  The install command used to receive the URL and hand it straight to
- *  `npm install -g`, which downloads it, unpacks it and runs its postinstall
- *  script. Nothing between the release host and that script ever compared the
- *  bytes to anything -- and the manifest has carried their digest all along,
- *  which is the same digest SHA256SUMS is generated from and the same one
- *  install.sh already verifies before it unpacks anything. The two install
- *  paths now check the same thing.
- *
- *  Buffered rather than streamed to disk: the check has to happen before any
- *  of it reaches the package manager, so a partial file on disk would be a
- *  file something else could pick up. A release tarball is a few tens of
- *  megabytes at most. */
-async function downloadVerifiedTarball(
-	url: string,
-	expectedSha256: string,
-): Promise<{ path: string; cleanup: () => void }> {
-	const response = await fetch(url, { signal: AbortSignal.timeout(SELF_UPDATE_DOWNLOAD_TIMEOUT_MS) });
-	if (!response.ok) {
-		throw new Error(`Downloading ${url} failed with HTTP ${response.status}.`);
-	}
-	const bytes = Buffer.from(await response.arrayBuffer());
-	const actual = createHash("sha256").update(bytes).digest("hex");
-	if (actual !== expectedSha256) {
-		throw new Error(
-			`The downloaded release does not match the checksum the manifest published for it. ` +
-				`Expected ${expectedSha256}, got ${actual}. Nothing was installed.`,
-		);
-	}
-	const dir = mkdtempSync(join(tmpdir(), "wasmedge-agent-update-"));
-	const name = url.split("/").pop() || "package.tgz";
-	const path = join(dir, name);
-	writeFileSync(path, bytes);
-	return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -1734,10 +1698,11 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 							return true;
 						}
 						try {
-							verifiedTarball = await downloadVerifiedTarball(
-								selfUpdatePlan.installSpec,
-								selfUpdatePlan.installSha256,
-							);
+							verifiedTarball = await downloadVerifiedReleasePackage({
+								installSpec: selfUpdatePlan.installSpec,
+								installSha256: selfUpdatePlan.installSha256,
+								releaseDigests: selfUpdatePlan.releaseDigests,
+							});
 						} catch (error: unknown) {
 							console.error(chalk.red(`Error: ${formatUnknownError(error)}`));
 							process.exitCode = 1;

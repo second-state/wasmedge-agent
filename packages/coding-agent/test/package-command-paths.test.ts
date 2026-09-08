@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_NAME, ENV_AGENT_DIR, PACKAGE_NAME, SELF_UPDATE_INTERACTIVE_CHILD_ENV, VERSION } from "../src/config.js";
 import { main } from "../src/main.js";
+import { packReleaseTarball } from "./release-tarball.js";
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -218,7 +219,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 		// The manifest has to carry the tarball's digest now: the update path
 		// verifies the bytes before the package manager sees them, so the stub
 		// answers the artifact request as well as the manifest one.
-		const tarballBytes = Buffer.from("a release tarball");
+		const tarballBytes = packReleaseTarball();
 		const fetchMock = vi.fn(async (input: string) =>
 			String(input).endsWith(".tgz")
 				? new Response(tarballBytes)
@@ -385,7 +386,7 @@ else {
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const tarballBytes = Buffer.from("a release tarball");
+		const tarballBytes = packReleaseTarball();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string) =>

@@ -126,7 +126,37 @@ describe("version checks", () => {
 			installSha256: sha256,
 			installSpec: `${configuredDownloadBaseUrl}/releases/v1.2.4/wasmedge-agent-1.2.4.tgz`,
 			packageName: "wasmedge-agent",
+			releaseDigests: { "pi-ai-1.2.4.tgz": "b".repeat(64), "wasmedge-agent-1.2.4.tgz": sha256 },
 			version: "1.2.4",
+		});
+	});
+
+	it("carries every artifact's digest, not only the one it installs", async () => {
+		// The tarball it installs names its own dependencies as URLs under the
+		// same release, and those are packages that get installed too. One
+		// digest covers a quarter of what lands.
+		const fetchMock = vi.fn(async () =>
+			Response.json({
+				package: "wasmedge-agent",
+				tarball: "releases/v1.2.4/wasmedge-agent-1.2.4.tgz",
+				tarballs: [
+					{ package: "@earendil-works/pi-ai", file: "pi-ai-1.2.4.tgz", sha256: "b".repeat(64) },
+					{ package: "wasmedge-agent", file: "wasmedge-agent-1.2.4.tgz", sha256: "a".repeat(64) },
+					{ package: "@earendil-works/pi-tui", file: "pi-tui-1.2.4.tgz", sha256: "nonsense" },
+				],
+				version: "v1.2.4",
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const release = await getLatestPiRelease("1.2.3");
+
+		// The unusable entry is dropped rather than carried: a caller that
+		// cannot check a file has to refuse it, and an entry that looks
+		// present but is not would read as checkable.
+		expect(release?.releaseDigests).toEqual({
+			"pi-ai-1.2.4.tgz": "b".repeat(64),
+			"wasmedge-agent-1.2.4.tgz": "a".repeat(64),
 		});
 	});
 
