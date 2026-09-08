@@ -55,6 +55,18 @@
   tarball nor a package, so nothing is identified to install. `--force` does
   not bypass any of it: it skips the version comparison, not the check that
   there is something real to install.
+- Both install paths verify every package in a release, not only the one they
+  were told to install. `SHA256SUMS` and the release manifest have always
+  covered all four tarballs, and three of them are dependencies of the fourth,
+  spelled as URLs that npm resolves itself: npm carries no integrity metadata
+  for a URL dependency, and a global install has no lockfile to hold any, so
+  three quarters of an install arrived unchecked beside a package that had
+  just been checksummed. `install.sh` and `update` now fetch each of those
+  packages, check it against the digest the release published for it, and
+  install it from a local file, so a replaced or truncated package stops the
+  install instead of running. `update` needs `tar` to do that, and without it
+  refuses rather than installing unverified packages, naming `install.sh`,
+  which does the same work with the same tar.
 - Commands that return early -- `doctor` and the other public commands,
   `config`, `--version`, `--help`, `--export` -- now print the deprecation
   warnings collected during startup, on stderr. They used to return before the
