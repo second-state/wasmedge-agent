@@ -1518,8 +1518,10 @@ verify_wasmedge_agent_package_checksum() {
 # Resolves the release's own packages to files this script has verified.
 #
 # SHA256SUMS covers all four published tarballs, but only one of them was ever
-# fetched here. The other three are dependencies of it, spelled as URLs under
-# the same release, and npm resolves those itself: npm carries no integrity
+# fetched here. The other three are reached from it as URLs under the same
+# release -- two from its own manifest, and the AI package again from inside
+# the core package's -- and npm resolves every one of them itself: npm carries
+# no integrity
 # metadata for a URL dependency, and a global install of a tarball has no
 # lockfile to hold any. So three quarters of what landed on the machine
 # arrived unchecked, beside a package this script had just checksummed.
@@ -1552,16 +1554,59 @@ stage_verified_wasmedge_agent_package() {
 		exit 1
 	fi
 
-	mkdir -p "$staged_root"
-	tar -xzf "$staged_tarball" -C "$staged_root"
+	mkdir -p "$staged_root/deps" "$staged_root/pkg"
+	printf '%s\n' "$staged_name" > "$staged_root/queue"
+	printf '%s\n' "$staged_name" > "$staged_root/seen"
+	: > "$staged_root/processed"
 
-	staged_manifest="$staged_root/package/package.json"
-	if [ ! -f "$staged_manifest" ]; then
-		printf 'error: %s does not contain package/package.json\n' "$staged_tarball" >&2
-		exit 1
-	fi
+	# Breadth-first over the release's own packages, because they depend on
+	# each other: the core package names the AI package by URL in its own
+	# manifest, so resolving the installed package's manifest and stopping
+	# there left npm fetching one of them the unchecked way.
+	while [ -s "$staged_root/queue" ]; do
+		staged_file=$(head -n 1 "$staged_root/queue")
+		tail -n +2 "$staged_root/queue" > "$staged_root/queue.rest"
+		mv "$staged_root/queue.rest" "$staged_root/queue"
+		printf '%s\n' "$staged_file" >> "$staged_root/processed"
 
-	node -e '
+		mkdir -p "$staged_root/pkg/$staged_file"
+		tar -xzf "$staged_dir/$staged_file" -C "$staged_root/pkg/$staged_file"
+		staged_manifest="$staged_root/pkg/$staged_file/package/package.json"
+		if [ ! -f "$staged_manifest" ]; then
+			printf 'error: %s does not contain package/package.json\n' "$staged_file" >&2
+			exit 1
+		fi
+
+		# A digest says the bytes are the ones published under this file name,
+		# and nothing about the package inside them. This install resolved one
+		# version and installs one package name, and every artifact of a
+		# release carries that release's version, so each package that arrives
+		# is held to those two facts.
+		if [ "$staged_file" = "$staged_name" ]; then
+			staged_expected_name="$wasmedge_agent_package"
+		else
+			staged_expected_name=
+		fi
+		node -e '
+const fs = require("fs");
+const [manifestPath, file, expectedName, expectedVersion] = process.argv.slice(1);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
+	console.error("error: " + file + " declares no package name and version.");
+	process.exit(1);
+}
+if (expectedName && manifest.name !== expectedName) {
+	console.error("error: " + file + " should be " + expectedName + " and contains " + manifest.name + ".");
+	process.exit(1);
+}
+if (manifest.version !== expectedVersion) {
+	console.error("error: " + file + " should be version " + expectedVersion + " and contains " +
+		manifest.version + ".");
+	process.exit(1);
+}
+' "$staged_manifest" "$staged_file" "$staged_expected_name" "$staged_version" < /dev/null
+
+		node -e '
 const fs = require("fs");
 const [manifestPath, prefix] = process.argv.slice(1);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -1570,33 +1615,55 @@ for (const field of ["dependencies", "optionalDependencies"]) {
 		if (typeof spec === "string" && spec.startsWith(prefix)) console.log(name + " " + spec.slice(prefix.length));
 	}
 }
-' "$staged_manifest" "$staged_prefix" > "$staged_root/internal-packages"
+' "$staged_manifest" "$staged_prefix" > "$staged_root/deps/$staged_file" < /dev/null
 
-	if [ ! -s "$staged_root/internal-packages" ]; then
+		while read -r staged_package staged_dep; do
+			[ -n "$staged_package" ] || continue
+			# The name becomes a URL and a path below. It comes out of a
+			# manifest already checked against its own digest, so this is not
+			# load-bearing; it costs nothing and keeps it from becoming so.
+			case "$staged_dep" in
+				"" | */* | *..*)
+					printf 'error: %s names an unusable release file: %s\n' "$staged_package" "$staged_dep" >&2
+					exit 1
+					;;
+			esac
+			# Recorded on sight rather than after staging: more than one
+			# package depends on the AI package, and a list of staged ones
+			# would fetch and verify it once per dependent.
+			if grep -qxF "$staged_dep" "$staged_root/seen"; then
+				continue
+			fi
+			printf '%s\n' "$staged_dep" >> "$staged_root/seen"
+			printf '%s\n' "$staged_dep" >> "$staged_root/queue"
+
+			wasmedge_agent_run_quiet_with_animation \
+				"Downloading WasmEdge Agent" \
+				"Downloading WasmEdge Agent v$staged_version" \
+				"Fetching $staged_package." \
+				curl -fsSL "$staged_prefix$staged_dep" -o "$staged_dir/$staged_dep"
+
+			verify_wasmedge_agent_package_checksum "$staged_checksums" "$staged_dir/$staged_dep"
+		done < "$staged_root/deps/$staged_file"
+	done
+
+	if [ ! -s "$staged_root/deps/$staged_name" ]; then
+		# Every dependency comes from the registry, which verifies its own.
+		# The downloaded tarball installs as it is.
 		return 0
 	fi
 
-	while read -r staged_package staged_file; do
-		[ -n "$staged_package" ] || continue
-		# The name comes out of a manifest this script has already checksummed,
-		# and it becomes both a URL and a path below. Refusing a separator here
-		# costs nothing and keeps that from being load-bearing.
-		case "$staged_file" in
-			"" | */* | *..*)
-				printf 'error: %s names an unusable release file: %s\n' "$staged_package" "$staged_file" >&2
-				exit 1
-				;;
-		esac
-
-		wasmedge_agent_run_quiet_with_animation \
-			"Downloading WasmEdge Agent" \
-			"Downloading WasmEdge Agent v$staged_version" \
-			"Fetching $staged_package." \
-			curl -fsSL "$staged_prefix$staged_file" -o "$staged_dir/$staged_file"
-
-		verify_wasmedge_agent_package_checksum "$staged_checksums" "$staged_dir/$staged_file"
-
-		node -e '
+	# Each package's final location is decided before any manifest is written:
+	# the graph has no order that makes a package's repacked path exist before
+	# a dependent has to name it, and npm reads these paths at install time,
+	# when all of them are on disk.
+	mkdir -p "$staged_root/repacked"
+	while read -r staged_file; do
+		[ -s "$staged_root/deps/$staged_file" ] || continue
+		staged_manifest="$staged_root/pkg/$staged_file/package/package.json"
+		while read -r staged_package staged_dep; do
+			[ -n "$staged_package" ] || continue
+			node -e '
 const fs = require("fs");
 const [manifestPath, name, filePath] = process.argv.slice(1);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -1604,12 +1671,22 @@ for (const field of ["dependencies", "optionalDependencies"]) {
 	if (manifest[field] && typeof manifest[field][name] === "string") manifest[field][name] = "file:" + filePath;
 }
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-' "$staged_manifest" "$staged_package" "$staged_dir/$staged_file"
-	done < "$staged_root/internal-packages"
+' "$staged_manifest" "$staged_package" "$(staged_release_install_path "$staged_dep")" < /dev/null
+		done < "$staged_root/deps/$staged_file"
+		(cd "$staged_root/pkg/$staged_file" && tar -czf "$staged_root/repacked/$staged_file" package)
+	done < "$staged_root/processed"
 
-	mkdir -p "$staged_root/repacked"
-	(cd "$staged_root" && tar -czf "repacked/$staged_name" package)
 	wasmedge_agent_install_tarball="$staged_root/repacked/$staged_name"
+}
+
+# Where a release package will be once staging is done: its repacked copy when
+# it carries dependencies on this release, and the verified download otherwise.
+staged_release_install_path() {
+	if [ -s "$staged_root/deps/$1" ]; then
+		printf '%s\n' "$staged_root/repacked/$1"
+	else
+		printf '%s\n' "$staged_dir/$1"
+	fi
 }
 
 wasmedge_agent_run_checksum_check() {

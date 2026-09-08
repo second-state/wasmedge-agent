@@ -27,6 +27,7 @@ const VERSION = "9.9.9";
 const ROOT_TARBALL = `wasmedge-agent-${VERSION}.tgz`;
 const AI_TARBALL = `wasmedge-agent-ai-${VERSION}.tgz`;
 const TUI_TARBALL = `wasmedge-agent-tui-${VERSION}.tgz`;
+const CORE_TARBALL = `wasmedge-agent-core-${VERSION}.tgz`;
 
 const tempDirs: string[] = [];
 
@@ -56,10 +57,18 @@ function stageRelease(): { workDir: string; releaseDir: string; downloadDir: str
 
 	packageTarball(workDir, AI_TARBALL, { name: "wasmedge-agent-ai", version: VERSION });
 	packageTarball(workDir, TUI_TARBALL, { name: "wasmedge-agent-tui", version: VERSION });
+	// A release package that names another one by URL in its own manifest,
+	// which is the shape the published core package really has.
+	packageTarball(workDir, CORE_TARBALL, {
+		name: "wasmedge-agent-core",
+		version: VERSION,
+		dependencies: { "@earendil-works/pi-ai": `${BASE_URL}/releases/v${VERSION}/${AI_TARBALL}` },
+	});
 	packageTarball(workDir, ROOT_TARBALL, {
 		name: "wasmedge-agent",
 		version: VERSION,
 		dependencies: {
+			"@earendil-works/pi-agent-core": `${BASE_URL}/releases/v${VERSION}/${CORE_TARBALL}`,
 			"@earendil-works/pi-ai": `${BASE_URL}/releases/v${VERSION}/${AI_TARBALL}`,
 			chalk: "^5.5.0",
 		},
@@ -68,7 +77,7 @@ function stageRelease(): { workDir: string; releaseDir: string; downloadDir: str
 		},
 	});
 
-	writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL]);
+	writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
 	return { workDir, releaseDir, downloadDir };
 }
 
@@ -153,8 +162,8 @@ printf '%s\\n' "$wasmedge_agent_install_tarball" > "${resultPath}"
 }
 
 /** What the installer hands npm, read back out of the tarball it built. */
-function stagedManifest(workDir: string, tarball: string): Record<string, Record<string, string>> {
-	const unpacked = join(workDir, "unpacked");
+function stagedManifest(workDir: string, tarball: string, into = "unpacked"): Record<string, Record<string, string>> {
+	const unpacked = join(workDir, into);
 	mkdirSync(unpacked, { recursive: true });
 	execFileSync("tar", ["-xzf", tarball, "-C", unpacked]);
 	return JSON.parse(readFileSync(join(unpacked, "package", "package.json"), "utf-8"));
@@ -179,6 +188,34 @@ describe("installer release package verification", () => {
 		expect(existsSync(join(downloadDir, TUI_TARBALL))).toBe(true);
 	});
 
+	it("resolves a release package that depends on another one", () => {
+		// Rewriting the installed package's manifest and stopping there left
+		// the core package naming the AI package by URL, for npm to fetch
+		// unchecked -- the same hole one level down.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+
+		const { status, staged } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).toBe(0);
+		const corePath = stagedManifest(workDir, staged).dependencies["@earendil-works/pi-agent-core"];
+		expect(corePath).toMatch(/^file:/);
+		const core = stagedManifest(workDir, corePath.slice("file:".length), "unpacked-core");
+
+		expect(core.dependencies["@earendil-works/pi-ai"]).toBe(`file:${join(downloadDir, AI_TARBALL)}`);
+	});
+
+	it("refuses a package reachable only through another release package", () => {
+		// The digests the installed package's own dependencies need are
+		// present; the one the core package needs is not.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+		writeChecksums(releaseDir, [ROOT_TARBALL, TUI_TARBALL, CORE_TARBALL]);
+
+		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain(`checksum for ${AI_TARBALL} was not found`);
+	});
+
 	it("leaves registry dependencies for npm to resolve", () => {
 		// Only our own packages move. Everything else keeps the range it had,
 		// and npm verifies those against the registry as it always did.
@@ -187,6 +224,34 @@ describe("installer release package verification", () => {
 		const { staged } = runStaging(workDir, releaseDir, downloadDir);
 
 		expect(stagedManifest(workDir, staged).dependencies.chalk).toBe("^5.5.0");
+	});
+
+	it("refuses a package that is not what its file name says", () => {
+		// The checksum says these bytes were published under this name. It
+		// says nothing about the package inside them, so a release assembled
+		// with one artifact under another's name passes it.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+		packageTarball(workDir, AI_TARBALL, { name: "wasmedge-agent-ai", version: "8.8.8" });
+		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
+
+		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("should be version 9.9.9 and contains 8.8.8");
+	});
+
+	it("refuses a package that is not the one being installed", () => {
+		// The channel resolved one package name; the artifact it points at is
+		// a different package of the same release. Both check out on their
+		// own.
+		const { workDir, releaseDir, downloadDir } = stageRelease();
+		packageTarball(workDir, ROOT_TARBALL, { name: "wasmedge-agent-ai", version: VERSION });
+		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
+
+		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("should be wasmedge-agent and contains wasmedge-agent-ai");
 	});
 
 	it("refuses a package whose bytes do not match the checksums", () => {
@@ -205,12 +270,12 @@ describe("installer release package verification", () => {
 		// An artifact that is not in the checksum file is one nothing has
 		// vouched for, so it is not installable either.
 		const { workDir, releaseDir, downloadDir } = stageRelease();
-		writeChecksums(releaseDir, [ROOT_TARBALL, TUI_TARBALL]);
+		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL]);
 
 		const { status, output } = runStaging(workDir, releaseDir, downloadDir);
 
 		expect(status).not.toBe(0);
-		expect(output).toContain(`checksum for ${AI_TARBALL} was not found`);
+		expect(output).toContain(`checksum for ${CORE_TARBALL} was not found`);
 	});
 
 	it("installs the downloaded tarball as it is when nothing needs resolving", () => {
@@ -223,7 +288,7 @@ describe("installer release package verification", () => {
 			version: VERSION,
 			dependencies: { chalk: "^5.5.0" },
 		});
-		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL]);
+		writeChecksums(releaseDir, [ROOT_TARBALL, AI_TARBALL, TUI_TARBALL, CORE_TARBALL]);
 
 		const { status, staged } = runStaging(workDir, releaseDir, downloadDir);
 
