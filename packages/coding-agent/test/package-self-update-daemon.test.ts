@@ -27,6 +27,7 @@ import {
 	prepareDaemonUpdateRestart,
 	runDaemonUpdateRestartCoordinator,
 } from "../src/package-manager-cli.js";
+import { packReleaseTarball } from "./release-tarball.js";
 
 interface MockSessionSummary {
 	id: string;
@@ -176,28 +177,39 @@ function useFixedOwnerHello(): void {
 	};
 }
 
-vi.mock("child_process", () => ({
-	spawn: vi.fn((command: string, args: string[]) => {
-		mockState.calls.push(`spawn:${command} ${args.join(" ")}`);
-		const exitCode = mockState.spawnExitCodes.shift() ?? 0;
-		const child = {
-			on(event: string, listener: unknown) {
-				if (event === "close") {
-					queueMicrotask(() => {
-						(listener as (code: number | null, signal: string | null) => void)(exitCode, null);
-					});
-				}
-				return child;
-			},
-		};
-		return child;
-	}),
-	spawnSync: vi.fn(() => ({
-		status: 0,
-		stdout: `${mockState.globalPackageRoot}\n`,
-		stderr: "",
-	})),
-}));
+vi.mock("child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("child_process")>();
+	return {
+		spawn: vi.fn((command: string, args: string[]) => {
+			mockState.calls.push(`spawn:${command} ${args.join(" ")}`);
+			const exitCode = mockState.spawnExitCodes.shift() ?? 0;
+			const child = {
+				on(event: string, listener: unknown) {
+					if (event === "close") {
+						queueMicrotask(() => {
+							(listener as (code: number | null, signal: string | null) => void)(exitCode, null);
+						});
+					}
+					return child;
+				},
+			};
+			return child;
+		}),
+		// tar runs for real. The update path unpacks the release it has just
+		// verified, to resolve the packages that release names as its own
+		// dependencies, and a stubbed tar leaves it nothing to read. Every other
+		// synchronous command is the package-root probe this suite answers itself.
+		spawnSync: vi.fn((command: string, args: readonly string[], options: Record<string, unknown>) =>
+			command === "tar"
+				? actual.spawnSync(command, args as string[], options)
+				: {
+						status: 0,
+						stdout: `${mockState.globalPackageRoot}\n`,
+						stderr: "",
+					},
+		),
+	};
+});
 
 vi.mock("../src/cli/daemon-update-restart.js", async (importOriginal) => {
 	const original = await importOriginal<typeof DaemonUpdateRestartModule>();
@@ -678,7 +690,7 @@ describe("self-update daemon restart", () => {
 		// What gets installed is the verified copy -- see the verification
 		// suite below -- but the release is still actionable without a package
 		// name, which is what this pins.
-		const body = Buffer.from("a release tarball");
+		const body = packReleaseTarball();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string) =>
@@ -723,7 +735,7 @@ describe("self-update daemon restart", () => {
 	});
 
 	describe("release tarball verification", () => {
-		const TARBALL_BYTES = Buffer.from("a release tarball");
+		const TARBALL_BYTES = packReleaseTarball();
 		const TARBALL_SHA256 = createHash("sha256").update(TARBALL_BYTES).digest("hex");
 
 		/** Answers the manifest request and the tarball request from one stub,
@@ -742,6 +754,77 @@ describe("self-update daemon restart", () => {
 				});
 			});
 		}
+
+		const RELEASE_BASE = "https://releases.example.test/releases/v99.0.0";
+		const DEPENDENCY = "wasmedge-agent-ai-99.0.0.tgz";
+		const DEPENDENCY_BYTES = packReleaseTarball({ name: "wasmedge-agent-ai", version: "99.0.0" });
+		const DEPENDENCY_SHA256 = createHash("sha256").update(DEPENDENCY_BYTES).digest("hex");
+		/** The shape a real release has: the public package depends on the
+		 *  others by URL, under the same release. */
+		const ROOT_WITH_DEPENDENCY = packReleaseTarball({
+			name: PACKAGE_NAME,
+			version: "99.0.0",
+			dependencies: { "@earendil-works/pi-ai": `${RELEASE_BASE}/${DEPENDENCY}` },
+		});
+		const ROOT_WITH_DEPENDENCY_SHA256 = createHash("sha256").update(ROOT_WITH_DEPENDENCY).digest("hex");
+
+		/** Serves a release whose public package has one dependency of its own. */
+		function stubReleaseWithDependency(tarballs: unknown) {
+			return vi.fn(async (input: string) => {
+				const url = String(input);
+				if (url.endsWith(DEPENDENCY)) return new Response(DEPENDENCY_BYTES);
+				if (url.endsWith(".tgz")) return new Response(ROOT_WITH_DEPENDENCY);
+				return Response.json({
+					package: PACKAGE_NAME,
+					tarball: "releases/v99.0.0/wasmedge-agent-99.0.0.tgz",
+					tarballs,
+					version: "99.0.0",
+				});
+			});
+		}
+
+		it("verifies the packages the release tarball depends on", async () => {
+			// The release publishes four tarballs; this path used to check the
+			// one it was told to install and let npm fetch the rest from URLs,
+			// which carry no integrity metadata of their own.
+			vi.stubGlobal(
+				"fetch",
+				stubReleaseWithDependency([
+					{ file: "wasmedge-agent-99.0.0.tgz", sha256: ROOT_WITH_DEPENDENCY_SHA256 },
+					{ file: DEPENDENCY, sha256: DEPENDENCY_SHA256 },
+				]),
+			);
+
+			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+			const install = mockState.calls.find((call) => call.startsWith("spawn:npm install -g"));
+			expect(install).toBeDefined();
+			expect(install).not.toContain("https://");
+		});
+
+		it("refuses the update when a dependency package cannot be verified", async () => {
+			// Nothing is installed: a package the release does not vouch for is
+			// one this cannot check, and installing it anyway would be the hole
+			// this closes.
+			vi.stubGlobal(
+				"fetch",
+				stubReleaseWithDependency([{ file: "wasmedge-agent-99.0.0.tgz", sha256: ROOT_WITH_DEPENDENCY_SHA256 }]),
+			);
+
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			try {
+				await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+				const reported = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+				expect(reported).toContain("publishes no SHA-256 for it");
+			} finally {
+				errorSpy.mockRestore();
+			}
+
+			expect(process.exitCode).toBe(1);
+			expect(mockState.calls.find((call) => call.startsWith("spawn:npm install -g"))).toBeUndefined();
+		});
 
 		it("installs the verified copy rather than the URL", async () => {
 			// The property that matters: what reaches the package manager is a

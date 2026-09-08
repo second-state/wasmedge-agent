@@ -15,6 +15,13 @@ export interface LatestPiRelease {
 	 *  the caller has to be able to tell "the host did not say" apart from
 	 *  "the host said something unusable". */
 	installSha256?: string;
+	/** Every artifact in the release, by file name, with the same digests
+	 *  SHA256SUMS is generated from. The tarball `installSpec` names has its
+	 *  own dependencies published beside it, and they are packages that get
+	 *  installed too, so the caller needs more than one digest to check
+	 *  everything that lands. Same validation as installSha256: an entry the
+	 *  host filled in with something unusable is left out. */
+	releaseDigests?: Record<string, string>;
 }
 
 interface ParsedVersion {
@@ -177,34 +184,42 @@ export async function getLatestPiRelease(
 	}
 	if (installSpec) {
 		release.installSpec = installSpec;
-		const sha256 = findTarballSha256(data.tarballs, data.tarball);
+		const digests = collectTarballDigests(data.tarballs);
+		const file = typeof data.tarball === "string" ? data.tarball.trim().split("/").pop() : undefined;
+		const sha256 = file ? digests[file] : undefined;
 		if (sha256) {
 			release.installSha256 = sha256;
+		}
+		if (Object.keys(digests).length > 0) {
+			release.releaseDigests = digests;
 		}
 	}
 	return release;
 }
 
-/** The manifest's SHA-256 for one tarball, matched on the file name that the
- *  `tarball` path ends with.
+/** The manifest's artifacts as file name to SHA-256.
  *
  *  The manifest carries both: `tarball` is the path to install, and `tarballs`
  *  is every artifact in the release with its digest, which is also what
- *  SHA256SUMS is generated from. They are matched by file name rather than by
- *  package, because `tarball` is a path and the package field beside it names
- *  the package the release publishes rather than the file. */
-function findTarballSha256(tarballs: unknown, tarballPath: unknown): string | undefined {
-	if (!Array.isArray(tarballs) || typeof tarballPath !== "string") return undefined;
-	const file = tarballPath.trim().split("/").pop();
-	if (!file) return undefined;
+ *  SHA256SUMS is generated from. Keyed by file name rather than by package,
+ *  because `tarball` is a path and the package field beside it names the
+ *  package the release publishes rather than the file -- and because the
+ *  dependencies inside a release package name files too.
+ *
+ *  An entry whose digest is not a hex digest of the right length is dropped:
+ *  a caller has to be able to tell "the release did not say" apart from "the
+ *  release said something unusable", and both leave the file unverifiable. */
+function collectTarballDigests(tarballs: unknown): Record<string, string> {
+	const digests: Record<string, string> = {};
+	if (!Array.isArray(tarballs)) return digests;
 	for (const entry of tarballs) {
 		if (!entry || typeof entry !== "object") continue;
 		const candidate = entry as { file?: unknown; sha256?: unknown };
-		if (candidate.file !== file || typeof candidate.sha256 !== "string") continue;
+		if (typeof candidate.file !== "string" || typeof candidate.sha256 !== "string") continue;
 		const sha256 = candidate.sha256.trim().toLowerCase();
-		if (/^[0-9a-f]{64}$/.test(sha256)) return sha256;
+		if (/^[0-9a-f]{64}$/.test(sha256)) digests[candidate.file] = sha256;
 	}
-	return undefined;
+	return digests;
 }
 
 export async function getLatestPiVersion(
