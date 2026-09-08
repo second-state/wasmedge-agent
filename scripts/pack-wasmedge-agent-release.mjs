@@ -159,7 +159,8 @@ Creates private npm tarballs for R2 distribution:
   <out-dir>/artifacts/wasmedge-agent-tui-<version>.tgz
   <out-dir>/artifacts/SHA256SUMS
   <out-dir>/artifacts/<channel>
-  <out-dir>/artifacts/latest.json (stable) or beta.json (beta)
+  <out-dir>/artifacts/release.json, published under the release prefix and
+    copied to latest.json (stable) or beta.json (beta) at the bucket root
 `);
 }
 
@@ -789,8 +790,13 @@ function main() {
 		tarballs.map((tarball) => `${tarball.sha256}  ${tarball.file}`).join("\n") + "\n",
 	);
 	writeFileSync(join(artifactsDir, args.channel), `v${releaseVersion}\n`);
-	const manifestName = args.channel === "stable" ? "latest.json" : "beta.json";
-	writeJson(join(artifactsDir, manifestName), {
+	// release.json, and not latest.json or beta.json: this object describes one
+	// release, and the channel names are where the publication puts a copy of
+	// it. The release keeps its own copy under its immutable prefix, which is
+	// what an install of a pinned version has to read -- it resolves no
+	// channel, so without it nothing tells that install which package each
+	// file it fetches is supposed to contain.
+	writeJson(join(artifactsDir, "release.json"), {
 		version: `v${releaseVersion}`,
 		package: publicPackageName,
 		tarball: `releases/v${releaseVersion}/${artifactFiles.get("coding-agent")}`,

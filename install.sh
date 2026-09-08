@@ -81,9 +81,15 @@ wasmedge_agent_assume_yes=0
 # --check: report on the runtime and change nothing.
 wasmedge_agent_check_only=0
 wasmedge_agent_requested_version=
+# The channel manifest this run resolved its version from, when it resolved
+# one. It names the package behind each artifact, which is what holds a
+# verified tarball to being the package the release meant it to be.
+wasmedge_agent_channel_manifest=
+# The temporary directory that manifest lives in, so the run can remove it.
+wasmedge_agent_channel_dir=
 # The animated helpers run their command in the background and collect its
 # output in a temporary directory. Both are recorded here for the same reason
-# the download directory above is: a Ctrl-C leaves the helper's own cleanup
+# the directories above are: a Ctrl-C leaves the helper's own cleanup
 # unreached, and what it was running is still running.
 wasmedge_agent_animation_dir=
 wasmedge_agent_animation_pid=
@@ -145,7 +151,12 @@ main() {
 		fi
 	fi
 
+	# Prepared here rather than inside the resolver: that runs in a command
+	# substitution, so a path it chose would be lost with its subshell.
+	wasmedge_agent_channel_dir=$(create_temp_dir)
+	wasmedge_agent_channel_manifest="$wasmedge_agent_channel_dir/channel.json"
 	version="$(resolve_wasmedge_agent_version "$wasmedge_agent_requested_version")"
+	fetch_wasmedge_agent_release_manifest "$version"
 	tarball_name="$wasmedge_agent_package-$version.tgz"
 	tarball_url="$wasmedge_agent_base_url/releases/v$version/$tarball_name"
 
@@ -160,8 +171,10 @@ main() {
 	download_wasmedge_agent_package "$version" "$tarball_url" "$tarball_path"
 	stage_verified_wasmedge_agent_package "$version" "$tarball_path" "$download_dir/SHA256SUMS"
 	install_wasmedge_agent_package "$wasmedge_agent_install_tarball"
-	rm -rf "$download_dir"
+	rm -rf "$download_dir" "$wasmedge_agent_channel_dir"
 	wasmedge_agent_download_dir=
+	wasmedge_agent_channel_dir=
+	wasmedge_agent_channel_manifest=
 
 	run_wasmedge_agent_doctor
 
@@ -334,7 +347,8 @@ wasmedge_agent_cleanup() {
 	for wasmedge_agent_cleanup_dir in \
 		"${wasmedge_agent_animation_dir:-}" \
 		"${wasmedge_agent_doctor_dir:-}" \
-		"${wasmedge_agent_download_dir:-}"; do
+		"${wasmedge_agent_download_dir:-}" \
+		"${wasmedge_agent_channel_dir:-}"; do
 		if [ -n "$wasmedge_agent_cleanup_dir" ] && [ -d "$wasmedge_agent_cleanup_dir" ]; then
 			rm -rf "$wasmedge_agent_cleanup_dir"
 		fi
@@ -1251,7 +1265,21 @@ check_wasmedge_agent_runtime() {
 		return 1
 	fi
 
-	if "$check_agent_path" doctor >/dev/null 2>&1; then
+	# Read out of the report rather than from its exit status: `doctor` reports
+	# and exits 0 whatever it finds, and `doctor --fix` is the mode that
+	# repairs, which is the one thing --check must not do.
+	if check_report=$("$check_agent_path" doctor --json 2>/dev/null) &&
+		printf '%s' "$check_report" | node -e '
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+	const report = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+	const runtime = Array.isArray(report.runtime) ? report.runtime : [];
+	const failed = runtime.filter((check) => check && check.ok === false);
+	for (const check of failed) console.log("missing  " + check.name + ": " + check.detail);
+	process.exit(runtime.length > 0 && failed.length === 0 ? 0 : 1);
+});
+'; then
 		printf 'ok       %s doctor\n' "$wasmedge_agent_cmd"
 	else
 		printf 'missing  a healthy runtime (%s doctor reported problems)\n' "$wasmedge_agent_cmd"
@@ -1294,24 +1322,82 @@ resolve_wasmedge_agent_version() {
 			;;
 	esac
 
-	channel_dir=$(create_temp_dir)
-	channel_path="$channel_dir/$release_channel"
+	# The JSON manifest, which is the object the installed agent's own update
+	# check reads. A channel used to be published twice -- as this JSON and as
+	# a one-line text file -- and read once each way, so a publication that
+	# moved one and failed before the other left fresh installs and installed
+	# agents resolving different releases. One object answers both now; the
+	# text file is still published for anything outside this repository that
+	# reads it, and nothing here depends on the two agreeing.
+	case "$release_channel" in
+		stable) channel_manifest=latest.json ;;
+		*) channel_manifest="$release_channel.json" ;;
+	esac
+
+	if [ -z "$wasmedge_agent_channel_manifest" ]; then
+		printf 'error: no path was prepared for the channel manifest.\n' >&2
+		exit 1
+	fi
 	if ! wasmedge_agent_run_quiet_with_animation \
 		"Resolving latest release" \
 		"Resolving latest release" \
 		"Checking the $release_channel release channel." \
-		curl -fsSL "$wasmedge_agent_base_url/$release_channel" -o "$channel_path"; then
-		rm -rf "$channel_dir"
-		printf 'error: could not resolve latest WasmEdge Agent version from %s/%s\n' "$wasmedge_agent_base_url" "$release_channel" >&2
+		curl -fsSL "$wasmedge_agent_base_url/$channel_manifest" -o "$wasmedge_agent_channel_manifest"; then
+		printf 'error: could not resolve latest WasmEdge Agent version from %s/%s\n' \
+			"$wasmedge_agent_base_url" "$channel_manifest" >&2
 		exit 1
 	fi
-	channel_version="$(tr -d '[:space:]' <"$channel_path")"
-	rm -rf "$channel_dir"
+
+	channel_version=$(node -e '
+const fs = require("fs");
+const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (typeof manifest.version !== "string" || !manifest.version.trim()) process.exit(1);
+console.log(manifest.version.trim());
+' "$wasmedge_agent_channel_manifest" < /dev/null) || channel_version=
 	if [ -z "$channel_version" ]; then
-		printf 'error: could not resolve latest WasmEdge Agent version from %s/%s\n' "$wasmedge_agent_base_url" "$release_channel" >&2
+		printf 'error: %s/%s named no version.\n' "$wasmedge_agent_base_url" "$channel_manifest" >&2
 		exit 1
 	fi
+
 	normalize_version "$channel_version"
+}
+
+# The manifest of the release being installed, when resolving a channel did not
+# already read one.
+#
+# Resolving a channel leaves that channel manifest behind, and it is the only
+# thing that says which package each file of the release contains. An install
+# that names a version resolves no channel, so it had none of that: the three
+# packages it fetched beside the one it was asked for were held to their
+# digests alone, and a digest says the bytes are the ones published under a
+# file name and nothing about what is inside them.
+#
+# Every release publishes this object under its own prefix as well as at the
+# channel names, so a version is enough to ask for one. Missing is fatal, since
+# it is what the packages that arrive are checked against.
+fetch_wasmedge_agent_release_manifest() {
+	manifest_version="$1"
+
+	if [ -s "$wasmedge_agent_channel_manifest" ]; then
+		return 0
+	fi
+
+	if ! command -v curl >/dev/null 2>&1; then
+		printf 'error: curl is required to read what WasmEdge Agent v%s publishes.\n' "$manifest_version" >&2
+		exit 1
+	fi
+
+	if ! wasmedge_agent_run_quiet_with_animation \
+		"Reading release v$manifest_version" \
+		"Reading release v$manifest_version" \
+		"Asking what v$manifest_version publishes." \
+		curl -fsSL "$wasmedge_agent_base_url/releases/v$manifest_version/release.json" \
+			-o "$wasmedge_agent_channel_manifest"; then
+		printf 'error: could not read %s/releases/v%s/release.json\n' \
+			"$wasmedge_agent_base_url" "$manifest_version" >&2
+		printf 'It names the package behind each file this installs, and nothing else does.\n' >&2
+		exit 1
+	fi
 }
 
 normalize_version() {
@@ -1937,16 +2023,37 @@ stage_verified_wasmedge_agent_package() {
 		else
 			staged_expected_name=
 		fi
+		if [ -n "${wasmedge_agent_channel_manifest:-}" ] && [ -f "$wasmedge_agent_channel_manifest" ]; then
+			staged_channel_manifest="$wasmedge_agent_channel_manifest"
+		else
+			staged_channel_manifest=
+		fi
 		node -e '
 const fs = require("fs");
-const [manifestPath, file, expectedName, expectedVersion] = process.argv.slice(1);
+const [manifestPath, file, expectedName, expectedVersion, channelManifestPath] = process.argv.slice(1);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
 	console.error("error: " + file + " declares no package name and version.");
 	process.exit(1);
 }
-if (expectedName && manifest.name !== expectedName) {
-	console.error("error: " + file + " should be " + expectedName + " and contains " + manifest.name + ".");
+// What the file has to contain. The install target names the root, and the
+// release manifest names every artifact -- which is the only thing that can:
+// a digest says nothing about what is inside the bytes, the file name is a
+// choice the packer makes, and a package that depends on another one keys it
+// by its source package name rather than by the branded name its artifact
+// carries. An artifact nothing names cannot be checked, and is refused.
+let required = expectedName;
+if (!required && channelManifestPath) {
+	const channel = JSON.parse(fs.readFileSync(channelManifestPath, "utf8"));
+	const entry = (Array.isArray(channel.tarballs) ? channel.tarballs : []).find((each) => each && each.file === file);
+	if (entry && typeof entry.package === "string") required = entry.package;
+}
+if (!required) {
+	console.error("error: the release manifest does not say which package " + file + " should contain.");
+	process.exit(1);
+}
+if (manifest.name !== required) {
+	console.error("error: " + file + " should be " + required + " and contains " + manifest.name + ".");
 	process.exit(1);
 }
 if (manifest.version !== expectedVersion) {
@@ -1954,7 +2061,7 @@ if (manifest.version !== expectedVersion) {
 		manifest.version + ".");
 	process.exit(1);
 }
-' "$staged_manifest" "$staged_file" "$staged_expected_name" "$staged_version" < /dev/null
+' "$staged_manifest" "$staged_file" "$staged_expected_name" "$staged_version" "$staged_channel_manifest" < /dev/null
 
 		node -e '
 const fs = require("fs");

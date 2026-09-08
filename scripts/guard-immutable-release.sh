@@ -45,6 +45,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 test -f "$local_dir/SHA256SUMS"
+test -f "$local_dir/release.json"
 
 # Listing the whole prefix, not just SHA256SUMS. A publish that failed after
 # its tarballs and before its checksums leaves a release a SHA256SUMS-only
@@ -72,7 +73,7 @@ if [ ! -s "$work/published-keys" ]; then
 	exit 0
 fi
 
-for artifact in "$local_dir"/*.tgz "$local_dir/SHA256SUMS"; do
+for artifact in "$local_dir"/*.tgz "$local_dir/SHA256SUMS" "$local_dir/release.json"; do
 	echo "$prefix/$(basename "$artifact")"
 done | sort > "$work/local-keys"
 
