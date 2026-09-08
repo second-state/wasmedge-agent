@@ -68,7 +68,12 @@ export type CacheRetention = "none" | "short" | "long";
 
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | null;
+/**
+ * Mirror of the OpenAI Responses `service_tier` union. `types.ts` stays free of
+ * external imports, so this list is maintained by hand and has to be widened
+ * whenever the OpenAI SDK adds a tier.
+ */
+export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "fast" | "ultrafast" | null;
 
 export interface ProviderResponse {
 	status: number;
