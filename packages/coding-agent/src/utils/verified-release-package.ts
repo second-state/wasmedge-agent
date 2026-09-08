@@ -30,6 +30,15 @@ export interface VerifiedReleasePackageOptions {
 	installSha256: string;
 	/** Every artifact in the release, by file name, from the manifest. */
 	releaseDigests?: Record<string, string>;
+	/** What the release manifest says it is publishing: the version, the
+	 *  package name it installs, and the package name behind each artifact
+	 *  file. A digest says the bytes are the ones published under a file name,
+	 *  and nothing about the package inside them, so these are what the
+	 *  packages that arrive are held to. Each is checked only when the
+	 *  manifest carries it. */
+	expectedVersion?: string;
+	expectedPackageName?: string;
+	releasePackageNames?: Record<string, string>;
 	fetchImpl?: typeof fetch;
 	/** The tar to run. A parameter so a test can point it at something that is
 	 *  not there, which is the case that has to fail closed. */
@@ -46,12 +55,15 @@ export async function downloadVerifiedReleasePackage(
 	const dir = mkdtempSync(join(tmpdir(), "wasmedge-agent-update-"));
 	const cleanup = () => rmSync(dir, { recursive: true, force: true });
 	try {
-		const name = options.installSpec.split("/").pop() || "package.tgz";
-		const path = join(dir, name);
+		// The install spec is a URL, so its last segment is its file name
+		// whatever the host runs on. Paths below use basename, which is not
+		// the same question on Windows.
+		const file = options.installSpec.split("/").pop() || "package.tgz";
+		const path = join(dir, file);
 		await fetchVerified(options, options.installSpec, options.installSha256, path);
-		const verified = [name];
+		const verified = [file];
 
-		const staged = await stageInternalPackages(options, dir, path, verified);
+		const staged = await stageInternalPackages(options, dir, file, path, verified);
 		return { path: staged, cleanup, verified };
 	} catch (error) {
 		cleanup();
@@ -59,7 +71,17 @@ export async function downloadVerifiedReleasePackage(
 	}
 }
 
-/** Resolves the installed package's own release dependencies to local files.
+/** One package of this release, downloaded and checked. */
+interface StagedPackage {
+	/** The verified tarball as downloaded. */
+	downloaded: string;
+	/** Where it was unpacked, or undefined when it did not need to be. */
+	unpacked?: string;
+	/** Its dependencies on other packages of this release. */
+	internal: { field: string; name: string; file: string }[];
+}
+
+/** Resolves every release package reachable from the installed one.
  *
  *  The release publishes four tarballs. Three of them are dependencies of the
  *  fourth, spelled as URLs under the same release, and npm resolves those
@@ -67,10 +89,15 @@ export async function downloadVerifiedReleasePackage(
  *  in a global install to hold any. Verifying only the tarball named on the
  *  command line therefore covered a quarter of what arrived.
  *
- *  So they are fetched here, checked against the manifest that already
- *  publishes their digests, and written into the package as file: paths. npm
- *  installs those from disk and still resolves each package's own registry
- *  dependencies as before.
+ *  The graph is walked rather than the root manifest alone, because those
+ *  packages depend on each other too: the core package names the AI package
+ *  by URL in its own manifest, so rewriting the root and stopping there left
+ *  npm fetching one package the same unchecked way as before.
+ *
+ *  Every package is fetched, checked against the digest the release already
+ *  publishes for it, and rewritten so each edge of that graph points at a
+ *  local file. npm installs those from disk and still resolves each package's
+ *  registry dependencies as before.
  *
  *  Returns the tarball to install: the downloaded one when the release names
  *  no packages of its own, and a repacked one when it does.
@@ -78,62 +105,154 @@ export async function downloadVerifiedReleasePackage(
 async function stageInternalPackages(
 	options: VerifiedReleasePackageOptions,
 	dir: string,
-	tarballPath: string,
+	rootFile: string,
+	rootPath: string,
 	verified: string[],
 ): Promise<string> {
 	const releasePrefix = options.installSpec.slice(0, options.installSpec.lastIndexOf("/") + 1);
-	const root = join(dir, "staged");
-	mkdirSync(root, { recursive: true });
+	const digests = options.releaseDigests ?? {};
+	const staged = new Map<string, StagedPackage>();
+	// Every artifact of one release carries that release's version, so the
+	// package installed sets what the packages it pulls in have to be.
+	let rootVersion: string | undefined;
+	const queue = [{ file: rootFile, downloaded: rootPath }];
+	// Membership is recorded when a package is queued rather than when it is
+	// staged: more than one package depends on the AI package, and a set that
+	// only knew about staged ones would fetch and verify it once per
+	// dependent.
+	const seen = new Set([rootFile]);
 
-	// Unpacked before the manifest can be read, and the manifest is what says
-	// whether any of this is needed -- so tar is required by any release that
-	// publishes its own packages, which is every release this fork builds.
-	runTar(options, ["-xzf", tarballPath, "-C", root]);
+	while (queue.length > 0) {
+		const { file, downloaded } = queue.shift() as { file: string; downloaded: string };
 
-	const manifestPath = join(root, "package", "package.json");
-	const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, Record<string, string>>;
-	const internal: { name: string; field: string; file: string }[] = [];
+		// Unpacked before its manifest can be read, and the manifest is what
+		// says whether any of this is needed -- so tar is required by any
+		// release that publishes packages of its own, which is every release
+		// this fork builds.
+		const unpacked = join(dir, "staged", file);
+		mkdirSync(unpacked, { recursive: true });
+		runTar(options, ["-xzf", downloaded, "-C", unpacked]);
+		const manifest = readManifest(unpacked);
+		const identity = assertPackageIdentity(options, file, manifest, file === rootFile ? undefined : rootVersion);
+		if (file === rootFile) rootVersion = identity.version;
+		const internal = internalDependencies(manifest, releasePrefix);
+		staged.set(file, { downloaded, unpacked, internal });
+
+		for (const dependency of internal) {
+			if (seen.has(dependency.file)) continue;
+			seen.add(dependency.file);
+			assertUsableReleaseFile(dependency);
+			const sha256 = digests[dependency.file];
+			if (!sha256) {
+				throw new Error(
+					`The release manifest names ${dependency.file} as a dependency of the package being installed ` +
+						"but publishes no SHA-256 for it, so it cannot be verified and nothing was installed.",
+				);
+			}
+			const dependencyPath = join(dir, dependency.file);
+			await fetchVerified(options, `${releasePrefix}${dependency.file}`, sha256, dependencyPath);
+			verified.push(dependency.file);
+			queue.push({ file: dependency.file, downloaded: dependencyPath });
+		}
+	}
+
+	const root = staged.get(rootFile) as StagedPackage;
+	if (root.internal.length === 0) {
+		return root.downloaded;
+	}
+
+	// Where each package will be once this is done. Decided for all of them
+	// before any manifest is written, because the graph has no order that
+	// makes a package's own repacked path exist before a dependent needs to
+	// name it: npm reads these paths at install time, when every one of them
+	// is on disk.
+	const repacked = join(dir, "repacked");
+	mkdirSync(repacked, { recursive: true });
+	const installPath = new Map<string, string>();
+	for (const [file, entry] of staged) {
+		installPath.set(file, entry.internal.length > 0 ? join(repacked, file) : entry.downloaded);
+	}
+
+	for (const [file, entry] of staged) {
+		if (entry.internal.length === 0 || !entry.unpacked) continue;
+		const manifest = readManifest(entry.unpacked);
+		for (const dependency of entry.internal) {
+			manifest[dependency.field][dependency.name] = `file:${installPath.get(dependency.file)}`;
+		}
+		writeFileSync(join(entry.unpacked, "package", "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+		runTar(options, ["-czf", installPath.get(file) as string, "-C", entry.unpacked, "package"]);
+	}
+
+	return installPath.get(rootFile) as string;
+}
+
+/** Checks that a verified package is the package the release says it is.
+ *
+ *  A digest says these bytes are the ones published under this file name, and
+ *  nothing about what is inside them. A release assembled with one artifact
+ *  under another's name, or a manifest advertising a version its own package
+ *  does not carry, passes every checksum here and installs the wrong package.
+ *
+ *  Held to what the manifest itself publishes rather than to the shape of the
+ *  file name: the packer happens to name artifacts `<name>-<version>.tgz`, and
+ *  a check built on that would reject a release that names its files any other
+ *  way while proving nothing the manifest cannot say directly.
+ */
+function assertPackageIdentity(
+	options: VerifiedReleasePackageOptions,
+	file: string,
+	manifest: Record<string, Record<string, string>>,
+	expectedVersion: string | undefined,
+): { name: string; version: string } {
+	const { name, version } = manifest as unknown as { name?: string; version?: string };
+	if (typeof name !== "string" || typeof version !== "string") {
+		throw new Error(`${file} declares no package name and version. Nothing was installed.`);
+	}
+
+	const expectedName =
+		options.releasePackageNames?.[file] ??
+		(file === options.installSpec.split("/").pop() ? options.expectedPackageName : undefined);
+	if (expectedName !== undefined && name !== expectedName) {
+		throw new Error(`${file} should be ${expectedName} and contains ${name}. Nothing was installed.`);
+	}
+
+	const requiredVersion =
+		expectedVersion ?? (file === options.installSpec.split("/").pop() ? options.expectedVersion : undefined);
+	if (requiredVersion !== undefined && version !== requiredVersion) {
+		throw new Error(`${file} should be version ${requiredVersion} and contains ${version}. Nothing was installed.`);
+	}
+
+	return { name, version };
+}
+
+function readManifest(unpacked: string): Record<string, Record<string, string>> {
+	return JSON.parse(readFileSync(join(unpacked, "package", "package.json"), "utf-8"));
+}
+
+/** The manifest's dependencies on other packages of the same release. */
+function internalDependencies(
+	manifest: Record<string, Record<string, string>>,
+	releasePrefix: string,
+): { field: string; name: string; file: string }[] {
+	const internal: { field: string; name: string; file: string }[] = [];
 	for (const field of ["dependencies", "optionalDependencies"]) {
 		for (const [name, spec] of Object.entries(manifest[field] ?? {})) {
 			if (typeof spec !== "string" || !spec.startsWith(releasePrefix)) continue;
-			internal.push({ name, field, file: spec.slice(releasePrefix.length) });
+			internal.push({ field, name, file: spec.slice(releasePrefix.length) });
 		}
 	}
+	return internal;
+}
 
-	if (internal.length === 0) {
-		return tarballPath;
+/** The file name becomes a URL and a path. It comes out of a manifest already
+ *  checked against its own digest, so this is not load-bearing; it costs
+ *  nothing and keeps it from becoming so. */
+function assertUsableReleaseFile(dependency: { name: string; file: string }): void {
+	if (!dependency.file || dependency.file.includes("/") || dependency.file.includes("..")) {
+		throw new Error(
+			`The release names an unusable file for ${dependency.name}: ${dependency.file}. Nothing was installed.`,
+		);
 	}
-
-	const digests = options.releaseDigests ?? {};
-	for (const dependency of internal) {
-		// The name becomes a URL and a path below. It comes out of a manifest
-		// already checked against its own digest, so this is not load-bearing;
-		// it costs nothing and keeps it from becoming so.
-		if (!dependency.file || dependency.file.includes("/") || dependency.file.includes("..")) {
-			throw new Error(
-				`The release names an unusable file for ${dependency.name}: ${dependency.file}. Nothing was installed.`,
-			);
-		}
-		const sha256 = digests[dependency.file];
-		if (!sha256) {
-			throw new Error(
-				`The release manifest names ${dependency.file} as a dependency of the package being installed ` +
-					"but publishes no SHA-256 for it, so it cannot be verified and nothing was installed.",
-			);
-		}
-		const dependencyPath = join(dir, dependency.file);
-		await fetchVerified(options, `${releasePrefix}${dependency.file}`, sha256, dependencyPath);
-		verified.push(dependency.file);
-		manifest[dependency.field][dependency.name] = `file:${dependencyPath}`;
-	}
-
-	writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-
-	const repacked = join(dir, "repacked");
-	mkdirSync(repacked, { recursive: true });
-	const staged = join(repacked, tarballPath.split("/").pop() || "package.tgz");
-	runTar(options, ["-czf", staged, "-C", root, "package"]);
-	return staged;
 }
 
 /** Fetches one file and writes it only once its bytes match `sha256`.

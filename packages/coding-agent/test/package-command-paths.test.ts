@@ -219,7 +219,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 		// The manifest has to carry the tarball's digest now: the update path
 		// verifies the bytes before the package manager sees them, so the stub
 		// answers the artifact request as well as the manifest one.
-		const tarballBytes = packReleaseTarball();
+		const tarballBytes = packReleaseTarball({ name: PACKAGE_NAME, version: VERSION });
 		const fetchMock = vi.fn(async (input: string) =>
 			String(input).endsWith(".tgz")
 				? new Response(tarballBytes)
@@ -386,7 +386,7 @@ else {
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const tarballBytes = packReleaseTarball();
+		const tarballBytes = packReleaseTarball({ name: "wasmedge-agent", version: "0.73.0" });
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string) =>

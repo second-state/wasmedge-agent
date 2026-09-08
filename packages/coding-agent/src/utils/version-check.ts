@@ -22,6 +22,10 @@ export interface LatestPiRelease {
 	 *  everything that lands. Same validation as installSha256: an entry the
 	 *  host filled in with something unusable is left out. */
 	releaseDigests?: Record<string, string>;
+	/** Each artifact's package name, by file name, from the same list. The
+	 *  digest says the bytes are the ones published under that file name; this
+	 *  is what says which package the release meant that file to be. */
+	releasePackageNames?: Record<string, string>;
 }
 
 interface ParsedVersion {
@@ -185,6 +189,7 @@ export async function getLatestPiRelease(
 	if (installSpec) {
 		release.installSpec = installSpec;
 		const digests = collectTarballDigests(data.tarballs);
+		const packageNames = collectTarballPackageNames(data.tarballs);
 		const file = typeof data.tarball === "string" ? data.tarball.trim().split("/").pop() : undefined;
 		const sha256 = file ? digests[file] : undefined;
 		if (sha256) {
@@ -192,6 +197,9 @@ export async function getLatestPiRelease(
 		}
 		if (Object.keys(digests).length > 0) {
 			release.releaseDigests = digests;
+		}
+		if (Object.keys(packageNames).length > 0) {
+			release.releasePackageNames = packageNames;
 		}
 	}
 	return release;
@@ -209,6 +217,18 @@ export async function getLatestPiRelease(
  *  An entry whose digest is not a hex digest of the right length is dropped:
  *  a caller has to be able to tell "the release did not say" apart from "the
  *  release said something unusable", and both leave the file unverifiable. */
+function collectTarballPackageNames(tarballs: unknown): Record<string, string> {
+	const names: Record<string, string> = {};
+	if (!Array.isArray(tarballs)) return names;
+	for (const entry of tarballs) {
+		if (!entry || typeof entry !== "object") continue;
+		const candidate = entry as { file?: unknown; package?: unknown };
+		if (typeof candidate.file !== "string" || typeof candidate.package !== "string") continue;
+		if (candidate.package.trim()) names[candidate.file] = candidate.package.trim();
+	}
+	return names;
+}
+
 function collectTarballDigests(tarballs: unknown): Record<string, string> {
 	const digests: Record<string, string> = {};
 	if (!Array.isArray(tarballs)) return digests;

@@ -690,7 +690,7 @@ describe("self-update daemon restart", () => {
 		// What gets installed is the verified copy -- see the verification
 		// suite below -- but the release is still actionable without a package
 		// name, which is what this pins.
-		const body = packReleaseTarball();
+		const body = packReleaseTarball({ name: PACKAGE_NAME, version: "999.0.0" });
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string) =>
@@ -735,7 +735,7 @@ describe("self-update daemon restart", () => {
 	});
 
 	describe("release tarball verification", () => {
-		const TARBALL_BYTES = packReleaseTarball();
+		const TARBALL_BYTES = packReleaseTarball({ name: PACKAGE_NAME, version: "99.0.0" });
 		const TARBALL_SHA256 = createHash("sha256").update(TARBALL_BYTES).digest("hex");
 
 		/** Answers the manifest request and the tarball request from one stub,

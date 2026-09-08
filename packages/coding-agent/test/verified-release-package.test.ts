@@ -10,6 +10,7 @@ const BASE = "https://releases.example.test/releases/v9.9.9";
 const ROOT = "wasmedge-agent-9.9.9.tgz";
 const AI = "wasmedge-agent-ai-9.9.9.tgz";
 const TUI = "wasmedge-agent-tui-9.9.9.tgz";
+const CORE = "wasmedge-agent-core-9.9.9.tgz";
 
 const tempDirs: string[] = [];
 const cleanups: (() => void)[] = [];
@@ -41,6 +42,16 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 	const files = new Map<string, Buffer>();
 	files.set(AI, tarball(workDir, AI, { name: "wasmedge-agent-ai", version: "9.9.9" }));
 	files.set(TUI, tarball(workDir, TUI, { name: "wasmedge-agent-tui", version: "9.9.9" }));
+	// The shape that made rewriting the root manifest alone insufficient: a
+	// release package that names another one by URL in its own manifest.
+	files.set(
+		CORE,
+		tarball(workDir, CORE, {
+			name: "wasmedge-agent-core",
+			version: "9.9.9",
+			dependencies: { "@earendil-works/pi-ai": `${BASE}/${AI}`, typebox: "^1.1.24" },
+		}),
+	);
 	files.set(
 		ROOT,
 		tarball(
@@ -49,7 +60,11 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 			rootManifest ?? {
 				name: "wasmedge-agent",
 				version: "9.9.9",
-				dependencies: { "@earendil-works/pi-ai": `${BASE}/${AI}`, chalk: "^5.5.0" },
+				dependencies: {
+					"@earendil-works/pi-agent-core": `${BASE}/${CORE}`,
+					"@earendil-works/pi-ai": `${BASE}/${AI}`,
+					chalk: "^5.5.0",
+				},
 				optionalDependencies: { "@earendil-works/pi-tui": `${BASE}/${TUI}` },
 			},
 		),
@@ -67,8 +82,8 @@ function stageRelease(rootManifest?: Record<string, unknown>) {
 	return { workDir, files, digests, fetchImpl };
 }
 
-function stagedManifest(workDir: string, tarballPath: string): Record<string, Record<string, string>> {
-	const unpacked = join(workDir, "unpacked");
+function stagedManifest(workDir: string, tarballPath: string, into = "unpacked"): Record<string, Record<string, string>> {
+	const unpacked = join(workDir, into);
 	mkdirSync(unpacked, { recursive: true });
 	execFileSync("tar", ["-xzf", tarballPath, "-C", unpacked]);
 	return JSON.parse(readFileSync(join(unpacked, "package", "package.json"), "utf-8"));
@@ -90,7 +105,7 @@ describe("verified release package", () => {
 		});
 		cleanups.push(staged.cleanup);
 
-		expect(staged.verified).toEqual([ROOT, AI, TUI]);
+		expect([...staged.verified].sort()).toEqual([AI, CORE, ROOT, TUI].sort());
 		const manifest = stagedManifest(workDir, staged.path);
 		expect(manifest.dependencies["@earendil-works/pi-ai"]).toMatch(/^file:.*wasmedge-agent-ai-9\.9\.9\.tgz$/);
 		expect(manifest.optionalDependencies["@earendil-works/pi-tui"]).toMatch(
@@ -100,6 +115,104 @@ describe("verified release package", () => {
 		// Registry dependencies keep their range: npm resolves those against
 		// the registry, which checks its own integrity metadata.
 		expect(manifest.dependencies.chalk).toBe("^5.5.0");
+	});
+
+	it("rewrites a release package that depends on another one", async () => {
+		// The core package names the AI package by URL in its own manifest.
+		// Rewriting the root and stopping there left that edge for npm to
+		// fetch, unchecked, which is the thing this exists to prevent.
+		const { workDir, digests, fetchImpl } = stageRelease();
+
+		const staged = await downloadVerifiedReleasePackage({
+			installSpec: `${BASE}/${ROOT}`,
+			installSha256: digests[ROOT],
+			releaseDigests: digests,
+			fetchImpl,
+		});
+		cleanups.push(staged.cleanup);
+
+		const corePath = stagedManifest(workDir, staged.path).dependencies["@earendil-works/pi-agent-core"];
+		expect(corePath).toMatch(/^file:/);
+		const core = stagedManifest(workDir, corePath.slice("file:".length), "unpacked-core");
+
+		expect(core.dependencies["@earendil-works/pi-ai"]).toMatch(/^file:.*wasmedge-agent-ai-9\.9\.9\.tgz$/);
+		expect(core.dependencies.typebox).toBe("^1.1.24");
+	});
+
+	it("refuses a package reachable only through another release package", async () => {
+		// The digest the root's own dependencies need is present; the one the
+		// core package needs is not. A walk that stops at the root would not
+		// notice.
+		const { digests, fetchImpl } = stageRelease({
+			name: "wasmedge-agent",
+			version: "9.9.9",
+			dependencies: { "@earendil-works/pi-agent-core": `${BASE}/${CORE}` },
+		});
+		const withoutAi = { ...digests };
+		delete withoutAi[AI];
+
+		await expect(
+			downloadVerifiedReleasePackage({
+				installSpec: `${BASE}/${ROOT}`,
+				installSha256: digests[ROOT],
+				releaseDigests: withoutAi,
+				fetchImpl,
+			}),
+		).rejects.toThrow(/publishes no SHA-256 for it/);
+	});
+
+	it("refuses a package the release says is a different package", async () => {
+		// A digest says the bytes are the ones published under that file name,
+		// and nothing about what is inside them. The manifest names the
+		// package behind each file, and that is what catches a release
+		// assembled with one artifact under another's name.
+		const { workDir, files, digests, fetchImpl } = stageRelease();
+		const swapped = tarball(workDir, AI, { name: "wasmedge-agent-tui", version: "9.9.9" });
+		files.set(AI, swapped);
+
+		await expect(
+			downloadVerifiedReleasePackage({
+				installSpec: `${BASE}/${ROOT}`,
+				installSha256: digests[ROOT],
+				releaseDigests: { ...digests, [AI]: sha256(swapped) },
+				releasePackageNames: { [AI]: "wasmedge-agent-ai" },
+				fetchImpl,
+			}),
+		).rejects.toThrow(/should be wasmedge-agent-ai and contains wasmedge-agent-tui/);
+	});
+
+	it("refuses a package that is not the release's version", async () => {
+		// Every artifact of a release carries that release's version, so the
+		// package being installed sets what the packages it pulls in must be.
+		const { workDir, files, digests, fetchImpl } = stageRelease();
+		const older = tarball(workDir, AI, { name: "wasmedge-agent-ai", version: "8.8.8" });
+		files.set(AI, older);
+
+		await expect(
+			downloadVerifiedReleasePackage({
+				installSpec: `${BASE}/${ROOT}`,
+				installSha256: digests[ROOT],
+				releaseDigests: { ...digests, [AI]: sha256(older) },
+				fetchImpl,
+			}),
+		).rejects.toThrow(/should be version 9\.9\.9 and contains 8\.8\.8/);
+	});
+
+	it("refuses a release whose package is not the version the manifest names", async () => {
+		// The manifest can advertise one version and point at a package
+		// carrying another; both are internally consistent, and the update
+		// would install something other than what it reported.
+		const { digests, fetchImpl } = stageRelease();
+
+		await expect(
+			downloadVerifiedReleasePackage({
+				installSpec: `${BASE}/${ROOT}`,
+				installSha256: digests[ROOT],
+				releaseDigests: digests,
+				expectedVersion: "10.0.0",
+				fetchImpl,
+			}),
+		).rejects.toThrow(/should be version 10\.0\.0 and contains 9\.9\.9/);
 	});
 
 	it("refuses a dependency whose bytes do not match the manifest", async () => {

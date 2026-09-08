@@ -127,6 +127,10 @@ describe("version checks", () => {
 			installSpec: `${configuredDownloadBaseUrl}/releases/v1.2.4/wasmedge-agent-1.2.4.tgz`,
 			packageName: "wasmedge-agent",
 			releaseDigests: { "pi-ai-1.2.4.tgz": "b".repeat(64), "wasmedge-agent-1.2.4.tgz": sha256 },
+			releasePackageNames: {
+				"pi-ai-1.2.4.tgz": "@earendil-works/pi-ai",
+				"wasmedge-agent-1.2.4.tgz": "wasmedge-agent",
+			},
 			version: "1.2.4",
 		});
 	});

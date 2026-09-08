@@ -439,6 +439,9 @@ interface SelfUpdatePlan {
 	 *  installed tarball depends on can be checked too. They are URLs under
 	 *  the same release, and nothing else verifies them. */
 	releaseDigests?: Record<string, string>;
+	/** Each artifact's package name, by file name, so a package can be held to
+	 *  the one the release meant that file to be. */
+	releasePackageNames?: Record<string, string>;
 	/** Why the release check could not run at all. Set means "report this and
 	 *  stop"; it is not the same as `shouldRun: false`, which means the check
 	 *  ran and found nothing newer. */
@@ -517,6 +520,7 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 				targetVersion: latestRelease.version,
 				...(latestRelease.installSha256 ? { installSha256: latestRelease.installSha256 } : {}),
 				...(latestRelease.releaseDigests ? { releaseDigests: latestRelease.releaseDigests } : {}),
+				...(latestRelease.releasePackageNames ? { releasePackageNames: latestRelease.releasePackageNames } : {}),
 			};
 		}
 	} catch (error) {
@@ -1702,6 +1706,9 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 								installSpec: selfUpdatePlan.installSpec,
 								installSha256: selfUpdatePlan.installSha256,
 								releaseDigests: selfUpdatePlan.releaseDigests,
+								releasePackageNames: selfUpdatePlan.releasePackageNames,
+								expectedVersion: selfUpdatePlan.targetVersion,
+								expectedPackageName: selfUpdatePlan.packageName,
 							});
 						} catch (error: unknown) {
 							console.error(chalk.red(`Error: ${formatUnknownError(error)}`));
