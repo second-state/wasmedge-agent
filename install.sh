@@ -132,7 +132,8 @@ main() {
 	tarball_path="$download_dir/$tarball_name"
 
 	download_wasmedge_agent_package "$version" "$tarball_url" "$tarball_path"
-	install_wasmedge_agent_package "$tarball_path"
+	stage_verified_wasmedge_agent_package "$version" "$tarball_path" "$download_dir/SHA256SUMS"
+	install_wasmedge_agent_package "$wasmedge_agent_install_tarball"
 	rm -rf "$download_dir"
 	wasmedge_agent_download_dir=
 
@@ -1512,6 +1513,103 @@ verify_wasmedge_agent_package_checksum() {
 		printf 'error: sha256sum or shasum is required to verify the WasmEdge Agent download.\n' >&2
 		exit 1
 	fi
+}
+
+# Resolves the release's own packages to files this script has verified.
+#
+# SHA256SUMS covers all four published tarballs, but only one of them was ever
+# fetched here. The other three are dependencies of it, spelled as URLs under
+# the same release, and npm resolves those itself: npm carries no integrity
+# metadata for a URL dependency, and a global install of a tarball has no
+# lockfile to hold any. So three quarters of what landed on the machine
+# arrived unchecked, beside a package this script had just checksummed.
+#
+# They are fetched here instead, checked against the same SHA256SUMS, and
+# handed to npm as local files. A file: dependency is installed from disk, and
+# its own dependencies still resolve from the registry exactly as before, so
+# nothing outside our four packages changes.
+#
+# A shipped npm-shrinkwrap.json would have been the smaller fix, and it does
+# not work: npm records an integrity hash for a URL dependency in a lockfile,
+# then installs replaced bytes from that URL without checking them.
+#
+# Sets wasmedge_agent_install_tarball to what should be installed. That is the
+# downloaded tarball itself when the release has no internal dependencies to
+# resolve, so the fetch-and-repack only happens when there is something to
+# verify.
+stage_verified_wasmedge_agent_package() {
+	staged_version="$1"
+	staged_tarball="$2"
+	staged_checksums="$3"
+	staged_dir=$(dirname "$staged_tarball")
+	staged_name=$(basename "$staged_tarball")
+	staged_prefix="$wasmedge_agent_base_url/releases/v$staged_version/"
+	staged_root="$staged_dir/staged"
+	wasmedge_agent_install_tarball="$staged_tarball"
+
+	if ! command -v tar >/dev/null 2>&1; then
+		printf 'error: tar is required to verify the WasmEdge Agent packages.\n' >&2
+		exit 1
+	fi
+
+	mkdir -p "$staged_root"
+	tar -xzf "$staged_tarball" -C "$staged_root"
+
+	staged_manifest="$staged_root/package/package.json"
+	if [ ! -f "$staged_manifest" ]; then
+		printf 'error: %s does not contain package/package.json\n' "$staged_tarball" >&2
+		exit 1
+	fi
+
+	node -e '
+const fs = require("fs");
+const [manifestPath, prefix] = process.argv.slice(1);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+for (const field of ["dependencies", "optionalDependencies"]) {
+	for (const [name, spec] of Object.entries(manifest[field] || {})) {
+		if (typeof spec === "string" && spec.startsWith(prefix)) console.log(name + " " + spec.slice(prefix.length));
+	}
+}
+' "$staged_manifest" "$staged_prefix" > "$staged_root/internal-packages"
+
+	if [ ! -s "$staged_root/internal-packages" ]; then
+		return 0
+	fi
+
+	while read -r staged_package staged_file; do
+		[ -n "$staged_package" ] || continue
+		# The name comes out of a manifest this script has already checksummed,
+		# and it becomes both a URL and a path below. Refusing a separator here
+		# costs nothing and keeps that from being load-bearing.
+		case "$staged_file" in
+			"" | */* | *..*)
+				printf 'error: %s names an unusable release file: %s\n' "$staged_package" "$staged_file" >&2
+				exit 1
+				;;
+		esac
+
+		wasmedge_agent_run_quiet_with_animation \
+			"Downloading WasmEdge Agent" \
+			"Downloading WasmEdge Agent v$staged_version" \
+			"Fetching $staged_package." \
+			curl -fsSL "$staged_prefix$staged_file" -o "$staged_dir/$staged_file"
+
+		verify_wasmedge_agent_package_checksum "$staged_checksums" "$staged_dir/$staged_file"
+
+		node -e '
+const fs = require("fs");
+const [manifestPath, name, filePath] = process.argv.slice(1);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+for (const field of ["dependencies", "optionalDependencies"]) {
+	if (manifest[field] && typeof manifest[field][name] === "string") manifest[field][name] = "file:" + filePath;
+}
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+' "$staged_manifest" "$staged_package" "$staged_dir/$staged_file"
+	done < "$staged_root/internal-packages"
+
+	mkdir -p "$staged_root/repacked"
+	(cd "$staged_root" && tar -czf "repacked/$staged_name" package)
+	wasmedge_agent_install_tarball="$staged_root/repacked/$staged_name"
 }
 
 wasmedge_agent_run_checksum_check() {
