@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const SCRIPT = join(__dirname, "..", "..", "..", "scripts", "advance-beta-pointer.sh");
+const SCRIPT = join(__dirname, "..", "..", "..", "scripts", "advance-channel-pointer.sh");
 const OURS = '{"version":"v0.7.0-beta.200.abc1234"}';
 
 const dirs: string[] = [];
@@ -63,9 +63,16 @@ function localPointer(body = OURS): string {
 	return path;
 }
 
-function run(mode: string, published: string | undefined, body = OURS, key = "beta.json", type = "application/json") {
+function run(
+	mode: string,
+	published: string | undefined,
+	body = OURS,
+	key = "beta.json",
+	type = "application/json",
+	ordering = "beta-run",
+) {
 	const { bin, log } = stubAws(mode, published);
-	const args = [SCRIPT, "bucket", "https://r2.example.test", key, localPointer(body), type];
+	const args = [SCRIPT, "bucket", "https://r2.example.test", key, localPointer(body), type, ordering];
 	try {
 		const stdout = execFileSync("sh", args, {
 			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
@@ -99,12 +106,12 @@ function puts(log: string): string {
 	}
 }
 
-describe("advance-beta-pointer.sh", () => {
+describe("advance-channel-pointer.sh", () => {
 	it("creates the pointer when nothing is published", () => {
 		const { status, output, log } = run("ok", undefined);
 
 		expect(status).toBe(0);
-		expect(output).toContain("now names run 200");
+		expect(output).toContain("now names v0.7.0-beta.200.abc1234");
 		expect(puts(log)).toContain("--if-none-match");
 	});
 
@@ -115,7 +122,7 @@ describe("advance-beta-pointer.sh", () => {
 		const { status, output, log } = run("ok", '{"version":"v0.7.0-beta.100.aaa0000"}');
 
 		expect(status).toBe(0);
-		expect(output).toContain("now names run 200");
+		expect(output).toContain("now names v0.7.0-beta.200.abc1234");
 		expect(puts(log)).toContain("--if-match");
 	});
 
@@ -124,16 +131,20 @@ describe("advance-beta-pointer.sh", () => {
 		// build published, and this one must not take the channel back.
 		const { status, output, log } = run("ok", '{"version":"v0.7.0-beta.300.ccc2222"}');
 
-		expect(status).toBe(0);
-		expect(output).toContain("already names run 300");
+		expect(status).toBe(3);
+		expect(output).toContain("already names v0.7.0-beta.300.ccc2222");
 		expect(puts(log)).toBe("");
 	});
 
-	it("leaves a pointer that names this very run", () => {
-		const { status, output } = run("ok", OURS);
+	it("carries on when the pointer already names this very build", () => {
+		// A publication that stopped after this object is finished by re-running
+		// it, and a run that cannot get past its own pointer can never repair
+		// what came after it. Nothing to move here is not the same as losing.
+		const { status, output, log } = run("ok", OURS);
 
 		expect(status).toBe(0);
-		expect(output).toContain("already names run 200");
+		expect(output).toContain("already names v0.7.0-beta.200.abc1234, which is this build");
+		expect(puts(log)).toBe("");
 	});
 
 	it("decides again when the pointer moves under it", () => {
@@ -141,15 +152,15 @@ describe("advance-beta-pointer.sh", () => {
 		// what is there now, which is newer, and stands down.
 		const { status, output } = run("moved", '{"version":"v0.7.0-beta.100.aaa0000"}');
 
-		expect(status).toBe(0);
-		expect(output).toContain("already names run 999");
+		expect(status).toBe(3);
+		expect(output).toContain("already names v0.7.0-beta.999.def5678");
 	});
 
 	it("refuses a published pointer it cannot order", () => {
 		const { status, output } = run("ok", '{"version":"v0.7.0"}');
 
 		expect(status).not.toBe(0);
-		expect(output).toContain("does not name a single beta version");
+		expect(output).toContain("does not name one beta-run version");
 	});
 
 	it("refuses a local file it cannot order", () => {
@@ -179,7 +190,7 @@ describe("advance-beta-pointer.sh", () => {
 		const { status, output } = run("ok", manifest(100), manifest(200));
 
 		expect(status).toBe(0);
-		expect(output).toContain("now names run 200");
+		expect(output).toContain("now names v0.7.0-beta.200.abc1234");
 	});
 
 	it("refuses a manifest whose version is not the beta its paths still name", () => {
@@ -246,7 +257,7 @@ describe("advance-beta-pointer.sh", () => {
 		const { status, output, log } = run("ok", huge);
 
 		expect(status).not.toBe(0);
-		expect(output).toContain("does not name a single beta version");
+		expect(output).toContain("does not name one beta-run version");
 		expect(puts(log)).toBe("");
 	});
 
@@ -260,7 +271,7 @@ describe("advance-beta-pointer.sh", () => {
 		);
 
 		expect(status).toBe(0);
-		expect(output).toContain("now names run 200");
+		expect(output).toContain("now names v0.7.0-beta.200.abc1234");
 		expect(puts(log)).toContain("--if-match");
 	});
 
@@ -270,5 +281,113 @@ describe("advance-beta-pointer.sh", () => {
 
 		expect(status).not.toBe(0);
 		expect(output).toContain("refusing to move");
+	});
+	const release = (published: string | undefined, body: string, key = "latest.json", type = "application/json") =>
+		run("ok", published, body, key, type, "release");
+
+	it("refuses to take the stable channel back to an older release", () => {
+		// Finishing a partial v0.7.0 after v0.8.0 shipped republished both
+		// production pointers at v0.7.0, unconditionally, and every stable
+		// install then resolved the older one.
+		const { status, output, log } = release('{"version":"v0.8.0"}', '{"version":"v0.7.0"}');
+
+		expect(status).toBe(3);
+		expect(output).toContain("already names v0.8.0");
+		expect(puts(log)).toBe("");
+	});
+
+	it("carries on when the stable channel already names this release", () => {
+		// The recovery case: `stable` moved, then an installer upload or
+		// latest.json failed. The retry has to reach them.
+		const { status, output, log } = release('{"version":"v0.8.0"}', '{"version":"v0.8.0"}');
+
+		expect(status).toBe(0);
+		expect(output).toContain("already names v0.8.0, which is this build");
+		expect(puts(log)).toBe("");
+	});
+
+	it("moves the stable channel forward to a newer release", () => {
+		const { status, output, log } = release('{"version":"v0.7.0"}', '{"version":"v0.8.0"}');
+
+		expect(status).toBe(0);
+		expect(output).toContain("now names v0.8.0");
+		expect(puts(log)).toContain("--if-match");
+	});
+
+	it("creates the stable pointer when nothing is published", () => {
+		const { status, output, log } = release(undefined, '{"version":"v0.7.0"}');
+
+		expect(status).toBe(0);
+		expect(output).toContain("now names v0.7.0");
+		expect(puts(log)).toContain("--if-none-match");
+	});
+
+	it("orders a release field by field, and not as text", () => {
+		// 0.10.0 is later than 0.9.0 and sorts before it as a string, which is
+		// the whole reason the comparison splits the version up.
+		const forward = release('{"version":"v0.9.0"}', '{"version":"v0.10.0"}');
+		const backward = release('{"version":"v0.10.0"}', '{"version":"v0.9.0"}');
+
+		expect(forward.status).toBe(0);
+		expect(forward.output).toContain("now names v0.10.0");
+		expect(backward.status).toBe(3);
+		expect(backward.output).toContain("already names v0.10.0");
+	});
+
+	it("moves the stable text pointer, which is the version alone", () => {
+		const { status, output } = release("v0.6.9\n", "v0.7.0\n", "stable", "text/plain");
+
+		expect(status).toBe(0);
+		expect(output).toContain("now names v0.7.0");
+	});
+
+	it("refuses a prerelease on the release channel", () => {
+		// A beta orders by run number, and nothing here can place one among the
+		// releases: v0.8.0-beta.200 is not a version this channel names.
+		const { status, output, log } = release('{"version":"v0.7.0"}', OURS);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("does not name one release version");
+		expect(puts(log)).toBe("");
+	});
+
+	it("refuses an ordering it does not implement", () => {
+		const { status, output } = run("ok", undefined, OURS, "beta.json", "application/json", "nightly");
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("Unknown ordering");
+	});
+	/** A rendered installer: the release it came from, on a line of its own. */
+	const installer = (version: string) => `#!/bin/sh\n# wasmedge-agent-rendered-release: ${version}\necho hi\n`;
+
+	const script = (published: string, body: string) =>
+		run("ok", published, body, "install.sh", "text/x-shellscript", "release");
+
+	it("moves the canonical installer forward to a newer release", () => {
+		const { status, output, log } = script(installer("v0.7.0"), installer("v0.8.0"));
+
+		expect(status).toBe(0);
+		expect(output).toContain("now names v0.8.0");
+		expect(puts(log)).toContain("--if-match");
+	});
+
+	it("refuses to put an older installer over a newer one", () => {
+		// Two runs publishing at once used to leave the pointers naming one
+		// release and this script coming from another, because it went up with
+		// a plain copy that nothing ordered.
+		const { status, output, log } = script(installer("v0.8.0"), installer("v0.7.0"));
+
+		expect(status).toBe(3);
+		expect(output).toContain("already names v0.8.0");
+		expect(puts(log)).toBe("");
+	});
+
+	it("refuses an installer that was never rendered", () => {
+		const unrendered = installer("__WASMEDGE_AGENT_RENDERED" + "_RELEASE__");
+		const { status, output, log } = script(installer("v0.7.0"), unrendered);
+
+		expect(status).not.toBe(0);
+		expect(output).toContain("does not name one release version");
+		expect(puts(log)).toBe("");
 	});
 });

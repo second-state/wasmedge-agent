@@ -337,11 +337,16 @@ jobs:
           const baseUrl = process.env.INSTALL_BASE_URL;
           if (!baseUrl) throw new Error("INSTALL_BASE_URL is required");
           const installer = fs.readFileSync("install.sh", "utf8");
-          const renderInstaller = (channel) => installer
+          // The rendered release is what makes an installer orderable, so the
+          // copy published to a channel can refuse to go backwards. An empty
+          // one leaves the placeholder: that copy is not publishable, which is
+          // correct, because this run is not publishing that channel.
+          const renderInstaller = (channel, version) => installer
             .replaceAll("__WASMEDGE_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
-            .replaceAll("__WASMEDGE_AGENT_DEFAULT_RELEASE_CHANNEL__", channel);
-          fs.writeFileSync("/tmp/wasmedge-agent-install.sh", renderInstaller("stable"));
-          fs.writeFileSync("/tmp/wasmedge-agent-install-beta.sh", renderInstaller("beta"));
+            .replaceAll("__WASMEDGE_AGENT_DEFAULT_RELEASE_CHANNEL__", channel)
+            .replaceAll("__WASMEDGE_AGENT_RENDERED_RELEASE__", version ? `v${version}` : "__WASMEDGE_AGENT_RENDERED_RELEASE__");
+          fs.writeFileSync("/tmp/wasmedge-agent-install.sh", renderInstaller("stable", process.env.PRODUCTION_VERSION));
+          fs.writeFileSync("/tmp/wasmedge-agent-install-beta.sh", renderInstaller("beta", process.env.BETA_VERSION));
           NODE
 
       - name: Extract production release notes
@@ -473,20 +478,6 @@ jobs:
         run: |
           PRODUCTION_DIR=release-artifacts/production
 
-          # The installers first. They are rendered with the release host and
-          # name no version, so nothing about them depends on the checks below
-          # -- and moving them out from between those checks and the objects
-          # they gate is what keeps that gap to a single upload.
-          aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
-
-          aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
-
           # Before anything here names this release. The guard ran once before
           # the artifacts went up, and everything since -- the artifacts, the
           # tag, the GitHub release -- is time in which another holder of these
@@ -501,15 +492,41 @@ jobs:
           # installed agent to check for updates -- so it is the one object
           # that decides what a channel means, and a publication that stops
           # partway leaves it naming the release it named before.
-          aws s3 cp "$PRODUCTION_DIR/stable" "s3://${R2_BUCKET}/stable" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control no-cache
+          #
+          # Forward-only, and the first of the two decides for both. A manual
+          # release may run from the tag it publishes, which is how a release
+          # that failed partway is finished -- and finishing a partial v0.7.0
+          # after v0.8.0 shipped wrote both of these unconditionally, taking
+          # every stable install back a version with nothing to notice it. The
+          # pointer says which release it names, so a run that is not newer
+          # than what is there stops here: its immutable objects are up and
+          # installable by version, and nothing naming a channel has moved.
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            stable "$PRODUCTION_DIR/stable" text/plain release || pointer_status=$?
+          if [ "$pointer_status" -eq 3 ]; then
+            echo "v${PRODUCTION_VERSION} is published and installable by version; the channel names a newer one."
+            exit 0
+          fi
+          [ "$pointer_status" -eq 0 ] || exit "$pointer_status"
 
-          aws s3 cp "$PRODUCTION_DIR/release.json" "s3://${R2_BUCKET}/latest.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control no-cache
+          # The stable installer, once this release is the one the channel
+          # names, and written the way the pointers are. Only production runs
+          # write it, so it has one writer and one ordering: a run recovering
+          # an older tag renders that tag's installer, and two runs publishing
+          # at once could otherwise leave the pointers naming one release and
+          # this script coming from another.
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            install.sh /tmp/wasmedge-agent-install.sh text/x-shellscript release || pointer_status=$?
+          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
+
+          # A stand-down here means another run took the channel in between,
+          # which is the condition doing its job rather than a failure.
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            latest.json "$PRODUCTION_DIR/release.json" application/json release || pointer_status=$?
+          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
 
       # Both destinations first, for the reason the production pair has: the
       # beta channel pointer and the installers move in the step below, and a
@@ -603,20 +620,6 @@ jobs:
               "$BETA_DIR"/*
           fi
 
-          # Last, once both destinations carry this build. Moving these first
-          # meant a later refusal left beta.json, the beta channel file and the
-          # installers naming a build the GitHub release did not have.
-          #
-          aws s3 cp /tmp/wasmedge-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
-
-          aws s3 cp /tmp/wasmedge-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/x-shellscript \
-            --cache-control no-cache
-
           # Both questions asked here, before any of these objects names this
           # build. The branch was last checked before the release above was
           # written, and main can move in that time: a run that answered it
@@ -644,10 +647,31 @@ jobs:
           # each write names a run number and refuses to publish under one that
           # is not newer than what the pointer already names, with the check and
           # the write made one operation by a condition on the ETag.
-          sh scripts/advance-beta-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            beta "$BETA_DIR/beta" text/plain
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            beta "$BETA_DIR/beta" text/plain beta-run || pointer_status=$?
+          if [ "$pointer_status" -eq 3 ]; then
+            echo "v${BETA_VERSION} is published and installable by version; the channel names a newer run."
+            exit 0
+          fi
+          [ "$pointer_status" -eq 0 ] || exit "$pointer_status"
 
-          sh scripts/advance-beta-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            beta.json "$BETA_DIR/release.json" application/json
+          # The beta installer, once this build is the one the channel names,
+          # and written the way the pointers are. Only beta runs write it, and
+          # they do not write install.sh at all any more: both steps wrote both
+          # scripts with a plain copy, so a beta publication could put an older
+          # stable installer at the canonical URL, and either could land its
+          # copy after a newer run had published everything.
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            install-beta.sh /tmp/wasmedge-agent-install-beta.sh text/x-shellscript beta-run || pointer_status=$?
+          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
+
+          # A stand-down here means a newer run took the channel in between,
+          # which is the condition doing its job rather than a failure.
+          pointer_status=0
+          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            beta.json "$BETA_DIR/release.json" application/json beta-run || pointer_status=$?
+          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
 
           echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"
