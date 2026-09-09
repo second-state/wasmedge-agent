@@ -1266,10 +1266,13 @@ check_wasmedge_agent_runtime() {
 	fi
 
 	if command -v rustup >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/rustup" ]; then
-		if PATH="$HOME/.cargo/bin:$PATH" rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$'; then
-			printf 'ok       rustup with the wasm32-wasip1 target\n'
+		# On stable, for the reason provisioning installs it there: this reports
+		# on the runtime issue #3 asks for, and the active toolchain is not it.
+		if PATH="$HOME/.cargo/bin:$PATH" rustup target list --installed --toolchain stable 2>/dev/null |
+			grep -q '^wasm32-wasip1$'; then
+			printf 'ok       rustup with the wasm32-wasip1 target on stable\n'
 		else
-			printf 'missing  the wasm32-wasip1 target (rustup target add wasm32-wasip1)\n'
+			printf 'missing  the wasm32-wasip1 target on stable (rustup target add --toolchain stable wasm32-wasip1)\n'
 			check_status=1
 		fi
 	else
@@ -2301,18 +2304,39 @@ ensure_rustup_and_target() {
 	if [ -x "$HOME/.cargo/bin/rustup" ] || command -v rustup >/dev/null 2>&1; then
 		PATH="$HOME/.cargo/bin:$PATH"
 		export PATH
-		if rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$'; then
+		# Stable by name, and not whatever this host happens to have active.
+		# `rustup target` without --toolchain reads and writes the default one,
+		# so a host defaulting to nightly was asked whether nightly had the
+		# target, said yes, and finished the install issue #3 defines as
+		# installing the stable toolchain without a stable toolchain on it.
+		#
+		# The default is left alone. Which toolchain a host builds with is its
+		# own choice; what this owes issue #3 is that stable is there and can
+		# build a cell.
+		if ! rustup toolchain list 2>/dev/null | grep -q '^stable'; then
+			if [ "$wasmedge_agent_screen_enabled" = 1 ]; then
+				wasmedge_agent_run_quiet_with_animation_steps \
+					"Installing the Rust stable toolchain" \
+					"Installing the Rust stable toolchain" \
+					"Running rustup toolchain install stable." \
+					rustup toolchain install --no-self-update stable
+			else
+				printf '\nInstalling the Rust stable toolchain...\n'
+				rustup toolchain install --no-self-update stable
+			fi
+		fi
+		if rustup target list --installed --toolchain stable 2>/dev/null | grep -q '^wasm32-wasip1$'; then
 			return 0
 		fi
 		if [ "$wasmedge_agent_screen_enabled" = 1 ]; then
 			wasmedge_agent_run_quiet_with_animation_steps \
 				"Adding the wasm32-wasip1 target" \
 				"Adding the wasm32-wasip1 target" \
-				"Running rustup target add wasm32-wasip1." \
-				rustup target add wasm32-wasip1
+				"Running rustup target add --toolchain stable wasm32-wasip1." \
+				rustup target add --toolchain stable wasm32-wasip1
 		else
 			printf '\nAdding the wasm32-wasip1 target...\n'
-			rustup target add wasm32-wasip1
+			rustup target add --toolchain stable wasm32-wasip1
 		fi
 		return 0
 	fi

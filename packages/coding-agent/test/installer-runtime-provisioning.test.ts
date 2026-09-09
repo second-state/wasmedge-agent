@@ -354,6 +354,61 @@ ensure_wasmedge`;
 		expect(readFileSync(log, "utf-8").trim()).toBe("asked");
 	});
 
+	/** A rustup whose default toolchain is nightly, and whose nightly has the
+	 *  wasm target while stable has nothing. Logs every invocation. */
+	function stubNightlyRustup(dir: string, log: string): string {
+		const bin = isolatedBin(dir);
+		writeFileSync(
+			join(bin, "rustup"),
+			`#!/bin/sh
+printf '%s\\n' "$*" >> "${log}"
+case "$*" in
+	"toolchain list") printf 'nightly-x86_64-unknown-linux-gnu (default)\\n' ;;
+	"target list --installed --toolchain stable") ;;
+	"target list --installed") printf 'wasm32-wasip1\\n' ;;
+esac
+exit 0
+`,
+		);
+		chmodSync(join(bin, "rustup"), 0o755);
+		return bin;
+	}
+
+	it("reports the target against stable, not against a nightly default", () => {
+		// `rustup target list --installed` reads the default toolchain, so this
+		// asked nightly whether nightly had the target and reported the host
+		// ready -- while issue #3 asks for the stable toolchain.
+		const dir = workspace();
+		const bin = stubNightlyRustup(dir, join(dir, "rustup-log"));
+
+		const result = run(dir, `PATH="${bin}"\nHOME="${dir}"\ncheck_wasmedge_agent_runtime`);
+
+		expect(result.status).not.toBe(0);
+		expect(result.output).toContain("missing  the wasm32-wasip1 target on stable");
+		expect(result.output).not.toContain("ok       rustup");
+	});
+
+	it("installs stable and adds the target to stable, leaving the default alone", () => {
+		const dir = workspace();
+		const log = join(dir, "rustup-log");
+		const bin = stubNightlyRustup(dir, log);
+
+		const driver = `PATH="${bin}"\nHOME="${dir}"\nwasmedge_agent_screen_enabled=0\nensure_rustup_and_target`;
+		const result = run(dir, driver);
+
+		expect(result.status).toBe(0);
+		const calls = readFileSync(log, "utf-8").trim().split("\n");
+		expect(calls).toEqual([
+			"toolchain list",
+			"toolchain install --no-self-update stable",
+			"target list --installed --toolchain stable",
+			"target add --toolchain stable wasm32-wasip1",
+		]);
+		// Nothing here selects a default toolchain: which one this host builds
+		// with is its own choice, and issue #3 asks only that stable is there.
+		expect(calls.some((call) => call.startsWith("default"))).toBe(false);
+	});
+
 	it("fails the install when npm produced no usable command", () => {
 		// npm reported success and there is no command: the install did not
 		// produce the thing it exists for, and saying otherwise also skipped
