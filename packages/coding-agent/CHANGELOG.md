@@ -96,6 +96,24 @@
   instructions and stopping, which is what `curl ... | sh` on a clean machine
   needs; the two runtime prompts had always read it that way. An install that
   produces no usable command fails instead of reporting success.
+- WasmEdge has to run, and not merely exist. Provisioning returned early,
+  `install.sh --check` printed ok, and `doctor` reported ok whenever a file
+  existed at the wasmedge path -- which a partial extraction, an interrupted
+  package install, or a build against another libc all leave behind. Doctor
+  even ran `--version`, wrote the failure into its detail text, and reported
+  ok anyway. All three run the binary now, `--check` tells a broken install
+  apart from a missing one, and provisioning installs over a runtime that does
+  not answer. Candidates are tried in precedence order until one runs, so a
+  broken `wasmedge` on `PATH` no longer hides a working `~/.wasmedge/bin`
+  one -- which it did permanently, since reinstalling could not change which
+  binary was selected. An explicit `WASMEDGE_AGENT_WASMEDGE` is still the only
+  candidate it considers.
+- `install.sh` installs the Rust stable toolchain issue #3 asks for. `rustup
+  target list` and `rustup target add` act on the default toolchain, so a host
+  defaulting to nightly was asked whether nightly had `wasm32-wasip1`, said
+  yes, and finished with no stable toolchain at all; `--check` agreed. Both
+  name stable now. The default is left alone, so a host that builds cells with
+  nightly goes on doing so.
 - Both install paths check that a verified package is the package its file
   name claims. A checksum says the bytes are the ones published under that
   name, and nothing about what is inside them, so a release assembled with one
