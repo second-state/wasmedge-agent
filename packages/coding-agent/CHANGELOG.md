@@ -114,6 +114,14 @@
   yes, and finished with no stable toolchain at all; `--check` agreed. Both
   name stable now. The default is left alone, so a host that builds cells with
   nightly goes on doing so.
+- The canonical installers are published forward-only, and each has one
+  writer. `install.sh` comes from production releases and `install-beta.sh`
+  from beta builds; both steps used to write both scripts with a plain copy, so
+  a beta publication could put an older stable installer at the canonical URL,
+  and two runs publishing at once could leave the channel pointers naming one
+  release while the installer beside them came from another. Each published
+  copy now carries the release it was rendered for, and a write that would take
+  it backwards is refused.
 - Both install paths check that a verified package is the package its file
   name claims. A checksum says the bytes are the ones published under that
   name, and nothing about what is inside them, so a release assembled with one

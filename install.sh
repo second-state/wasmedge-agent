@@ -24,6 +24,11 @@ wasmedge_agent_warn_if_legacy_env "WASMEDGE_AGENT_DOWNLOAD_BASE_URL" "PRIME_AGEN
 wasmedge_agent_base_url="${WASMEDGE_AGENT_DOWNLOAD_BASE_URL:-${PRIME_AGENT_DOWNLOAD_BASE_URL:-__WASMEDGE_AGENT_DOWNLOAD_BASE_URL__}}"
 wasmedge_agent_base_url="${wasmedge_agent_base_url%/}"
 wasmedge_agent_default_release_channel="__WASMEDGE_AGENT_DEFAULT_RELEASE_CHANNEL__"
+# The release this copy was rendered for. Nothing here reads it: it is for the
+# publisher, which writes each canonical installer forward-only and needs the
+# published copy to say which release it came from. An unrendered copy keeps
+# the placeholder, which is not a version, so publishing one is refused.
+# wasmedge-agent-rendered-release: __WASMEDGE_AGENT_RENDERED_RELEASE__
 if [ "$wasmedge_agent_default_release_channel" = "$wasmedge_agent_unconfigured_default_release_channel" ]; then
 	wasmedge_agent_default_release_channel=stable
 fi
