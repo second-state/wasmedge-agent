@@ -637,14 +637,17 @@ jobs:
           # Then the text pointer, and the JSON manifest last, for the reason
           # the production pointers have: the JSON is the object both install
           # paths read, so it is what decides which release this channel means.
-          aws s3 cp "$BETA_DIR/beta" "s3://${R2_BUCKET}/beta" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type text/plain \
-            --cache-control no-cache
+          #
+          # Both move under the same condition. The freshness check above reads
+          # the default branch and then writes, and main can advance between
+          # the two -- so the ordering is carried by the objects themselves:
+          # each write names a run number and refuses to publish under one that
+          # is not newer than what the pointer already names, with the check and
+          # the write made one operation by a condition on the ETag.
+          sh scripts/advance-beta-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            beta "$BETA_DIR/beta" text/plain
 
-          aws s3 cp "$BETA_DIR/release.json" "s3://${R2_BUCKET}/beta.json" \
-            --endpoint-url "$R2_ENDPOINT_URL" \
-            --content-type application/json \
-            --cache-control no-cache
+          sh scripts/advance-beta-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
+            beta.json "$BETA_DIR/release.json" application/json
 
           echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"
