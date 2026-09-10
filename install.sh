@@ -1201,6 +1201,45 @@ usage: install.sh [--check] [--yes|--now] [stable|beta|<version>]
 EOF
 }
 
+# WasmEdge is present when it runs, and not when a file exists at its path. A
+# partial extraction, an interrupted package install, or a build against
+# another libc all leave an executable that cannot start, and a check that
+# stopped at the file called such a host ready: the install finished, --check
+# said ok, and the first rust cell was where the host found out.
+#
+# Every candidate is tried in precedence order, and the first one that answers
+# wins. Stopping at the first that exists let a broken entry on PATH hide a
+# working ~/.wasmedge/bin/wasmedge behind it -- and reinstalling could not
+# repair that, because the broken one went on being the one selected.
+#
+# Prints the path that answered, so a caller can say which binary it found.
+wasmedge_try() {
+	[ -n "$1" ] && [ -x "$1" ] || return 1
+	if "$1" --version >/dev/null 2>&1; then
+		printf '%s\n' "$1"
+		return 0
+	fi
+	# Exists and does not run, which is a different repair from missing.
+	wasmedge_broken=1
+	return 1
+}
+
+wasmedge_usable_bin() {
+	wasmedge_broken=0
+	if [ -n "${WASMEDGE_AGENT_WASMEDGE:-}" ]; then
+		# The only candidate, the way the runtime treats it. --check reports on
+		# the runtime the agent will use, so the two have to agree about which
+		# binary that is -- and pointing at a binary and silently getting a
+		# different one is worse than being told this one does not work.
+		wasmedge_try "$WASMEDGE_AGENT_WASMEDGE" && return 0
+	else
+		wasmedge_try "$(command -v wasmedge 2>/dev/null)" && return 0
+		wasmedge_try "$HOME/.wasmedge/bin/wasmedge" && return 0
+	fi
+	[ "$wasmedge_broken" -eq 1 ] || return 1
+	return 2
+}
+
 # Reports on the runtime issue #5 asks --check to verify: the agent, WasmEdge,
 # the Rust target, and the cell workspace. Reads only -- nothing here installs,
 # repairs, or writes, which is what makes it safe to run from a launcher on
@@ -1238,8 +1277,13 @@ check_wasmedge_agent_runtime() {
 		check_status=1
 	fi
 
-	if command -v wasmedge >/dev/null 2>&1 || [ -x "$HOME/.wasmedge/bin/wasmedge" ]; then
-		printf 'ok       WasmEdge\n'
+	check_wasmedge_status=0
+	check_wasmedge_bin=$(wasmedge_usable_bin) || check_wasmedge_status=$?
+	if [ "$check_wasmedge_status" -eq 0 ]; then
+		printf 'ok       WasmEdge (%s)\n' "$check_wasmedge_bin"
+	elif [ "$check_wasmedge_status" -eq 2 ]; then
+		printf 'broken   WasmEdge: installed, and it does not run\n'
+		check_status=1
 	else
 		printf 'missing  WasmEdge\n'
 		check_status=1
@@ -2323,7 +2367,7 @@ run_rustup_install() {
 }
 
 ensure_wasmedge() {
-	if command -v wasmedge >/dev/null 2>&1 || [ -x "$HOME/.wasmedge/bin/wasmedge" ]; then
+	if wasmedge_usable_bin >/dev/null; then
 		return 0
 	fi
 
@@ -2405,6 +2449,16 @@ install_wasmedge_bin_package() {
 	fi
 
 	hash -r
+
+	# A helper can exit zero and leave nothing that runs: a package that built
+	# but did not install, a mirror that served an empty payload, a --noconfirm
+	# that skipped the one thing asked for. Issue #1 made the official installer
+	# the fallback, and saying "managed it" here is exactly what skips it.
+	if ! wasmedge_usable_bin >/dev/null; then
+		printf 'Warning: %s reported success and no WasmEdge runs; using the official WasmEdge installer.\n' \
+			"$wasmedge_helper" >&2
+		return 1
+	fi
 	return 0
 }
 

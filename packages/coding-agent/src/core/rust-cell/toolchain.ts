@@ -31,10 +31,44 @@ export function findRustupBin(): string {
 	return findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
 }
 
+/** Where wasmedge might be, in precedence order. An explicit override is the
+ * only candidate it returns: pointing at a binary and silently getting a
+ * different one is worse than being told this one does not work. */
+export function wasmedgeCandidates(): string[] {
+	const override = process.env.WASMEDGE_AGENT_WASMEDGE;
+	if (override) return [override];
+	const onPath = findOnPath("wasmedge");
+	const home = join(homedir(), ".wasmedge", "bin", "wasmedge");
+	return onPath && onPath !== home ? [onPath, home] : [home];
+}
+
+export interface WasmedgeProbe {
+	/** The binary that ran, or the first one that exists and does not. */
+	bin?: string;
+	/** Set only when the binary ran. */
+	version?: string;
+}
+
+/** The first candidate that runs. A broken binary ahead of a working one does
+ * not hide it: selecting by existence meant a broken PATH entry won forever,
+ * and reinstalling into ~/.wasmedge could not repair what was being selected. */
+export function probeWasmedge(): WasmedgeProbe {
+	let broken: string | undefined;
+	for (const candidate of wasmedgeCandidates()) {
+		if (!existsSync(candidate)) continue;
+		try {
+			return { bin: candidate, version: execFileSync(candidate, ["--version"], { encoding: "utf-8" }).trim() };
+		} catch {
+			broken ??= candidate;
+		}
+	}
+	return { bin: broken };
+}
+
+/** Where wasmedge would be. Existence is the caller's concern, and whether it
+ * runs is probeWasmedge's. */
 export function findWasmedgeBin(): string {
-	return (
-		process.env.WASMEDGE_AGENT_WASMEDGE ?? findOnPath("wasmedge") ?? join(homedir(), ".wasmedge", "bin", "wasmedge")
-	);
+	return wasmedgeCandidates()[0];
 }
 
 /** True when rustup exists but the wasm target is missing (fixable). False
@@ -53,17 +87,20 @@ export function resolveToolchain(): ToolchainInfo {
 		throw new Error(`cargo not found (checked WASMEDGE_AGENT_CARGO, PATH, ~/.cargo/bin)`);
 	}
 
-	const wasmedgeBin = findWasmedgeBin();
-	if (!existsSync(wasmedgeBin)) {
-		throw new Error(`wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path`);
+	const wasmedge = probeWasmedge();
+	if (wasmedge.version === undefined || wasmedge.bin === undefined) {
+		throw new Error(
+			wasmedge.bin === undefined
+				? `wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path`
+				: `wasmedge at ${wasmedge.bin} does not run; reinstall it or set WASMEDGE_AGENT_WASMEDGE`,
+		);
 	}
 
 	if (wasmTargetMissing()) {
 		throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
 	}
 
-	const wasmedgeVersion = execFileSync(wasmedgeBin, ["--version"], { encoding: "utf-8" }).trim();
-	return { cargoBin, wasmedgeBin, wasmedgeVersion };
+	return { cargoBin, wasmedgeBin: wasmedge.bin, wasmedgeVersion: wasmedge.version };
 }
 
 /** Build the template once so cloned workspaces start with a warm target/. */

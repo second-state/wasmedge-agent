@@ -7,6 +7,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,17 @@ function workspace(): string {
 	const dir = mkdtempSync(join(tmpdir(), "installer-runtime-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+/** A bin dir holding only what the code under test shells out to. --check
+ *  otherwise finds the host's own node, npm and agent, and spends half a
+ *  minute running a real `doctor --json` that proves nothing about it. */
+function isolatedBin(dir: string): string {
+	const bin = join(dir, "bin");
+	mkdirSync(bin, { recursive: true });
+	const grep = execFileSync("sh", ["-c", "command -v grep"], { encoding: "utf-8" }).trim();
+	symlinkSync(grep, join(bin, "grep"));
+	return bin;
 }
 
 /** A curl that behaves as told: fails, or writes a script of `body`. */
@@ -240,6 +252,106 @@ if wasmedge_agent_prompt_yes_no "q" "d" "p"; then printf 'yes\\n'; else printf '
 		expect(result.output).toContain("missing  Node.js");
 		expect(result.output).toContain("missing  WasmEdge");
 		expect(result.output).toContain("missing  wasmedge-agent");
+	});
+
+	it("reports a WasmEdge that cannot run as broken rather than ok", () => {
+		// Existence was the whole check, so a partial extraction, an interrupted
+		// package install, or a build against another libc passed --check and
+		// then failed at the first rust cell.
+		const dir = workspace();
+		const bin = isolatedBin(dir);
+		writeFileSync(join(bin, "wasmedge"), "#!/bin/sh\nexit 1\n");
+		chmodSync(join(bin, "wasmedge"), 0o755);
+
+		const result = run(dir, `PATH="${bin}"\nHOME="${dir}"\ncheck_wasmedge_agent_runtime`);
+
+		expect(result.status).not.toBe(0);
+		expect(result.output).toContain("broken   WasmEdge");
+		expect(result.output).not.toContain("ok       WasmEdge");
+	});
+
+	it("reports the WasmEdge that WASMEDGE_AGENT_WASMEDGE names", () => {
+		// --check reports on the runtime the agent will use, and the runtime
+		// treats the override as its only candidate. This did not read it at
+		// all, so --check could call a host missing while the agent ran fine.
+		const dir = workspace();
+		const bin = isolatedBin(dir);
+		const override = join(dir, "custom-wasmedge");
+		writeFileSync(override, '#!/bin/sh\necho "wasmedge version 0.14.1"\n');
+		chmodSync(override, 0o755);
+
+		const result = run(
+			dir,
+			`PATH="${bin}"\nHOME="${dir}"\nWASMEDGE_AGENT_WASMEDGE="${override}"\ncheck_wasmedge_agent_runtime`,
+		);
+
+		expect(result.output).toContain(`ok       WasmEdge (${override})`);
+	});
+
+	it("does not fall back from a broken WASMEDGE_AGENT_WASMEDGE", () => {
+		// Pointing at a binary and silently getting a different one is worse
+		// than being told this one does not work.
+		const dir = workspace();
+		const bin = isolatedBin(dir);
+		writeFileSync(join(bin, "wasmedge"), '#!/bin/sh\necho "wasmedge version 0.14.1"\n');
+		chmodSync(join(bin, "wasmedge"), 0o755);
+		const override = join(dir, "custom-wasmedge");
+		writeFileSync(override, "#!/bin/sh\nexit 1\n");
+		chmodSync(override, 0o755);
+
+		const result = run(
+			dir,
+			`PATH="${bin}"\nHOME="${dir}"\nWASMEDGE_AGENT_WASMEDGE="${override}"\ncheck_wasmedge_agent_runtime`,
+		);
+
+		expect(result.output).toContain("broken   WasmEdge");
+		expect(result.output).not.toContain("ok       WasmEdge");
+	});
+
+	it("takes a working WasmEdge from behind a broken one on PATH", () => {
+		// Selection stopped at the first candidate that existed, so a broken
+		// PATH entry hid a working ~/.wasmedge/bin/wasmedge and no reinstall
+		// could repair what was being selected.
+		const dir = workspace();
+		const bin = isolatedBin(dir);
+		writeFileSync(join(bin, "wasmedge"), "#!/bin/sh\nexit 1\n");
+		chmodSync(join(bin, "wasmedge"), 0o755);
+		const homeBin = join(dir, ".wasmedge", "bin");
+		mkdirSync(homeBin, { recursive: true });
+		writeFileSync(join(homeBin, "wasmedge"), '#!/bin/sh\necho "wasmedge version 0.14.1"\n');
+		chmodSync(join(homeBin, "wasmedge"), 0o755);
+
+		const result = run(dir, `PATH="${bin}"\nHOME="${dir}"\ncheck_wasmedge_agent_runtime`);
+
+		expect(result.output).toContain(`ok       WasmEdge (${join(homeBin, "wasmedge")})`);
+		expect(result.output).not.toContain("broken   WasmEdge");
+	});
+
+	it("provisions over a WasmEdge that cannot run", () => {
+		// Provisioning returned early on the same existence check, so it left a
+		// broken runtime where it found one and called the install done.
+		const dir = workspace();
+		const bin = join(dir, "bin");
+		mkdirSync(bin, { recursive: true });
+		const log = join(dir, "log");
+		const driver = `HOME="${dir}"
+wasmedge_agent_prompt_yes_no() { printf 'asked\\n' >> "${log}"; return 1; }
+skip_cell_runtime_setup() { :; }
+ensure_wasmedge`;
+
+		writeFileSync(join(bin, "wasmedge"), '#!/bin/sh\necho "wasmedge version 0.14.1"\n');
+		chmodSync(join(bin, "wasmedge"), 0o755);
+		const working = run(dir, driver, bin);
+
+		writeFileSync(join(bin, "wasmedge"), "#!/bin/sh\nexit 1\n");
+		chmodSync(join(bin, "wasmedge"), 0o755);
+		const broken = run(dir, driver, bin);
+
+		expect(working.status).toBe(0);
+		expect(broken.status).toBe(0);
+		// One asked, and it was not the one that already had a working runtime.
+		expect(existsSync(log)).toBe(true);
+		expect(readFileSync(log, "utf-8").trim()).toBe("asked");
 	});
 
 	it("fails the install when npm produced no usable command", () => {
@@ -508,11 +620,19 @@ wasmedge_agent_run_quiet_with_animation "Installing" "Installing" "detail" \\
 	});
 
 	/** An AUR helper on PATH, answering with `status`. */
-	function stubHelper(dir: string, name: string, status: number): string {
+	/** A yay/paru that exits `status`. With `installs`, it also drops a working
+	 *  wasmedge on PATH, which is what a helper that did its job leaves behind. */
+	function stubHelper(dir: string, name: string, status: number, installs = false): string {
 		const bin = join(dir, "helper-bin");
 		mkdirSync(bin, { recursive: true });
 		const helper = join(bin, name);
-		writeFileSync(helper, `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "${join(dir, "log")}"\nexit ${status}\n`);
+		const install = installs
+			? `printf '#!/bin/sh\\necho "wasmedge version 0.14.1"\\n' > "${join(bin, "wasmedge")}"\nchmod 755 "${join(bin, "wasmedge")}"\n`
+			: "";
+		writeFileSync(
+			helper,
+			`#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "${join(dir, "log")}"\n${install}exit ${status}\n`,
+		);
 		chmodSync(helper, 0o755);
 		return bin;
 	}
@@ -527,13 +647,42 @@ wasmedge_agent_run_quiet_with_animation "Installing" "Installing" "detail" \\
 			`wasmedge_agent_screen_enabled=0
 run_wasmedge_install() { printf 'official\\n' >> "${join(dir, "log")}"; }
 install_wasmedge_bin_package`,
-			stubHelper(dir, "yay", 0),
+			stubHelper(dir, "yay", 0, true),
 		);
 
 		expect(result.status).toBe(0);
 		const steps = readFileSync(join(dir, "log"), "utf-8");
 		expect(steps).toContain("yay -S --needed --noconfirm wasmedge-bin");
 		expect(steps).not.toContain("official");
+	});
+
+	it("does not stop at a helper that reported success and installed nothing", () => {
+		// Returning success here is what skips the official installer, and issue
+		// #1 made that the fallback. A helper can exit zero and leave nothing
+		// that runs, and doctor at the end of the install would then fail the
+		// install rather than the fallback repairing it. So this drives
+		// ensure_wasmedge and not the package function alone: the claim is that
+		// the official installer runs after the package path gives up, and the
+		// return value on its own does not say that anyone acted on it.
+		const dir = workspace();
+		const helperBin = stubHelper(dir, "yay", 0);
+
+		const result = run(
+			dir,
+			`wasmedge_agent_screen_enabled=0
+PATH="${helperBin}:${isolatedBin(dir)}"
+HOME="${dir}"
+wasmedge_agent_prompt_yes_no() { return 0; }
+run_wasmedge_install() { printf 'official\\n' >> "${join(dir, "log")}"; }
+ensure_wasmedge`,
+		);
+
+		expect(result.status).toBe(0);
+		const steps = readFileSync(join(dir, "log"), "utf-8");
+		expect(steps).toContain("yay -S --needed --noconfirm wasmedge-bin");
+		expect(steps).toContain("official");
+		expect(steps.indexOf("yay -S")).toBeLessThan(steps.indexOf("official"));
+		expect(result.output).toContain("reported success and no WasmEdge runs");
 	});
 
 	it("falls back to the official installer when the helper fails", () => {

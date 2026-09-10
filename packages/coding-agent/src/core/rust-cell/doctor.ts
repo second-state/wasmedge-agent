@@ -8,9 +8,9 @@ import {
 	ensureTemplateReady,
 	findCargoBin,
 	findRustupBin,
-	findWasmedgeBin,
 	isTemplateVendored,
 	isTemplateWarm,
+	probeWasmedge,
 	wasmTargetMissing,
 } from "./toolchain.js";
 import { resolveTemplateDir } from "./workspace.js";
@@ -55,20 +55,21 @@ export function collectRuntimeChecks(): RuntimeCheck[] {
 		});
 	}
 
-	const wasmedgeBin = findWasmedgeBin();
-	const wasmedgeOk = existsSync(wasmedgeBin);
-	let wasmedgeDetail = "not found (checked WASMEDGE_AGENT_WASMEDGE, PATH, ~/.wasmedge/bin)";
-	if (wasmedgeOk) {
-		try {
-			wasmedgeDetail = execFileSync(wasmedgeBin, ["--version"], { encoding: "utf-8" }).trim();
-		} catch {
-			wasmedgeDetail = `${wasmedgeBin} (--version failed)`;
-		}
-	}
+	// Running it is the check. A file at the path is not: a partial extraction,
+	// an interrupted package install, or a build against another libc all leave
+	// an executable that cannot start, and this check recorded that failure in
+	// the detail text while still reporting ok -- so the installer, which reads
+	// `ok` alone, finished on a host whose first rust cell could not run.
+	const wasmedge = probeWasmedge();
+	const wasmedgeOk = wasmedge.version !== undefined;
 	checks.push({
 		name: "wasmedge",
 		ok: wasmedgeOk,
-		detail: wasmedgeDetail,
+		detail:
+			wasmedge.version ??
+			(wasmedge.bin
+				? `${wasmedge.bin} (--version failed)`
+				: "not found (checked WASMEDGE_AGENT_WASMEDGE, PATH, ~/.wasmedge/bin)"),
 		...(wasmedgeOk ? {} : { fix: "install WasmEdge (wasmedge.org), or re-run install.sh" }),
 	});
 
