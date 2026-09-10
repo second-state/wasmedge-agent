@@ -8,6 +8,7 @@ import { join, resolve, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConcurrency } from "../src/core/rust-cell/build-gate.js";
 import { collectRuntimeChecks } from "../src/core/rust-cell/doctor.js";
+import { probeWasmedge } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, resolveTemplateDir, templateCandidates } from "../src/core/rust-cell/workspace.js";
 
 describe("templateCandidates", () => {
@@ -216,7 +217,37 @@ describe("collectRuntimeChecks", () => {
 	const tempDirs: string[] = [];
 	afterEach(() => {
 		delete process.env.WASMEDGE_AGENT_TEMPLATE_DIR;
+		delete process.env.WASMEDGE_AGENT_WASMEDGE;
 		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** A wasmedge that answers --version as told. */
+	function stubWasmedge(body: string): string {
+		const dir = mkdtempSync(join(tmpdir(), "doctor-wasmedge-"));
+		tempDirs.push(dir);
+		const bin = join(dir, "wasmedge");
+		writeFileSync(bin, body, { mode: 0o755 });
+		return bin;
+	}
+
+	it("fails the wasmedge check when the binary does not run", () => {
+		// A file at the path is not the check. This recorded the failure in the
+		// detail text and still reported ok, and the installer reads ok alone --
+		// so a host whose wasmedge cannot start finished installing clean.
+		process.env.WASMEDGE_AGENT_WASMEDGE = stubWasmedge("#!/bin/sh\nexit 1\n");
+
+		const wasmedge = collectRuntimeChecks().find((check) => check.name === "wasmedge");
+
+		expect(wasmedge).toMatchObject({ ok: false });
+		expect(wasmedge?.detail).toContain("--version failed");
+	});
+
+	it("passes the wasmedge check on the version the binary reports", () => {
+		process.env.WASMEDGE_AGENT_WASMEDGE = stubWasmedge('#!/bin/sh\necho "wasmedge version 0.14.1"\n');
+
+		const wasmedge = collectRuntimeChecks().find((check) => check.name === "wasmedge");
+
+		expect(wasmedge).toMatchObject({ ok: true, detail: "wasmedge version 0.14.1" });
 	});
 
 	it("reports an unvendored cold template without throwing", () => {
@@ -242,5 +273,68 @@ describe("collectRuntimeChecks", () => {
 		const template = checks.find((check) => check.name === "workspace template");
 		expect(template).toMatchObject({ ok: false });
 		expect(checks.some((check) => check.name === "template vendor")).toBe(false);
+	});
+});
+
+describe("probeWasmedge", () => {
+	const tempDirs: string[] = [];
+	const savedPath = process.env.PATH;
+	const savedHome = process.env.HOME;
+
+	afterEach(() => {
+		process.env.PATH = savedPath;
+		process.env.HOME = savedHome;
+		delete process.env.WASMEDGE_AGENT_WASMEDGE;
+		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** A host with `wasmedge` on PATH and another under ~/.wasmedge/bin. */
+	function host(onPath: string, inHome: string): { pathBin: string; homeBin: string } {
+		const dir = mkdtempSync(join(tmpdir(), "probe-wasmedge-"));
+		tempDirs.push(dir);
+		const pathDir = join(dir, "bin");
+		const homeBinDir = join(dir, "home", ".wasmedge", "bin");
+		mkdirSync(pathDir, { recursive: true });
+		mkdirSync(homeBinDir, { recursive: true });
+		const pathBin = join(pathDir, "wasmedge");
+		const homeBin = join(homeBinDir, "wasmedge");
+		writeFileSync(pathBin, onPath, { mode: 0o755 });
+		writeFileSync(homeBin, inHome, { mode: 0o755 });
+		process.env.PATH = pathDir;
+		process.env.HOME = join(dir, "home");
+		return { pathBin, homeBin };
+	}
+
+	const BROKEN = "#!/bin/sh\nexit 1\n";
+	const WORKS = '#!/bin/sh\necho "wasmedge version 0.14.1"\n';
+
+	it("takes the first candidate that runs, not the first that exists", () => {
+		// A broken entry on PATH used to win forever: selection stopped at the
+		// file, so reinstalling into ~/.wasmedge repaired nothing that was
+		// actually being selected.
+		const { homeBin } = host(BROKEN, WORKS);
+
+		expect(probeWasmedge()).toEqual({ bin: homeBin, version: "wasmedge version 0.14.1" });
+	});
+
+	it("prefers PATH when PATH works", () => {
+		const { pathBin } = host(WORKS, BROKEN);
+
+		expect(probeWasmedge()).toEqual({ bin: pathBin, version: "wasmedge version 0.14.1" });
+	});
+
+	it("reports the broken one when no candidate runs", () => {
+		const { pathBin } = host(BROKEN, BROKEN);
+
+		expect(probeWasmedge()).toEqual({ bin: pathBin });
+	});
+
+	it("does not fall back from an explicit override", () => {
+		// Pointing at a binary and silently getting another one is worse than
+		// being told this one does not work.
+		const { pathBin } = host(BROKEN, WORKS);
+		process.env.WASMEDGE_AGENT_WASMEDGE = pathBin;
+
+		expect(probeWasmedge()).toEqual({ bin: pathBin });
 	});
 });
