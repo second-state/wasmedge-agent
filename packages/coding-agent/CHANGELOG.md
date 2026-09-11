@@ -114,6 +114,13 @@
   yes, and finished with no stable toolchain at all; `--check` agreed. Both
   name stable now. The default is left alone, so a host that builds cells with
   nightly goes on doing so.
+- `install.sh` runs `mise reshim` after the global npm install when mise
+  manages the active Node.js. mise resolves commands through its shims, and
+  a shim exists only for commands it knew about at its last reshim, so on
+  such a host -- a fresh Omarchy install is one -- `npm install -g` put
+  `wasmedge-agent` in the right place and no shell could find it. The
+  installer's advice for a command off PATH also named `npm bin -g`, which
+  npm 9 removed; it names `npm prefix -g` now.
 - The canonical installers are no longer a pair of files each guarded by its
   own write-refusal. `install.sh` is the asset GitHub's `latest` alias points
   at, so stable's installer changes only when the alias itself moves to a

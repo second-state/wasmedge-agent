@@ -821,6 +821,90 @@ printf '%s\\n' "$(resolve_wasmedge_agent_version ${channel})"`,
 		expect(readFileSync(join(dir, "requested"), "utf-8").trim()).toBe(`https://releases.example.test/${path}`);
 	});
 
+	/** A stub `npm` that records its arguments, beside a stub `mise` whose
+	 *  `which node` answers as told and whose `reshim` exits as told. */
+	function stubNpmAndMise(dir: string, mise: { managesNode: boolean; reshimStatus?: number } | undefined): string {
+		const bin = join(dir, "npm-bin");
+		mkdirSync(bin, { recursive: true });
+		const log = join(dir, "log");
+		writeFileSync(join(bin, "npm"), `#!/bin/sh\nprintf 'npm %s\\n' "$*" >> "${log}"\nexit 0\n`);
+		chmodSync(join(bin, "npm"), 0o755);
+		if (mise) {
+			writeFileSync(
+				join(bin, "mise"),
+				`#!/bin/sh
+printf 'mise %s\\n' "$*" >> "${log}"
+case "$1" in
+	which) exit ${mise.managesNode ? 0 : 1} ;;
+	reshim) exit ${mise.reshimStatus ?? 0} ;;
+esac
+exit 0
+`,
+			);
+			chmodSync(join(bin, "mise"), 0o755);
+		}
+		return bin;
+	}
+
+	const installDriver = `wasmedge_agent_run_quiet_with_animation_steps() { shift 3; "$@"; }
+wasmedge_agent_bootstrap_runtime_on_install=0
+install_wasmedge_agent_package /nonexistent/wasmedge-agent-0.0.1.tgz`;
+
+	it("refreshes mise shims after the global install when mise manages node", () => {
+		// The first thing a fresh Omarchy install hit: mise-managed Node.js,
+		// npm put the command in the right place, and no shell could find it
+		// because mise had no shim for a command it had never seen.
+		const dir = workspace();
+		const bin = stubNpmAndMise(dir, { managesNode: true });
+
+		const result = run(dir, installDriver, bin);
+
+		expect(result.status).toBe(0);
+		const steps = readFileSync(join(dir, "log"), "utf-8");
+		expect(steps).toContain("npm install -g");
+		expect(steps).toContain("mise which node");
+		expect(steps).toContain("mise reshim");
+		expect(steps.indexOf("npm install -g")).toBeLessThan(steps.indexOf("mise reshim"));
+	});
+
+	it("leaves mise alone when it does not manage the active node", () => {
+		const dir = workspace();
+		const bin = stubNpmAndMise(dir, { managesNode: false });
+
+		const result = run(dir, installDriver, bin);
+
+		expect(result.status).toBe(0);
+		const steps = readFileSync(join(dir, "log"), "utf-8");
+		expect(steps).toContain("mise which node");
+		expect(steps).not.toContain("mise reshim");
+	});
+
+	it("needs no mise at all", () => {
+		const dir = workspace();
+		const bin = stubNpmAndMise(dir, undefined);
+
+		const result = run(dir, installDriver, bin);
+
+		expect(result.status).toBe(0);
+		expect(readFileSync(join(dir, "log"), "utf-8").trim()).toBe(
+			"npm install -g --no-fund --no-audit --loglevel=error --progress=false /nonexistent/wasmedge-agent-0.0.1.tgz",
+		);
+		expect(result.output).not.toContain("mise");
+	});
+
+	it("warns and carries on when reshim fails", () => {
+		// The install itself succeeded; a shim that could not be written is
+		// something the user can do by hand, and the message says so.
+		const dir = workspace();
+		const bin = stubNpmAndMise(dir, { managesNode: true, reshimStatus: 1 });
+
+		const result = run(dir, installDriver, bin);
+
+		expect(result.status).toBe(0);
+		expect(result.output).toContain("mise reshim failed");
+		expect(result.output).toContain("wasmedge-agent stays off your PATH");
+	});
+
 	it("does nothing when the runtime bootstrap is off", () => {
 		const dir = workspace();
 		const log = join(dir, "log");
