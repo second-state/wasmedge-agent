@@ -541,8 +541,19 @@ function npmTarballName(packageName, version) {
 	return `${packageName.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
 }
 
-function releaseTarballUrl(baseUrl, version, tarballFile) {
-	return `${baseUrl}/releases/v${version}/${tarballFile}`;
+/** Where a release's files sit under the host, as one relative path.
+ *
+ *  Both the URLs baked into the published package manifests and the path
+ *  recorded in release.json come from here, so the manifest and the installer
+ *  cannot end up disagreeing about the layout. Moving to a different release
+ *  layout is an edit to this function.
+ */
+export function releaseAssetPath(version, file) {
+	return `releases/v${version}/${file}`;
+}
+
+export function releaseAssetUrl(baseUrl, version, file) {
+	return `${baseUrl}/${releaseAssetPath(version, file)}`;
 }
 
 function rewriteInternalDependencies(dependencies, internalPackageUrls) {
@@ -710,7 +721,7 @@ function main() {
 		if (releasePackage.packageDir === "coding-agent") continue;
 		const sourcePackageName = sourcePackageNames.get(releasePackage.packageDir);
 		const artifactFile = artifactFiles.get(releasePackage.packageDir);
-		internalPackageUrls.set(sourcePackageName, releaseTarballUrl(args.baseUrl, releaseVersion, artifactFile));
+		internalPackageUrls.set(sourcePackageName, releaseAssetUrl(args.baseUrl, releaseVersion, artifactFile));
 	}
 
 	// Checked before the build, so a bad --out-dir costs an error rather than
@@ -799,7 +810,7 @@ function main() {
 	writeJson(join(artifactsDir, "release.json"), {
 		version: `v${releaseVersion}`,
 		package: publicPackageName,
-		tarball: `releases/v${releaseVersion}/${artifactFiles.get("coding-agent")}`,
+		tarball: releaseAssetPath(releaseVersion, artifactFiles.get("coding-agent")),
 		tarballs: tarballs.map((tarball) => ({
 			package: tarball.name,
 			file: tarball.file,
