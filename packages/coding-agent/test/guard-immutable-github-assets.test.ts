@@ -116,11 +116,11 @@ describe("guard-immutable-github-assets.sh", () => {
 	});
 
 	it("refuses to replace an asset with different bytes", () => {
-		// The case the bucket guard cannot see: the packer stamps the
-		// publication host into the public manifest, so one commit packed
-		// against a new R2_PUBLIC_BASE_URL produces a different tarball. The
-		// tag check passes and the new bucket's prefix is empty; only the
-		// release's own assets still remember what this version was.
+		// The packer stamps the publication host into the public manifest, so
+		// one commit packed against a different WASMEDGE_AGENT_DOWNLOAD_BASE_URL
+		// produces a different tarball; the tag check passes because the commit
+		// is the tagged one, and only the release's own assets still remember
+		// what this version was.
 		const { status, output } = runGuard("ok", `${TARBALL}`, "packed against another host");
 
 		expect(status).toBe(1);

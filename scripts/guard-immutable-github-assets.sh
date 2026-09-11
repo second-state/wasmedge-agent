@@ -1,22 +1,17 @@
 #!/bin/sh
 # Refuses to clobber a GitHub release asset with different bytes.
 #
-# The companion to guard-immutable-release.sh, for the other half of a
-# release. That one protects the R2 bucket; the uploads here go up with
-# `gh release upload --clobber`, which replaces an existing asset of the same
-# name without asking. GitHub assets are not immutable the way the bucket's
-# are, but they are what `install.sh` and every human downloading a release
-# actually fetch, so replacing one silently is the same class of problem: two
-# people holding different bytes for one version.
+# The release's assets are what install.sh and every human downloading a
+# release actually fetch, and `gh release upload --clobber` replaces one of the
+# same name without asking. Replacing an asset silently leaves two people
+# holding different bytes for one version, so this refuses instead.
 #
-# The bucket guard cannot cover this, and one case makes that concrete. The
-# packer stamps the publication host into the public package's manifest, so
-# the same commit and version packed against a different R2_PUBLIC_BASE_URL
-# produce different tarball bytes. Point the workflow at a new bucket and
-# re-run an old version from its own commit: the tag check passes, because the
-# commit really is the tagged one, and the bucket guard sees an empty prefix,
-# because the bucket is new. Only the release's existing assets still remember
-# what v<version> was.
+# One case makes the need concrete. The packer stamps the publication host into
+# the public package's manifest, so the same commit and version packed against
+# a different host produce different tarball bytes. Move the repository, or set
+# the base URL override, and re-run an old version from its own commit: the tag
+# check passes, because the commit really is the tagged one. Only the release's
+# existing assets still remember what v<version> was.
 #
 # Usage: guard-immutable-github-assets.sh <repo> <tag> <local-dir>
 #

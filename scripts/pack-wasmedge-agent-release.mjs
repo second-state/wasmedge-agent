@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// TODO: Remove this R2 tarball packer once wasmedge-agent and its internal workspace
+// TODO: Remove this release tarball packer once wasmedge-agent and its internal workspace
 // dependencies are published through a real npm release flow.
 
 import { spawnSync } from "node:child_process";
@@ -151,7 +151,7 @@ function parseArgs(args) {
 function printHelp() {
 	console.log(`Usage: node scripts/pack-wasmedge-agent-release.mjs --base-url url [--channel stable|beta] [--version x.y.z] [--out-dir path]
 
-Creates private npm tarballs for R2 distribution:
+Creates private npm tarballs for distribution through GitHub Releases:
 
   <out-dir>/artifacts/wasmedge-agent-<version>.tgz
   <out-dir>/artifacts/wasmedge-agent-ai-<version>.tgz
@@ -159,8 +159,9 @@ Creates private npm tarballs for R2 distribution:
   <out-dir>/artifacts/wasmedge-agent-tui-<version>.tgz
   <out-dir>/artifacts/SHA256SUMS
   <out-dir>/artifacts/<channel>
-  <out-dir>/artifacts/release.json, published under the release prefix and
-    copied to latest.json (stable) or beta.json (beta) at the bucket root
+  <out-dir>/artifacts/release.json, published with the version release, and
+    copied to latest.json on that same release (stable, which GitHub's latest
+    alias serves) or to beta.json on the beta channel release
 `);
 }
 
@@ -610,7 +611,7 @@ export function createReleasePackageJson(sourcePackage, packageName, releaseVers
 			configDir: ".wasmedge-agent",
 			// The host this release is being published to, carried by the
 			// artifact that goes there. Without it an official install has no
-			// release host at all: the workflow knows the bucket, renders it
+			// release host at all: the workflow knows the release host, renders it
 			// into the installer, and the installed CLI kept nothing -- so the
 			// update check silently did not run and `update` failed with "No
 			// release host is configured" until the user exported
