@@ -896,29 +896,11 @@ const ALLOWLIST = [
 		reason:
 			"the onboarding-transition regression test records that same Prime Inference progress line in its expected transcript (rule R1); only that clause is exempt",
 	},
-	{
-		glob: "packages/coding-agent/CHANGELOG.md#unreleased",
-		allow: [
-			/Renamed Prime Agent to WasmEdge Agent/,
-			/`primeAgentMeta`/,
-			/`prime-agent`/,
-			/`pkill -f prime-agent`/,
-			/`~\/\.prime\/agent\/`/,
-			/`PRIME_AGENT_\*`/,
-			/`prime-agent-traces`/,
-			/`ai\.primeintellect\.prime-agent`/,
-			/`prime-agent-bash`/,
-			/`prime-agent\.daemon`/,
-			/`prime-agent\.refinement`/,
-			/`prime-agent\.worker_recovery`/,
-			/`prime-agent\.update_restart`/,
-			/`prime-agent\.update_complete`/,
-			/"Prime Intellect authentication successful"/,
-			/Prime Intellect's\./,
-		],
-		reason:
-			"the Unreleased section is scanned like source, not like released history, and these are the literals a rename announcement cannot avoid naming: the product renamed from, the one CamelCase identifier whose rename would be undocumented without naming it, the legacy command the alias installs, the command that stops a pre-rename daemon, the legacy config directory and variable prefix, the eight preserved wire values, and the OAuth page's old tab title with the one clause saying whose name it was. Each is backticked or quoted, so a bare Prime Agent or prime-agent added to a new release line still fails here",
-	},
+	// The rename announcement lived in coding-agent's Unreleased section until
+	// 0.0.1 was cut, and had an entry here naming each legacy literal it could
+	// not avoid. Released sections are history and pass below; a new Unreleased
+	// line that has to name a legacy identifier earns its own entry, named and
+	// not blanket, the way that one was.
 	{
 		glob: "**/CHANGELOG.md",
 		allow: [ANY_LINE],
@@ -1351,14 +1333,14 @@ function selfTest() {
 		],
 		// Four spaces is a code block, not a heading, so the scope does not open.
 		["packages/coding-agent/CHANGELOG.md", "# Changelog\n\n    ## [Unreleased]\n\n- Prime Agent got faster.\n", 0],
-		// What an Unreleased section legitimately needs is named, not blanket.
+		// A legacy identifier in an Unreleased line is a violation until that
+		// line has an entry of its own. The rename announcement's entry went
+		// with the 0.0.1 cut; the released section it now sits in is history.
 		[
 			"packages/coding-agent/CHANGELOG.md",
 			"# Changelog\n\n## [Unreleased]\n\n- `prime-agent` keeps working for one release.\n",
-			0,
+			1,
 		],
-		// The exemption is the coding-agent changelog's Unreleased section, not
-		// every package changelog's.
 		["packages/ai/CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n- `prime-agent` keeps working.\n", 1],
 	];
 	for (const [path, text, expected] of cases) {
