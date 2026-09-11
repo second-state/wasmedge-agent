@@ -114,14 +114,27 @@
   yes, and finished with no stable toolchain at all; `--check` agreed. Both
   name stable now. The default is left alone, so a host that builds cells with
   nightly goes on doing so.
-- The canonical installers are published forward-only, and each has one
-  writer. `install.sh` comes from production releases and `install-beta.sh`
-  from beta builds; both steps used to write both scripts with a plain copy, so
-  a beta publication could put an older stable installer at the canonical URL,
-  and two runs publishing at once could leave the channel pointers naming one
-  release while the installer beside them came from another. Each published
-  copy now carries the release it was rendered for, and a write that would take
-  it backwards is refused.
+- The canonical installers are no longer a pair of files each guarded by its
+  own write-refusal. `install.sh` is the asset GitHub's `latest` alias points
+  at, so stable's installer changes only when the alias itself moves to a
+  newer release -- decided by comparing versions, not by publication date and
+  not by refusing an out-of-order write. `install-beta.sh` is gone; the beta
+  installer is the `install.sh` asset on the `beta` channel release, whose tag
+  and three assets move together onto each beta build that is still `main`'s
+  head at publish time. Beta enforces no forward-only order of its own --
+  nothing about one beta build's version ranks it against the last one -- a
+  run behind `main` just leaves the channel where it is.
+- The release host moved from a Cloudflare R2 bucket to GitHub Releases.
+  `<base>` is `https://github.com/<owner>/<repo>/releases`, derived from the
+  repository the workflow runs in; the `WASMEDGE_AGENT_DOWNLOAD_BASE_URL`
+  repository variable overrides it, which is the same variable a hand-run
+  `install.sh` and an installed agent's update check read to point at a
+  different host. Versioned assets -- the tarballs, `SHA256SUMS`,
+  `release.json` -- publish under `<base>/download/v<version>/<file>`; the
+  stable channel rides GitHub's own `latest` alias at
+  `<base>/latest/download/<file>`; the beta channel is the `beta` release at
+  `<base>/download/beta/<file>`. The workflow needs no R2 variable and no R2
+  secret any more.
 - Both install paths check that a verified package is the package its file
   name claims. A checksum says the bytes are the ones published under that
   name, and nothing about what is inside them, so a release assembled with one

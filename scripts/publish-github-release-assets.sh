@@ -5,8 +5,8 @@
 # The workflow used to answer this from a listing taken earlier: the guard
 # compared bytes before anything was published, and the upload loop then kept
 # every asset whose *name* was already on the release. Between those two steps
-# the immutable objects go up, a tag is created and a release is written, which
-# is time enough for another holder of the same token to add an asset. One that
+# a tag is created and a release is written, which is time enough for another
+# holder of the same token to add an asset. One that
 # appears in that window has a name the loop recognises and bytes nothing ever
 # looked at, and the loop keeps it.
 #
@@ -18,7 +18,7 @@
 #
 # Usage: publish-github-release-assets.sh <repo> <tag> <local-dir>
 #
-# Fails closed, the way the two guards do. Only an explicit 404 is an answer
+# Fails closed, the way the guard does. Only an explicit 404 is an answer
 # about what is published; an expired token, a rate limit and a 5xx all look
 # like an absent asset to anything reading an exit status alone, and reading
 # one as absence is what would let this upload beside a copy it never saw.
