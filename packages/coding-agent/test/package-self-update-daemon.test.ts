@@ -593,9 +593,13 @@ describe("self-update daemon restart", () => {
 
 	it("uses the interactive no-change sentinel only when self-update is unchanged", async () => {
 		process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] = "1";
+		// A release older than any version this package can carry. The fixture
+		// used to say 0.2.6, which was older than the 0.7.0 the fork inherited
+		// and newer than the 0.0.1 it restarted at, so the cut turned "nothing
+		// to do" into an update the test then failed to see attempted.
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ package: PACKAGE_NAME, version: "0.2.6" })),
+			vi.fn(async () => Response.json({ package: PACKAGE_NAME, version: "0.0.0" })),
 		);
 
 		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);

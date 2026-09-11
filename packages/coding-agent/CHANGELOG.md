@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-09-11
+
 - Renamed Prime Agent to WasmEdge Agent. `wasmedge-agent` is the canonical
   command; `prime-agent` keeps working for one release and warns on stderr.
 - Scope of that alias: the release package is named `wasmedge-agent` and
