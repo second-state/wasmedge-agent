@@ -48,7 +48,7 @@ Edit directly or use `/settings` for common options.
 
 ### Update Checks
 
-An official release records the host it was published to, and the manifest is fetched from there: stable builds fetch `latest.json` under it, and beta builds fetch `beta.json` and continue following beta updates. `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` overrides that host. A build that was not packed for release records none, and runs no update check.
+An official release records the host it was published to (`<base>`), and the manifest is fetched from there: stable builds fetch `latest.json` at `<base>/latest/download/latest.json`, and beta builds fetch `beta.json` at `<base>/download/beta/beta.json` and continue following beta updates. `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` overrides `<base>`. A build that was not packed for release records none, and runs no update check.
 
 Set `PI_SKIP_VERSION_CHECK=1` to disable the WasmEdge Agent version update check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -58,11 +58,13 @@ The stable `latest.json` and beta `beta.json` manifests use the same JSON shape:
 {
   "version": "0.73.1",
   "package": "wasmedge-agent",
-  "tarball": "releases/v0.73.1/wasmedge-agent-0.73.1.tgz"
+  "tarball": "download/v0.73.1/wasmedge-agent-0.73.1.tgz"
 }
 ```
 
-`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, WasmEdge Agent installs that tarball instead of the package name. Relative tarball paths resolve against the release host: the one an official release records, or `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` where it is set.
+`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, WasmEdge Agent installs that tarball instead of the package name. Relative tarball paths resolve against `<base>`: the host an official release records, or `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` where it is set, under `<base>/download/v<version>/<file>`.
+
+A custom host set through `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` must serve all three shapes: `<base>/latest/download/latest.json`, `<base>/download/beta/beta.json`, and `<base>/download/v<version>/<file>` for every file a manifest names.
 
 ### Warnings
 

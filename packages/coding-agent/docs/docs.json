@@ -153,6 +153,10 @@
           "path": "development.md"
         },
         {
+          "title": "Releasing",
+          "path": "releasing.md"
+        },
+        {
           "title": "Daemon Architecture",
           "path": "daemon.md"
         },
