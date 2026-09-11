@@ -163,7 +163,7 @@ main() {
 	version="$(resolve_wasmedge_agent_version "$wasmedge_agent_requested_version")"
 	fetch_wasmedge_agent_release_manifest "$version"
 	tarball_name="$wasmedge_agent_package-$version.tgz"
-	tarball_url="$wasmedge_agent_base_url/releases/v$version/$tarball_name"
+	tarball_url=$(wasmedge_agent_release_asset_url "$version" "$tarball_name")
 
 	confirm_install "$version" "$tarball_url"
 	confirm_cell_runtime_setup
@@ -1197,6 +1197,16 @@ parse_wasmedge_agent_arguments() {
 	done
 }
 
+# Where a release's files sit under the host. Every URL this script builds for
+# a published file comes from here, so moving to a different release layout
+# is an edit to this function rather than a search through the script.
+#
+# An empty file name yields the release's prefix, with its trailing slash,
+# which is what the staged-package rewrite matches against.
+wasmedge_agent_release_asset_url() {
+	printf '%s/releases/v%s/%s' "$wasmedge_agent_base_url" "$1" "$2"
+}
+
 print_wasmedge_agent_usage() {
 	cat <<EOF
 usage: install.sh [--check] [--yes|--now] [stable|beta|<version>]
@@ -1443,7 +1453,7 @@ fetch_wasmedge_agent_release_manifest() {
 		"Reading release v$manifest_version" \
 		"Reading release v$manifest_version" \
 		"Asking what v$manifest_version publishes." \
-		curl -fsSL "$wasmedge_agent_base_url/releases/v$manifest_version/release.json" \
+		curl -fsSL "$(wasmedge_agent_release_asset_url "$manifest_version" release.json)" \
 			-o "$wasmedge_agent_channel_manifest"; then
 		printf 'error: could not read %s/releases/v%s/release.json\n' \
 			"$wasmedge_agent_base_url" "$manifest_version" >&2
@@ -1949,7 +1959,7 @@ download_wasmedge_agent_package() {
 	tarball_path="$3"
 	download_dir=$(dirname "$tarball_path")
 	tarball_name=$(basename "$tarball_path")
-	checksums_url="$wasmedge_agent_base_url/releases/v$version/SHA256SUMS"
+	checksums_url=$(wasmedge_agent_release_asset_url "$version" SHA256SUMS)
 	checksums_path="$download_dir/SHA256SUMS"
 
 	if ! command -v curl >/dev/null 2>&1; then
@@ -2033,7 +2043,7 @@ stage_verified_wasmedge_agent_package() {
 	staged_checksums="$3"
 	staged_dir=$(dirname "$staged_tarball")
 	staged_name=$(basename "$staged_tarball")
-	staged_prefix="$wasmedge_agent_base_url/releases/v$staged_version/"
+	staged_prefix=$(wasmedge_agent_release_asset_url "$staged_version" "")
 	staged_root="$staged_dir/staged"
 	wasmedge_agent_install_tarball="$staged_tarball"
 
