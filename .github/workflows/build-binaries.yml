@@ -493,55 +493,28 @@ jobs:
             fi
           fi
 
-      # Both destinations first, for the reason the production pair has: the
-      # beta channel pointer and the installers move in the step below, and a
-      # guard that runs after them refuses only once they already name a build
-      # the GitHub release does not carry.
+      # Asked before anything is written, for the reason the production guard
+      # has: GitHub is the one destination now, and the version release's
+      # existing assets are what a rebuild of the same version has to agree
+      # with; a refusal here -- or an unreadable answer, which refuses too --
+      # stops before any of this run's assets go up.
       #
-      # Beta tarballs carry the same one-year immutable policy as production
-      # ones, so a rebuilt beta of an already-published version is the same
-      # unfixable replacement. The GitHub side is checked the same way now
-      # that each beta has a tag of its own: nothing there is rolling, so
-      # nothing is exempt from the comparison.
+      # The GitHub side is checked the same way now that each beta has a tag
+      # of its own: nothing there is rolling, so nothing is exempt from the
+      # comparison.
       - name: Guard the beta release destinations
         if: env.PUBLISH_BETA == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BETA_DIR=release-artifacts/beta
-          RELEASE_PREFIX="releases/v${BETA_VERSION}"
 
           test -f "$BETA_DIR/wasmedge-agent-${BETA_VERSION}.tgz"
           test -f "$BETA_DIR/SHA256SUMS"
           test -f "$BETA_DIR/beta"
           test -f "$BETA_DIR/release.json"
-          test -n "$R2_BUCKET"
-          test -n "$R2_ENDPOINT_URL"
 
-          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$BETA_DIR"
           sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" "v${BETA_VERSION}" "$BETA_DIR"
-
-      - name: Publish immutable beta artifacts to R2
-        if: env.PUBLISH_BETA == 'true'
-        run: |
-          BETA_DIR=release-artifacts/beta
-          RELEASE_PREFIX="releases/v${BETA_VERSION}"
-
-          # Conditional creation, for the reason the production objects have:
-          # a beta prefix is immutable for a year too.
-          for artifact in "$BETA_DIR"/*.tgz; do
-            sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-              "${RELEASE_PREFIX}/$(basename "$artifact")" "$artifact" application/gzip
-          done
-
-          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "${RELEASE_PREFIX}/SHA256SUMS" "$BETA_DIR/SHA256SUMS" text/plain
-
-          # Beside the tarballs, for the reason the production copy is there:
-          # an install of this version resolves no channel and has nothing else
-          # to hold these files to.
-          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "${RELEASE_PREFIX}/release.json" "$BETA_DIR/release.json" application/json
 
       - name: Publish the beta GitHub release
         if: env.PUBLISH_BETA == 'true'
@@ -549,13 +522,12 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # No freshness check here. This release is addressed by version, and
-          # its immutable objects went up in the step above whether or not main
-          # has moved since: stopping short of the GitHub half would leave the
-          # two destinations disagreeing about what v${BETA_VERSION} is, with no
-          # way to finish it -- a later run publishes a different version. What
-          # a newer main commit has to stop is the channel pointer, and that is
-          # checked immediately before the pointer moves, below.
+          # No freshness check here. This release is addressed by a tag that
+          # is unique to this build -- v${BETA_VERSION} already ends in the
+          # run and the commit -- so publishing it is harmless whether or not
+          # main has moved since: no other build can ever claim that tag.
+          # What has to be fresh is the channel, and that is checked
+          # immediately before it moves, below.
           BETA_DIR=release-artifacts/beta
           printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
 
@@ -569,9 +541,21 @@ jobs:
           # below is one no other build can take, and a re-run of this run
           # completes that tag rather than opening a second one. A create that
           # fails partway leaves an incomplete release under a tag nothing
-          # points at yet -- the channel pointer moves in the step after this
-          # one -- so a half-finished beta is invisible rather than installable.
+          # points at yet -- the channel pointer moves below, later in this
+          # step -- so a half-finished beta is invisible rather than installable.
           if gh release view "v${BETA_VERSION}" >/dev/null 2>&1; then
+            # gh release view finds this release whether it is published or a
+            # draft left by a create that died mid-upload -- but
+            # publish-github-release-assets.sh reads releases/tags/<tag>, an
+            # endpoint that never returns a draft, so a re-run against one
+            # would fail one layer deeper with no explanation. Caught here
+            # instead, naming what to do.
+            if [ "$(gh release view "v${BETA_VERSION}" --json isDraft --jq .isDraft)" = true ]; then
+              echo "v${BETA_VERSION} is a draft left by a create that failed mid-upload." >&2
+              echo "Delete it (gh release delete v${BETA_VERSION} --yes) and re-run." >&2
+              exit 1
+            fi
+
             # A re-run of this run, completing what its first attempt left
             # behind. Each asset is compared as it is decided, and nothing
             # already published is replaced.
@@ -585,13 +569,10 @@ jobs:
               "$BETA_DIR"/*
           fi
 
-          # Both questions asked here, before any of these objects names this
-          # build. The branch was last checked before the release above was
-          # written, and main can move in that time: a run that answered it
-          # once published a beta it had already decided was stale. The guard
-          # is re-run for the reason the production one is -- nothing under
-          # this prefix has been overwritten by this run, so a refusal costs a
-          # retry rather than a repair.
+          # Checked again here, right before the channel moves. Main was last
+          # checked before the version release above was published, and it
+          # can move in that time: a channel that skipped this check could
+          # end up naming a build that is no longer main's head.
           latest_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)
           if [ "$latest_main_sha" != "$BUILD_REF" ]; then
             echo "A newer main commit exists; leaving the beta pointers where they are."
@@ -599,44 +580,48 @@ jobs:
             exit 0
           fi
 
-          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "releases/v${BETA_VERSION}" "$BETA_DIR"
+          # The channel, last, and only once the version release above is
+          # complete. Its tag is moved onto this build so the release's own
+          # source links name what it publishes; its three assets are what a
+          # beta install reads.
+          BETA_CHANNEL_DIR=release-artifacts/beta-channel
 
-          # Then the text pointer, and the JSON manifest last, for the reason
-          # the production pointers have: the JSON is the object both install
-          # paths read, so it is what decides which release this channel means.
-          #
-          # Both move under the same condition. The freshness check above reads
-          # the default branch and then writes, and main can advance between
-          # the two -- so the ordering is carried by the objects themselves:
-          # each write names a run number and refuses to publish under one that
-          # is not newer than what the pointer already names, with the check and
-          # the write made one operation by a condition on the ETag.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            beta "$BETA_DIR/beta" text/plain beta-run || pointer_status=$?
-          if [ "$pointer_status" -eq 3 ]; then
-            echo "v${BETA_VERSION} is published and installable by version; the channel names a newer run."
-            exit 0
+          # A beta release deleted by hand without --cleanup-tag leaves its
+          # tag behind. The next run still takes the create branch below --
+          # gh release view finds no release -- and gh release create's
+          # --target is ignored for a tag that already exists, so this run's
+          # release attaches wherever the surviving tag points. The run after
+          # that finds a release and takes the PATCH branch instead, healing
+          # the tag onto whatever BUILD_REF is current then.
+          if gh release view beta >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/beta" \
+              -f sha="$BUILD_REF" -F force=true > /dev/null
+          else
+            # No assets here: a create that carries assets is a draft until they
+            # are all up, and a draft has no tag to move on the next run.
+            gh release create beta \
+              --title "Beta channel" \
+              --notes "The current beta. Its assets move with every beta build; the releases they name do not." \
+              --target "$BUILD_REF" \
+              --prerelease
           fi
-          [ "$pointer_status" -eq 0 ] || exit "$pointer_status"
 
-          # The beta installer, once this build is the one the channel names,
-          # and written the way the pointers are. Only beta runs write it, and
-          # they do not write install.sh at all any more: both steps wrote both
-          # scripts with a plain copy, so a beta publication could put an older
-          # stable installer at the canonical URL, and either could land its
-          # copy after a newer run had published everything.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            install-beta.sh /tmp/wasmedge-agent-install-beta.sh text/x-shellscript beta-run || pointer_status=$?
-          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
+          # Ordered, and the manifest last. Replacing an asset on GitHub is a
+          # delete followed by an upload, so a failure before the manifest's
+          # own replacement leaves beta.json still naming the previous build
+          # -- which is a complete, installable release -- rather than naming
+          # this one before its installer is in place. A failure during that
+          # replacement leaves no beta.json at all until the retry finishes it.
+          gh release upload beta "$BETA_CHANNEL_DIR/install.sh" --clobber
+          gh release upload beta "$BETA_CHANNEL_DIR/beta" --clobber
+          gh release upload beta "$BETA_CHANNEL_DIR/beta.json" --clobber
 
-          # A stand-down here means a newer run took the channel in between,
-          # which is the condition doing its job rather than a failure.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            beta.json "$BETA_DIR/release.json" application/json beta-run || pointer_status=$?
-          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
-
-          echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"
+          # Asserted the way production asserts --latest's outcome: the flag
+          # is the request, and this confirms it landed. --prerelease is set
+          # only on the create path above, so without this check a gh that
+          # dropped it silently would let a beta take the latest alias away
+          # from stable.
+          if [ "$(gh release view beta --json isPrerelease --jq .isPrerelease)" != true ]; then
+            echo "The beta channel release is not marked prerelease, so it could take the latest alias from stable." >&2
+            exit 1
+          fi
