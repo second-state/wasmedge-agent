@@ -1,8 +1,8 @@
 import { RELEASE_DOWNLOAD_BASE_URL, readLegacyEnv } from "../config.js";
 import { getPiUserAgent } from "./pi-user-agent.js";
 
-const STABLE_VERSION_MANIFEST_PATH = "latest.json";
-const BETA_VERSION_MANIFEST_PATH = "beta.json";
+const STABLE_VERSION_MANIFEST_PATH = "latest/download/latest.json";
+const BETA_VERSION_MANIFEST_PATH = "download/beta/beta.json";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {

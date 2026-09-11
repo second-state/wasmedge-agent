@@ -549,7 +549,7 @@ function npmTarballName(packageName, version) {
  *  layout is an edit to this function.
  */
 export function releaseAssetPath(version, file) {
-	return `releases/v${version}/${file}`;
+	return `download/v${version}/${file}`;
 }
 
 export function releaseAssetUrl(baseUrl, version, file) {
