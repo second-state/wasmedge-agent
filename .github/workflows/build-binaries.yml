@@ -43,6 +43,7 @@ jobs:
       production_version: ${{ steps.context.outputs.production_version }}
       publish_beta: ${{ steps.context.outputs.publish_beta }}
       publish_production: ${{ steps.context.outputs.publish_production }}
+      release_base_url: ${{ steps.base_url.outputs.release_base_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -108,12 +109,13 @@ jobs:
             production_version="${INPUT_RELEASE_TAG#v}"
             build_ref="$GITHUB_SHA_VALUE"
             # A manual release names a version and builds whatever the default
-            # branch points at now, which are two independent choices. The R2
-            # objects under releases/v<version> go up immutable for a year, so
-            # running one a second time after the branch has moved replaces a
-            # published version's bytes with another commit's -- while the tag
-            # goes on naming the original, and caches go on serving whichever
-            # they hold. Refuse unless the tag that already exists is this
+            # branch points at now, which are two independent choices. A
+            # GitHub release's assets are written once, and
+            # guard-immutable-github-assets.sh refuses a rebuild that produced
+            # different bytes -- but that guard runs in the publish job, after
+            # build has already spent the time producing those bytes. So a
+            # second run from a moved branch has to be refused here, before it
+            # gets that far. Refuse unless the tag that already exists is this
             # commit; a version with no tag yet is free.
             if git rev-parse -q --verify "refs/tags/v${production_version}^{commit}" >/dev/null 2>&1; then
               tagged_sha=$(git rev-parse "refs/tags/v${production_version}^{commit}")
@@ -171,6 +173,17 @@ jobs:
           echo "Build ref: $build_ref"
           echo "Production: $publish_production ${production_version:+v${production_version}}"
           echo "Beta: $publish_beta ${beta_version:+v${beta_version}}"
+
+      # Computed once, here, rather than spelled out at each of the three
+      # sites that need it: both pack steps in build and the publish job's
+      # own env. Every one of those `test -n` guards downstream stays --
+      # this only removes the three copies of the expression they guard.
+      - name: Resolve release base URL
+        id: base_url
+        env:
+          RELEASE_BASE_URL: ${{ vars.WASMEDGE_AGENT_DOWNLOAD_BASE_URL || format('https://github.com/{0}/releases', github.repository) }}
+        run: |
+          echo "release_base_url=$RELEASE_BASE_URL" >> "$GITHUB_OUTPUT"
 
       # `npm run build` and `npm run check` are what the build job runs, and
       # check runs no tests -- it is biome, tsgo, and the render and audit
@@ -251,7 +264,7 @@ jobs:
       - name: Pack production release
         if: env.PUBLISH_PRODUCTION == 'true'
         env:
-          WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
         run: |
           test -n "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL"
           npm run release:pack -- \
@@ -263,7 +276,7 @@ jobs:
       - name: Pack beta release
         if: env.PUBLISH_BETA == 'true'
         env:
-          WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
         run: |
           test -n "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL"
           npm run release:pack -- \
@@ -294,17 +307,12 @@ jobs:
     permissions:
       contents: write
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_DEFAULT_REGION: auto
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       BETA_VERSION: ${{ needs.release-context.outputs.beta_version }}
       BUILD_REF: ${{ needs.release-context.outputs.build_ref }}
       PRODUCTION_VERSION: ${{ needs.release-context.outputs.production_version }}
       PUBLISH_BETA: ${{ needs.release-context.outputs.publish_beta }}
       PUBLISH_PRODUCTION: ${{ needs.release-context.outputs.publish_production }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-      R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+      RELEASE_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -326,27 +334,39 @@ jobs:
           name: wasmedge-agent-beta
           path: release-artifacts/beta
 
-      - name: Prepare installer
+      - name: Prepare the channel assets
         run: |
-          INSTALL_BASE_URL="${R2_PUBLIC_BASE_URL%/}"
-          export INSTALL_BASE_URL
-          test -n "$INSTALL_BASE_URL"
+          test -n "$RELEASE_BASE_URL"
 
           node - <<'NODE'
           const fs = require("node:fs");
-          const baseUrl = process.env.INSTALL_BASE_URL;
-          if (!baseUrl) throw new Error("INSTALL_BASE_URL is required");
+          const baseUrl = process.env.RELEASE_BASE_URL;
+          if (!baseUrl) throw new Error("RELEASE_BASE_URL is required");
           const installer = fs.readFileSync("install.sh", "utf8");
-          // The rendered release is what makes an installer orderable, so the
-          // copy published to a channel can refuse to go backwards. An empty
-          // one leaves the placeholder: that copy is not publishable, which is
-          // correct, because this run is not publishing that channel.
+          // The rendered release is provenance: it records which release a
+          // copy of the installer came from. An empty one leaves the
+          // placeholder, which is correct, because this run is not publishing
+          // that channel.
           const renderInstaller = (channel, version) => installer
             .replaceAll("__WASMEDGE_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
             .replaceAll("__WASMEDGE_AGENT_DEFAULT_RELEASE_CHANNEL__", channel)
             .replaceAll("__WASMEDGE_AGENT_RENDERED_RELEASE__", version ? `v${version}` : "__WASMEDGE_AGENT_RENDERED_RELEASE__");
-          fs.writeFileSync("/tmp/wasmedge-agent-install.sh", renderInstaller("stable", process.env.PRODUCTION_VERSION));
-          fs.writeFileSync("/tmp/wasmedge-agent-install-beta.sh", renderInstaller("beta", process.env.BETA_VERSION));
+
+          // Stable needs no second release: the alias points at the version
+          // release itself, so its channel objects ride along with it.
+          if (fs.existsSync("release-artifacts/production")) {
+            fs.writeFileSync("release-artifacts/production/install.sh", renderInstaller("stable", process.env.PRODUCTION_VERSION));
+            fs.copyFileSync("release-artifacts/production/release.json", "release-artifacts/production/latest.json");
+          }
+
+          // Beta's channel objects go on a release of their own, because its
+          // version releases are one tag per build and immutable.
+          if (fs.existsSync("release-artifacts/beta")) {
+            fs.mkdirSync("release-artifacts/beta-channel", { recursive: true });
+            fs.writeFileSync("release-artifacts/beta-channel/install.sh", renderInstaller("beta", process.env.BETA_VERSION));
+            fs.copyFileSync("release-artifacts/beta/release.json", "release-artifacts/beta-channel/beta.json");
+            fs.copyFileSync("release-artifacts/beta/beta", "release-artifacts/beta-channel/beta");
+          }
           NODE
 
       - name: Extract production release notes
@@ -357,43 +377,37 @@ jobs:
             echo "Release v${PRODUCTION_VERSION}" > /tmp/release-notes.md
           fi
 
-      # Both destinations are asked before either is written to. A release is
-      # published to two places that have to agree about what v<version> is,
-      # and the R2 half used to go first: the immutable artifacts went up,
-      # latest.json and stable began advertising them, and only then did the
-      # GitHub guard get a say. Its refusal -- or an unreadable answer, which
-      # refuses too -- left the bucket announcing a release GitHub did not
-      # have.
+      # Asked before anything is written. GitHub is the one destination now,
+      # and its existing assets are what a rebuild of the same version has to
+      # agree with; a refusal here -- or an unreadable answer, which refuses
+      # too -- stops before any of this run's assets go up.
       #
-      # The case is not hypothetical. Repacking an old version against a new
-      # R2_PUBLIC_BASE_URL changes the tarball bytes, because the packer records
-      # that host in the package. The tag check passes, the new bucket's prefix
-      # is empty and accepts them, and the release's existing GitHub assets are
-      # the only thing left that objects.
+      # The case is not hypothetical. Repacking an old version against a
+      # different WASMEDGE_AGENT_DOWNLOAD_BASE_URL changes the tarball bytes,
+      # because the packer records that host in the package. The tag check
+      # passes, and the release's existing GitHub assets are the only thing
+      # that objects.
       - name: Guard the production release destinations
         if: env.PUBLISH_PRODUCTION == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRODUCTION_DIR=release-artifacts/production
-          RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
 
           test -f "$PRODUCTION_DIR/wasmedge-agent-${PRODUCTION_VERSION}.tgz"
           test -f "$PRODUCTION_DIR/SHA256SUMS"
           test -f "$PRODUCTION_DIR/stable"
           test -f "$PRODUCTION_DIR/release.json"
-          test -n "$R2_BUCKET"
-          test -n "$R2_ENDPOINT_URL"
 
-          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" "$RELEASE_PREFIX" "$PRODUCTION_DIR"
           sh scripts/guard-immutable-github-assets.sh "$GITHUB_REPOSITORY" "v${PRODUCTION_VERSION}" "$PRODUCTION_DIR"
 
-      # The tag before the bytes. A run that published immutable R2 objects and
-      # then failed before the tag existed stranded the version: retrying from
-      # the default branch after it moved builds different bytes, which the R2
-      # guard refuses, and retrying from the tagged commit was impossible
-      # because there was no tag naming it. Created first, that recovery path
-      # exists for every failure after this point.
+      # The tag before the bytes. A run that published GitHub release assets
+      # and then failed before the tag existed stranded the version: retrying
+      # from the default branch after it moved builds different bytes, which
+      # guard-immutable-github-assets.sh refuses, and retrying from the
+      # tagged commit was impossible because there was no tag naming it.
+      # Created first, that recovery path exists for every failure after this
+      # point.
       - name: Create the production tag
         if: env.PUBLISH_PRODUCTION == 'true'
         env:
@@ -418,32 +432,6 @@ jobs:
             echo "Created ${RELEASE_TAG} at ${BUILD_REF}."
           fi
 
-      - name: Publish immutable production artifacts to R2
-        if: env.PUBLISH_PRODUCTION == 'true'
-        run: |
-          PRODUCTION_DIR=release-artifacts/production
-          RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
-
-          # Created rather than copied. The guard above compares before this
-          # step and cannot hold across it, so each object is written on the
-          # condition that its key is free -- which is one operation, and the
-          # only way a year-long immutable URL can be published without a
-          # window in which someone else's bytes are the ones being replaced.
-          for artifact in "$PRODUCTION_DIR"/*.tgz; do
-            sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-              "${RELEASE_PREFIX}/$(basename "$artifact")" "$artifact" application/gzip
-          done
-
-          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "${RELEASE_PREFIX}/SHA256SUMS" "$PRODUCTION_DIR/SHA256SUMS" text/plain
-
-          # Beside the tarballs it describes. An install that names a version
-          # resolves no channel, so this is the only thing that can tell it
-          # which package each of those files contains; the copy at the channel
-          # name below is the same object, and is what a channel install reads.
-          sh scripts/publish-immutable-object.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "${RELEASE_PREFIX}/release.json" "$PRODUCTION_DIR/release.json" application/json
-
       - name: Create production GitHub release
         if: env.PUBLISH_PRODUCTION == 'true'
         env:
@@ -452,81 +440,58 @@ jobs:
           RELEASE_TAG="v${PRODUCTION_VERSION}"
           PRODUCTION_DIR=release-artifacts/production
 
+          # By version, not by date. See scripts/decide-release-latest.sh.
+          LATEST=$(sh scripts/decide-release-latest.sh "$GITHUB_REPOSITORY" "$PRODUCTION_VERSION")
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # gh release view finds this release whether it is published or a
+            # draft left by a create that died mid-upload -- but
+            # publish-github-release-assets.sh reads releases/tags/<tag>, an
+            # endpoint that never returns a draft, so a re-run against one
+            # would fail one layer deeper with no explanation. Caught here
+            # instead, naming what to do.
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true ]; then
+              echo "${RELEASE_TAG} is a draft left by a create that failed mid-upload." >&2
+              echo "Delete it (gh release delete ${RELEASE_TAG} --yes) and re-run; the tag stays." >&2
+              exit 1
+            fi
+
             # Only what is missing, and each asset compared as it is decided
             # rather than trusted from the guard that ran before the artifacts
             # went up. Nothing is clobbered: --clobber deletes before it
             # uploads, which turns a retry into a window where a release that
-            # was complete is missing a file it already had, and leaves it
-            # that way if the retry dies there.
+            # was complete is missing a file it already had.
             sh scripts/publish-github-release-assets.sh "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$PRODUCTION_DIR"
+            gh release edit "$RELEASE_TAG" --latest="$LATEST"
           else
             # No --target: the step above created the tag, so the release
             # attaches to a ref that already names this commit.
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
               --notes-file /tmp/release-notes.md \
+              --latest="$LATEST" \
               "$PRODUCTION_DIR"/*
           fi
 
-      # Last, because these are what announce the release. Until they move, a
-      # run that fails partway has published immutable objects nobody is
-      # pointed at, which is recoverable; move them first and a failure leaves
-      # every installer fetching a release that may not be finished.
-      - name: Advance the production pointers
-        if: env.PUBLISH_PRODUCTION == 'true'
-        run: |
-          PRODUCTION_DIR=release-artifacts/production
-
-          # Before anything here names this release. The guard ran once before
-          # the artifacts went up, and everything since -- the artifacts, the
-          # tag, the GitHub release -- is time in which another holder of these
-          # credentials could have replaced what these pointers are about to
-          # announce. Nothing under the version prefix has been overwritten by
-          # this run, so a refusal here costs a retry rather than a repair.
-          sh scripts/guard-immutable-release.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            "releases/v${PRODUCTION_VERSION}" "$PRODUCTION_DIR"
-
-          # Then the text pointer, and the JSON manifest last. Both install
-          # paths read the JSON -- install.sh to resolve a channel, the
-          # installed agent to check for updates -- so it is the one object
-          # that decides what a channel means, and a publication that stops
-          # partway leaves it naming the release it named before.
-          #
-          # Forward-only, and the first of the two decides for both. A manual
-          # release may run from the tag it publishes, which is how a release
-          # that failed partway is finished -- and finishing a partial v0.7.0
-          # after v0.8.0 shipped wrote both of these unconditionally, taking
-          # every stable install back a version with nothing to notice it. The
-          # pointer says which release it names, so a run that is not newer
-          # than what is there stops here: its immutable objects are up and
-          # installable by version, and nothing naming a channel has moved.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            stable "$PRODUCTION_DIR/stable" text/plain release || pointer_status=$?
-          if [ "$pointer_status" -eq 3 ]; then
-            echo "v${PRODUCTION_VERSION} is published and installable by version; the channel names a newer one."
-            exit 0
+          # The flag is the request. This is the outcome, and it is what the
+          # stable channel means: a gh that ignored --latest, or a release
+          # marked latest by date behind our back, would leave every stable
+          # install resolving a release this run did not choose.
+          if [ "$LATEST" = true ]; then
+            current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+            if [ "$current" != "$RELEASE_TAG" ]; then
+              echo "Published ${RELEASE_TAG}, but the repository marks ${current} latest." >&2
+              exit 1
+            fi
           fi
-          [ "$pointer_status" -eq 0 ] || exit "$pointer_status"
 
-          # The stable installer, once this release is the one the channel
-          # names, and written the way the pointers are. Only production runs
-          # write it, so it has one writer and one ordering: a run recovering
-          # an older tag renders that tag's installer, and two runs publishing
-          # at once could otherwise leave the pointers naming one release and
-          # this script coming from another.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            install.sh /tmp/wasmedge-agent-install.sh text/x-shellscript release || pointer_status=$?
-          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
-
-          # A stand-down here means another run took the channel in between,
-          # which is the condition doing its job rather than a failure.
-          pointer_status=0
-          sh scripts/advance-channel-pointer.sh "$R2_BUCKET" "$R2_ENDPOINT_URL" \
-            latest.json "$PRODUCTION_DIR/release.json" application/json release || pointer_status=$?
-          [ "$pointer_status" -eq 0 ] || [ "$pointer_status" -eq 3 ] || exit "$pointer_status"
+          if [ "$LATEST" = false ]; then
+            current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+            if [ "$current" = "$RELEASE_TAG" ]; then
+              echo "Published ${RELEASE_TAG} as not latest, but the repository marks it latest." >&2
+              exit 1
+            fi
+          fi
 
       # Both destinations first, for the reason the production pair has: the
       # beta channel pointer and the installers move in the step below, and a
