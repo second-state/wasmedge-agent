@@ -252,7 +252,7 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ### Update checks
 
-An official release records the host it was published to, and the update check asks that host: stable builds fetch `latest.json` under it, and beta builds fetch `beta.json` and remain on the beta channel. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to ask a different one.
+An official release records the host it was published to (`<base>`), and the update check asks that host: stable builds fetch `<base>/latest/download/latest.json`, and beta builds fetch `<base>/download/beta/beta.json` and remain on the beta channel. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to ask a different one -- it must serve both paths, plus `<base>/download/v<version>/<file>` for every file a manifest names.
 
 A build that was not packed for release -- a source checkout, or your own `npm run build` -- records no host. It makes no request at all, and `wasmedge-agent update` says so rather than guessing. There is deliberately no compiled-in default: the only value that could sit there is upstream's release bucket, which would offer upstream's build as an update to this one.
 
@@ -676,7 +676,7 @@ The remaining `PI_*` variables in this table are compatibility names still read 
 
 ## Contributing & Development
 
-See [docs/development.md](docs/development.md) for setup and debugging.
+See [docs/development.md](docs/development.md) for setup and debugging, and [docs/releasing.md](docs/releasing.md) for how to dispatch a release.
 
 ## License
 
