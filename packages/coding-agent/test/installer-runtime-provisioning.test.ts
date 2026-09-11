@@ -774,9 +774,9 @@ if install_wasmedge_bin_package; then printf 'package\\n' >> "${join(dir, "log")
 	});
 
 	it.each([
-		["stable", "latest.json"],
-		["beta", "beta.json"],
-	])("resolves the %s channel from %s", (channel, file) => {
+		["stable", "latest.json", "latest/download/latest.json"],
+		["beta", "beta.json", "download/beta/beta.json"],
+	])("resolves the %s channel from %s", (channel, file, path) => {
 		// One object decides what a channel means. It used to be published
 		// twice -- as this JSON and as a one-line text file -- and read once
 		// each way, so a publication that moved one and stopped left fresh
@@ -800,6 +800,7 @@ while [ $# -gt 0 ]; do
 		*) url="$1"; shift ;;
 	esac
 done
+printf '%s\\n' "$url" >> "${join(dir, "requested")}"
 name=\${url##*/}
 [ -f "${served}/$name" ] || exit 22
 cp "${served}/$name" "$out"
@@ -817,6 +818,7 @@ printf '%s\\n' "$(resolve_wasmedge_agent_version ${channel})"`,
 
 		expect(result.status).toBe(0);
 		expect(result.output.trim()).toBe("4.5.6");
+		expect(readFileSync(join(dir, "requested"), "utf-8").trim()).toBe(`https://releases.example.test/${path}`);
 	});
 
 	it("does nothing when the runtime bootstrap is off", () => {

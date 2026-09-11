@@ -1204,7 +1204,19 @@ parse_wasmedge_agent_arguments() {
 # An empty file name yields the release's prefix, with its trailing slash,
 # which is what the staged-package rewrite matches against.
 wasmedge_agent_release_asset_url() {
-	printf '%s/releases/v%s/%s' "$wasmedge_agent_base_url" "$1" "$2"
+	printf '%s/download/v%s/%s' "$wasmedge_agent_base_url" "$1" "$2"
+}
+
+# Where a channel's own objects sit. Stable rides GitHub's `latest` alias,
+# which is the newest release that is neither a draft nor a prerelease, and
+# which GitHub switches in one operation. Every other channel is a release
+# tagged with the channel's name, whose assets are replaced as the channel
+# moves.
+wasmedge_agent_channel_url() {
+	case "$1" in
+		stable) printf '%s/latest/download/%s' "$wasmedge_agent_base_url" "$2" ;;
+		*) printf '%s/download/%s/%s' "$wasmedge_agent_base_url" "$1" "$2" ;;
+	esac
 }
 
 print_wasmedge_agent_usage() {
@@ -1396,6 +1408,8 @@ resolve_wasmedge_agent_version() {
 		*) channel_manifest="$release_channel.json" ;;
 	esac
 
+	channel_manifest_url=$(wasmedge_agent_channel_url "$release_channel" "$channel_manifest")
+
 	if [ -z "$wasmedge_agent_channel_manifest" ]; then
 		printf 'error: no path was prepared for the channel manifest.\n' >&2
 		exit 1
@@ -1404,9 +1418,9 @@ resolve_wasmedge_agent_version() {
 		"Resolving latest release" \
 		"Resolving latest release" \
 		"Checking the $release_channel release channel." \
-		curl -fsSL "$wasmedge_agent_base_url/$channel_manifest" -o "$wasmedge_agent_channel_manifest"; then
-		printf 'error: could not resolve latest WasmEdge Agent version from %s/%s\n' \
-			"$wasmedge_agent_base_url" "$channel_manifest" >&2
+		curl -fsSL "$channel_manifest_url" -o "$wasmedge_agent_channel_manifest"; then
+		printf 'error: could not resolve latest WasmEdge Agent version from %s\n' \
+			"$channel_manifest_url" >&2
 		exit 1
 	fi
 
@@ -1417,7 +1431,7 @@ if (typeof manifest.version !== "string" || !manifest.version.trim()) process.ex
 console.log(manifest.version.trim());
 ' "$wasmedge_agent_channel_manifest" < /dev/null) || channel_version=
 	if [ -z "$channel_version" ]; then
-		printf 'error: %s/%s named no version.\n' "$wasmedge_agent_base_url" "$channel_manifest" >&2
+		printf 'error: %s named no version.\n' "$channel_manifest_url" >&2
 		exit 1
 	fi
 
@@ -1449,14 +1463,15 @@ fetch_wasmedge_agent_release_manifest() {
 		exit 1
 	fi
 
+	release_manifest_url=$(wasmedge_agent_release_asset_url "$manifest_version" release.json)
+
 	if ! wasmedge_agent_run_quiet_with_animation \
 		"Reading release v$manifest_version" \
 		"Reading release v$manifest_version" \
 		"Asking what v$manifest_version publishes." \
-		curl -fsSL "$(wasmedge_agent_release_asset_url "$manifest_version" release.json)" \
+		curl -fsSL "$release_manifest_url" \
 			-o "$wasmedge_agent_channel_manifest"; then
-		printf 'error: could not read %s/releases/v%s/release.json\n' \
-			"$wasmedge_agent_base_url" "$manifest_version" >&2
+		printf 'error: could not read %s\n' "$release_manifest_url" >&2
 		printf 'It names the package behind each file this installs, and nothing else does.\n' >&2
 		exit 1
 	fi

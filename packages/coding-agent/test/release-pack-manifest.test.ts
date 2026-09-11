@@ -18,6 +18,8 @@ import {
 	missingSourceOutputs,
 	PUBLIC_BIN_TARGET,
 	PUBLIC_LEGACY_BIN_TARGET,
+	releaseAssetPath,
+	releaseAssetUrl,
 	staleBuildOutputs,
 	symlinkedBuildOutputs,
 	writeLegacyAliasShim,
@@ -533,7 +535,7 @@ describe("release package manifest", () => {
 	});
 
 	it("records the host the release is published to, so an install can find its own updates", () => {
-		// The workflow knows the bucket, packs with it and renders it into the
+		// The workflow knows the release host, packs with it and renders it into the
 		// installer -- and the installed CLI kept none of it, so the update
 		// check silently did not run and `update` failed with "No release host
 		// is configured" until the user exported the variable by hand, for
@@ -542,6 +544,16 @@ describe("release package manifest", () => {
 		const piConfig = manifest.piConfig as Record<string, unknown>;
 
 		expect(piConfig.downloadBaseUrl).toBe("https://releases.example.test/");
+	});
+
+	it("pins the packer's half of the cross-language URL contract", () => {
+		// install.sh's wasmedge_agent_release_asset_url must print this same
+		// shape, and installer-verifies-release-packages.test.ts spells it by
+		// hand at :65-76. Nothing else in this file called these two exports,
+		// so nothing caught a packer that drifted back to the old `releases/v`
+		// layout while every other test here stayed green.
+		expect(releaseAssetPath("1.2.3", "x.tgz")).toBe("download/v1.2.3/x.tgz");
+		expect(releaseAssetUrl("https://h/releases", "1.2.3", "x.tgz")).toBe("https://h/releases/download/v1.2.3/x.tgz");
 	});
 
 	it("reads that host back under the name config.ts looks for", () => {

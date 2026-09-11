@@ -62,18 +62,18 @@ function stageRelease(): { workDir: string; releaseDir: string; downloadDir: str
 	packageTarball(workDir, CORE_TARBALL, {
 		name: "wasmedge-agent-core",
 		version: VERSION,
-		dependencies: { "@earendil-works/pi-ai": `${BASE_URL}/releases/v${VERSION}/${AI_TARBALL}` },
+		dependencies: { "@earendil-works/pi-ai": `${BASE_URL}/download/v${VERSION}/${AI_TARBALL}` },
 	});
 	packageTarball(workDir, ROOT_TARBALL, {
 		name: "wasmedge-agent",
 		version: VERSION,
 		dependencies: {
-			"@earendil-works/pi-agent-core": `${BASE_URL}/releases/v${VERSION}/${CORE_TARBALL}`,
-			"@earendil-works/pi-ai": `${BASE_URL}/releases/v${VERSION}/${AI_TARBALL}`,
+			"@earendil-works/pi-agent-core": `${BASE_URL}/download/v${VERSION}/${CORE_TARBALL}`,
+			"@earendil-works/pi-ai": `${BASE_URL}/download/v${VERSION}/${AI_TARBALL}`,
 			chalk: "^5.5.0",
 		},
 		optionalDependencies: {
-			"@earendil-works/pi-tui": `${BASE_URL}/releases/v${VERSION}/${TUI_TARBALL}`,
+			"@earendil-works/pi-tui": `${BASE_URL}/download/v${VERSION}/${TUI_TARBALL}`,
 		},
 	});
 

@@ -41,6 +41,14 @@ export declare function missingSourceOutputs(packageRoot: string): string[];
  *  machine that packed it rather than of the package. */
 export declare function symlinkedBuildOutputs(packageRoot: string): string[];
 
+/** Where a release's files sit under the host, as one relative path. Both the
+ *  URLs baked into the published package manifests and the path recorded in
+ *  release.json come from here. */
+export declare function releaseAssetPath(version: string, file: string): string;
+
+/** `releaseAssetPath`, joined onto a release host's base URL. */
+export declare function releaseAssetUrl(baseUrl: string, version: string, file: string): string;
+
 export declare function createReleasePackageJson(
 	sourcePackage: Record<string, unknown>,
 	packageName: string,

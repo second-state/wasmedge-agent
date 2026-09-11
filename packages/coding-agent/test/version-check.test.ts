@@ -59,7 +59,7 @@ describe("version checks", () => {
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledWith(
-			`${configuredDownloadBaseUrl}/latest.json`,
+			`${configuredDownloadBaseUrl}/latest/download/latest.json`,
 			expect.objectContaining({
 				headers: expect.objectContaining({
 					"User-Agent": expect.stringMatching(/^wasmedge-agent\/1\.2\.3 /),
@@ -76,7 +76,10 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
-		expect(fetchMock).toHaveBeenCalledWith("https://legacy.example.test/latest.json", expect.any(Object));
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://legacy.example.test/latest/download/latest.json",
+			expect.any(Object),
+		);
 	});
 
 	it("keeps beta installations on the beta release manifest", async () => {
@@ -84,7 +87,10 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.4-beta.123.1.1234567")).resolves.toBe("1.2.4-beta.124.1.abcdef0");
-		expect(fetchMock).toHaveBeenCalledWith(`${configuredDownloadBaseUrl}/beta.json`, expect.any(Object));
+		expect(fetchMock).toHaveBeenCalledWith(
+			`${configuredDownloadBaseUrl}/download/beta/beta.json`,
+			expect.any(Object),
+		);
 	});
 
 	it("returns the active package and tarball install spec from the release manifest", async () => {
