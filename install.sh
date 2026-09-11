@@ -200,13 +200,16 @@ main() {
 		else
 			printf '\nWasmEdge Agent was installed successfully.\n'
 		fi
+		# npm prefix, not npm bin: npm 9 removed `npm bin`, and the global bin
+		# directory is the prefix's bin subdirectory on every platform npm runs
+		# on.
 		cat <<EOF
 The $wasmedge_agent_cmd command was installed, but it is not on your PATH yet.
-Check npm's global bin directory with:
+npm put it in the bin directory under its global prefix. Find the prefix with:
 
-  npm bin -g
+  npm prefix -g
 
-Then add that directory to your shell PATH.
+Then add that prefix's bin directory to your shell PATH.
 EOF
 	fi
 }
@@ -2557,6 +2560,26 @@ Finalizing npm install."
 			"Installing WasmEdge Agent" \
 			"$npm_install_details" \
 			env WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL=1 npm install -g --no-fund --no-audit --loglevel=error --progress=false "$tarball_path"
+	fi
+	refresh_mise_shims
+}
+
+# A global npm install lands its command in npm's global bin directory. On a
+# host whose Node.js is managed by mise that directory is not on PATH: mise
+# resolves commands through its shims directory, and a shim exists only for
+# the commands it knew about at its last reshim. So the install above is
+# correct and invisible -- no shell, interactive or not, can find the command
+# until `mise reshim` runs. A fresh Omarchy install, whose Node.js is exactly
+# that, was where this was found.
+#
+# `mise which node` is the question, not whether mise is installed: mise on a
+# host whose active Node.js is something else has no shim to refresh.
+refresh_mise_shims() {
+	command -v mise >/dev/null 2>&1 || return 0
+	mise which node >/dev/null 2>&1 || return 0
+	if ! mise reshim >/dev/null 2>&1; then
+		printf 'Warning: mise reshim failed. Run it yourself, or %s stays off your PATH.\n' \
+			"$wasmedge_agent_cmd" >&2
 	fi
 }
 
