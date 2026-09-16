@@ -1,5 +1,5 @@
 import { type Component, getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { WASMEDGE_BUTTERFLY_LOGO } from "../../../themes/wasmedge-logo.js";
+import { WASMEDGE_LOGO } from "../../../themes/wasmedge-logo.js";
 import { type ThemeColor, theme } from "../theme/theme.js";
 
 interface PrimeOnboardingSplashOptions {
@@ -9,10 +9,11 @@ interface PrimeOnboardingSplashOptions {
 	continueActionLabel?: string;
 }
 
-const LOGO_LINES = WASMEDGE_BUTTERFLY_LOGO.split("\n");
+const LOGO_LINES = WASMEDGE_LOGO.split("\n");
 const LOGO_WIDTH = LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 const ANIMATION_INTERVAL_MS = 120;
-const LAB_FIELD_HEIGHT = 14;
+// Two rows of field above the mark and two below, whatever its height.
+const LAB_FIELD_HEIGHT = LOGO_LINES.length + 4;
 const LAB_FIELD_MIN_WIDTH = 42;
 const LAB_FIELD_MAX_WIDTH = 78;
 

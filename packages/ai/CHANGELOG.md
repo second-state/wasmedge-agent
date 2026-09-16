@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- The OAuth callback page shows the WasmEdge mark instead of the butterfly
+  inherited from upstream.
+
 ## [0.0.1] - 2026-09-11
 
 ## [0.7.0] - 2026-08-05

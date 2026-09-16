@@ -25,16 +25,13 @@
  *      harness's .vf-prime-agent); and upstream's own product, repository,
  *      vendor and directory names where the text is genuinely about upstream
  *      -- the fork's lineage, the MIT copyright line and attribution, the
- *      sync strategy's upstream slug, the credit on artwork that is still
- *      upstream's, and the Prime Inference sign-in copy, whose subject is
- *      that vendor's account. Never a display name, prose, or identifier of
- *      ours that merely sits near one.
+ *      sync strategy's upstream slug, and the Prime Inference sign-in copy,
+ *      whose subject is that vendor's account. Never a display name, prose,
+ *      or identifier of ours that merely sits near one.
  *   2. Historical records (DESIGN.md, REPORT.md, docs/m*-*.md,
  *      docs/benchmark-comparison-2026-08-10.md, released CHANGELOG.md
  *      sections) -- AGENTS.md forbids rewriting these, and rewriting a dated
- *      measurement to match today's branding would make it a lie. The dated
- *      artwork disclosure in assets/brand/ sits here too, and is explicitly
- *      TEMPORARY.
+ *      measurement to match today's branding would make it a lie.
  *   3. Deliberately-kept legacy strings the code cannot do without
  *      (config.ts's upstream fallback default ".prime/agent"; the legacy
  *      source path the one-time config-dir move names in migrations.ts; the
@@ -690,42 +687,6 @@ const ALLOWLIST = [
 		reason: "poc/ is the Phase 0 proof of concept that runs against stock upstream prime-agent -- a different program, with its own command name, its own PRIME_AGENT_* env vars and its own config dir, which the bench harness builds as split path segments. Naming it is naming upstream, not naming us (rule R1). Only those four upstream literals are exempt: 'Prime Agent' as a display name still fails here, as do this fork's own group-F paths",
 	},
 	{
-		glob: "assets/brand/wasmedge-butterfly.svg",
-		allow: [/upstream's Prime Agent butterfly/],
-		reason:
-			"TEMPORARY 2026-09-03: the mark is renamed but not redrawn -- the artwork is still upstream's, and the SVG carries a dated comment saying so. Only that disclosure line is exempt (rule R2). Deleting the comment makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is. One entry per file, so losing either disclosure fails on its own",
-	},
-	{
-		glob: "assets/brand/wasmedge-butterfly-black.svg",
-		allow: [/upstream's Prime Agent butterfly/],
-		reason:
-			"TEMPORARY 2026-09-03: the dark-background mark, same disclosure and same terms as wasmedge-butterfly.svg above; only that line is exempt (rule R2)",
-	},
-	{
-		glob: "packages/agent/README.md",
-		allow: [/upstream's Prime Agent/, /alt="Prime Intellect butterfly mark"/],
-		reason:
-			"TEMPORARY 2026-09-03: the header mark is renamed but not redrawn -- the artwork is still upstream's, so the alt text credits the vendor whose mark it is and a dated comment above it says so (rule R2). Only those two literals are exempt. Deleting the disclosure makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is. One entry per file, so losing any one disclosure fails on its own",
-	},
-	{
-		glob: "packages/ai/README.md",
-		allow: [/upstream's Prime Agent/, /alt="Prime Intellect butterfly mark"/],
-		reason:
-			"TEMPORARY 2026-09-03: the header mark is renamed but not redrawn -- the artwork is still upstream's, so the alt text credits the vendor whose mark it is and a dated comment above it says so (rule R2). Only those two literals are exempt. Deleting the disclosure makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is. One entry per file, so losing any one disclosure fails on its own",
-	},
-	{
-		glob: "packages/coding-agent/README.md",
-		allow: [/upstream's Prime Agent/, /alt="Prime Intellect butterfly mark"/],
-		reason:
-			"TEMPORARY 2026-09-03: the header mark is renamed but not redrawn -- the artwork is still upstream's, so the alt text credits the vendor whose mark it is and a dated comment above it says so (rule R2). Only those two literals are exempt. Deleting the disclosure makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is. One entry per file, so losing any one disclosure fails on its own",
-	},
-	{
-		glob: "packages/tui/README.md",
-		allow: [/upstream's Prime Agent/, /alt="Prime Intellect butterfly mark"/],
-		reason:
-			"TEMPORARY 2026-09-03: the header mark is renamed but not redrawn -- the artwork is still upstream's, so the alt text credits the vendor whose mark it is and a dated comment above it says so (rule R2). Only those two literals are exempt. Deleting the disclosure makes this entry stale and fails the build, which is the point: the mark must be redrawn before release (spec section 10), and until then the file must say whose it is. One entry per file, so losing any one disclosure fails on its own",
-	},
-	{
 		glob: "README.md",
 		allow: [
 			/\[Prime Agent\]\(https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\)/,
@@ -849,12 +810,6 @@ const ALLOWLIST = [
 		allow: [/"\.prime"/],
 		reason:
 			"the covering test for the project-local skills fallback creates a skill inside the legacy directory, as split path segments (rule R3); only the quoted segment is exempt",
-	},
-	{
-		glob: "packages/ai/src/utils/oauth/oauth-page.ts",
-		allow: [/upstream's Prime Agent butterfly/],
-		reason:
-			"TEMPORARY 2026-09-03: the OAuth callback page inlines the same mark the two SVG files hold, renamed but not redrawn, and now carries the same dated disclosure (rule R2). Only that line is exempt -- the page's own title and aria-label are ours, are shown for Anthropic, OpenAI Codex and MCP logins, and are rebranded",
 	},
 	{
 		glob: "packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
@@ -1272,25 +1227,16 @@ function selfTest() {
 		["src/a.ts", 'import { PRIME_BUTTERFLY_LOGO } from "./themes/prime-logo.js";', 2],
 		["src/a.ts", "const lines = PRIME_LOGO_LINES.length;", 1],
 		["src/a.ts", 'srcset="../../assets/brand/prime-butterfly.svg"', 1],
-		["src/a.ts", 'import { WASMEDGE_BUTTERFLY_LOGO } from "./themes/wasmedge-logo.js";', 0],
-		["src/a.ts", 'srcset="../../assets/brand/wasmedge-butterfly.svg"', 0],
-		// The renamed marks still hold upstream's artwork, and each SVG says so.
-		["assets/brand/wasmedge-butterfly.svg", "<!-- TEMPORARY 2026-09-03: this mark is still upstream's Prime Agent butterfly,", 0],
-		// Removing that disclosure is not allowed to pass quietly either: the
-		// entry stops suppressing anything and main() reports it as stale.
+		["src/a.ts", 'import { WASMEDGE_LOGO } from "./themes/wasmedge-logo.js";', 0],
+		["src/a.ts", 'srcset="../../assets/brand/wasmedge-mark.svg"', 0],
 		// The vendor name. Ours to fix wherever the subject is not the vendor --
 		// this exact line shipped on the OAuth callback page rendered for every
 		// Anthropic, OpenAI Codex and MCP login.
 		["packages/ai/src/utils/oauth/oauth-page.ts", 'title: "Prime Intellect authentication successful",', 1],
 		["src/a.ts", 'const label = "Sign in with Prime Intellect";', 1],
-		// ...but a legal notice, an artwork credit and the Prime Inference sign-in
-		// copy all have Prime Intellect as their actual subject.
+		// ...but a legal notice and the Prime Inference sign-in copy both have
+		// Prime Intellect as their actual subject.
 		["LICENSE", "Copyright (c) 2026 Prime Intellect", 0],
-		[
-			"packages/agent/README.md",
-			'<img alt="Prime Intellect butterfly mark" src="../../assets/brand/wasmedge-butterfly-black.svg" width="88">',
-			0,
-		],
 		[
 			"packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
 			'theme.fg("muted", "Connect your Prime Intellect account to enable Prime Inference models."),',

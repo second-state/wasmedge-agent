@@ -13,14 +13,14 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { execFile } from "child_process";
-import { WASMEDGE_BUTTERFLY_LOGO } from "../../../themes/wasmedge-logo.js";
+import { WASMEDGE_LOGO } from "../../../themes/wasmedge-logo.js";
 import { theme } from "../theme/theme.js";
 import { keyHint } from "./keybinding-hints.js";
 import { MenuPanel, MenuSearchInput } from "./menu-panel.js";
 import { shouldTreatAsBack } from "./modal-back.js";
 
 const PRIME_INFERENCE_PROVIDER_ID = "prime-inference";
-const WASMEDGE_LOGO_LINES = WASMEDGE_BUTTERFLY_LOGO.split("\n");
+const WASMEDGE_LOGO_LINES = WASMEDGE_LOGO.split("\n");
 const WASMEDGE_LOGO_WIDTH = WASMEDGE_LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 
 function centeredLine(text: string, width: number): string {

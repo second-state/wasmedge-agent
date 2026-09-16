@@ -1,12 +1,6 @@
-<!-- TEMPORARY 2026-09-03: the butterfly below is still upstream's Prime Agent
-     butterfly, renamed but not redrawn, so its alt text credits the vendor
-     whose mark it is. It must be redrawn before release (spec section 10). -->
 <p align="center">
-  <a href="https://primeintellect.ai">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/wasmedge-butterfly.svg">
-      <img alt="Prime Intellect butterfly mark" src="../../assets/brand/wasmedge-butterfly-black.svg" width="88">
-    </picture>
+  <a href="https://wasmedge.org">
+    <img alt="WasmEdge mark" src="../../assets/brand/wasm-edge-runtime-icon-color.svg" width="88">
   </a>
 </p>
 
