@@ -53,12 +53,17 @@ export class PrimeOnboardingSplashComponent implements Component {
 	private frame = 0;
 	private animationInterval?: ReturnType<typeof setInterval>;
 	private progressMessage?: string;
+	// The mark draws in one row per frame while the splash animates. Without
+	// animation there is no draw-in to show, and once progress replaces the
+	// hint the mark is shown whole rather than left wherever the timer was.
+	private drawingIn: boolean;
 
 	constructor(
 		private readonly onSelect: () => void,
 		private readonly onCancel: () => void,
 		private readonly options: PrimeOnboardingSplashOptions = {},
 	) {
+		this.drawingIn = Boolean(options.requestRender);
 		if (options.requestRender) {
 			this.animationInterval = setInterval(() => {
 				this.frame++;
@@ -81,6 +86,7 @@ export class PrimeOnboardingSplashComponent implements Component {
 
 	showProgress(message: string): void {
 		this.progressMessage = message;
+		this.drawingIn = false;
 		this.dispose();
 		this.options.requestRender?.();
 	}
@@ -149,8 +155,10 @@ export class PrimeOnboardingSplashComponent implements Component {
 
 	private renderLogoBlock(width: number): PanelTextLine[] {
 		const logoWidth = Math.min(LOGO_WIDTH, width);
-		return LOGO_LINES.map((line) => {
-			const paddedLine = line + " ".repeat(Math.max(0, LOGO_WIDTH - visibleWidth(line)));
+		const rowsShown = this.drawingIn ? Math.min(LOGO_LINES.length, this.frame + 1) : LOGO_LINES.length;
+		return LOGO_LINES.map((line, index) => {
+			const shown = index < rowsShown ? line : "";
+			const paddedLine = shown + " ".repeat(Math.max(0, LOGO_WIDTH - visibleWidth(shown)));
 			return [{ text: truncateToWidth(paddedLine, logoWidth, ""), tone: "text", transparentSpaces: true }];
 		});
 	}

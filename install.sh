@@ -624,6 +624,14 @@ wasmedge_agent_set_lab_line() {
 }
 
 wasmedge_agent_logo_line() {
+	# The mark draws in one row per screen draw, so it is whole about two
+	# seconds into the install, and it is whole at once on a screen that
+	# waits for an answer. A row not yet drawn is its width of spaces, so
+	# the band it will fill is already quiet.
+	if [ -z "$wasmedge_agent_screen_question" ] && [ "$1" -ge "${wasmedge_agent_screen_frame:-0}" ]; then
+		printf '%28s' ''
+		return
+	fi
 	case "$1" in
 		0) printf '%s' '            ▄██▄            ' ;;
 		1) printf '%s' '            █  █            ' ;;

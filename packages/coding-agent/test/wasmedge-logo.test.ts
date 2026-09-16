@@ -28,11 +28,12 @@ function runInstaller(driver: string): string {
 	return execFileSync("sh", [harness], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-/** The installer's logo rows at a given animation frame, one per line, as
- *  printed: padding and all. */
-function installerLogoRows(frame: number): string[] {
+/** The installer's logo rows on a given screen draw, one per line, as
+ *  printed: padding and all. A question makes the draw a prompt. */
+function installerLogoRows(frame: number, question = ""): string[] {
 	const output = runInstaller(`
-wasmedge_agent_animation_frame=${frame}
+wasmedge_agent_screen_frame=${frame}
+wasmedge_agent_screen_question='${question}'
 row=0
 while [ "$row" -lt ${LOGO_LINES.length} ]; do
 	printf '%s\\n' "$(wasmedge_agent_logo_line "$row")"
@@ -70,5 +71,18 @@ describe("the WasmEdge mark", () => {
 		const widths = new Set(rows.map((row) => visibleWidth(row)));
 		expect(widths.size).toBe(1);
 		expect([...widths][0]).toBeGreaterThanOrEqual(LOGO_WIDTH);
+	});
+
+	it("draws in one row per screen draw in the installer", () => {
+		const whole = installerLogoRows(99);
+		const blank = " ".repeat(visibleWidth(whole[0] ?? ""));
+
+		expect(installerLogoRows(1)).toEqual([whole[0], ...whole.slice(1).map(() => blank)]);
+		expect(installerLogoRows(5)).toEqual([...whole.slice(0, 5), ...whole.slice(5).map(() => blank)]);
+		expect(installerLogoRows(LOGO_LINES.length)).toEqual(whole);
+	});
+
+	it("is whole on any installer screen that waits for an answer", () => {
+		expect(installerLogoRows(1, "Install? [Y/n]")).toEqual(installerLogoRows(99));
 	});
 });
