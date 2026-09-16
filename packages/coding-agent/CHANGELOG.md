@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- The WasmEdge mark replaces the butterfly inherited from upstream in the
+  header, the onboarding splash, the login dialog, and the installer's
+  splash. The artwork is the WasmEdge Runtime icon from cncf/artwork; the
+  terminal rendering is 14 rows tall where the butterfly was 10.
+
 ## [0.0.1] - 2026-09-11
 
 - Renamed Prime Agent to WasmEdge Agent. `wasmedge-agent` is the canonical

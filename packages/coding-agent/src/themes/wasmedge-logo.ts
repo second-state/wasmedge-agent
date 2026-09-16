@@ -1,21 +1,23 @@
 /**
- * Pre-rendered ASCII versions of the brand butterfly mark.
+ * Pre-rendered ASCII version of the WasmEdge mark: the pentagon of nodes
+ * around a cloud, from the WasmEdge Runtime icon.
  *
- * The mark itself is still upstream's, renamed but not redrawn -- see the
- * dated note inside the source SVG.
- *
- * Source: assets/brand/wasmedge-butterfly.svg
- * Re-render at any width: `uv run scripts/render-logo.py --width N`
+ * Source: assets/brand/wasmedge-mark.svg
+ * Re-render: `uv run scripts/render-logo.py --width 32`
  */
 
-/** ~10 rows × 32 cols. The default brand mark — half-block butterfly, splash-ready. */
-export const WASMEDGE_BUTTERFLY_LOGO = `                          ▄▄███▀
-    ▄▄▄▄▄              ▄█████▀
-    ██████▄         ▄██████▀
-   ▄███▀███▄     ▄███▀▄██▀
-   ███ ▄████▄▄▄████▀▄▄██
-  ▀██  ▀█████████▀▀▀▀▀▀
-  ▄██   ██████▀▀ ▄███
- █████    ▀█▄▄▄█████▀
-███████▄  ████████▀
-▀███▀▀    █████▀`;
+/** 14 rows x 28 cols. The brand mark: half-block strokes, header- and splash-ready. */
+export const WASMEDGE_LOGO = `            ▄██▄
+            █  █
+            ▄██▄
+         ▄█▀ ██ ▀█▄
+      ▄▄▀    ▀▀    ▀▄▄
+█▀▀█▄▀▀    ▄█▀▀█▄▄   ▀▀▄█▀▀█
+█▄▄███▄ ▄▄█▀      █▄ ▄███▄▄█
+    █  █           ▀█  █
+    ▀▄ ▀▄▄        ▄▄▀ ▄▀
+     █   ▀▀▀▀▀▀▀▀▀▀   █
+      █  ▄▀      ▀▄  █
+      █▄█▀        ▀█▄█
+    ▄▀▀▀█▀▀▀▀▀▀▀▀▀▀█▀▀▀▄
+    ▀▄▄█▀          ▀█▄▄▀`;

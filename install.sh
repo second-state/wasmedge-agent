@@ -608,8 +608,8 @@ wasmedge_agent_set_lab_line() {
 
 	logo_line=$(wasmedge_agent_logo_line "$lab_row")
 	if [ -n "$logo_line" ]; then
-		logo_start=$(((wasmedge_agent_lab_width - 32) / 2))
-		logo_end=$((logo_start + 32))
+		logo_start=$(((wasmedge_agent_lab_width - 28) / 2))
+		logo_end=$((logo_start + 28))
 		left=$(wasmedge_agent_lab_background_range "$lab_row" 0 "$logo_start")
 		right=$(wasmedge_agent_lab_background_range "$lab_row" "$logo_end" "$wasmedge_agent_lab_width")
 		trace="${left}${wasmedge_agent_color_text}${logo_line}${wasmedge_agent_reset}${right}"
@@ -625,16 +625,20 @@ wasmedge_agent_set_lab_line() {
 
 wasmedge_agent_logo_line() {
 	case "$1" in
-		2) printf '                          ▄▄███▀' ;;
-		3) printf '    ▄▄▄▄▄              ▄█████▀' ;;
-		4) printf '    ██████▄         ▄██████▀' ;;
-		5) printf '   ▄███▀███▄     ▄███▀▄██▀' ;;
-		6) printf '   ███ ▄████▄▄▄████▀▄▄██' ;;
-		7) printf '  ▀██  ▀█████████▀▀▀▀▀▀' ;;
-		8) printf '  ▄██   ██████▀▀ ▄███' ;;
-		9) printf ' █████    ▀█▄▄▄█████▀' ;;
-		10) printf '███████▄  ████████▀' ;;
-		11) printf '▀███▀▀    █████▀' ;;
+		0) printf '%s' '            ▄██▄            ' ;;
+		1) printf '%s' '            █  █            ' ;;
+		2) printf '%s' '            ▄██▄            ' ;;
+		3) printf '%s' '         ▄█▀ ██ ▀█▄         ' ;;
+		4) printf '%s' '      ▄▄▀    ▀▀    ▀▄▄      ' ;;
+		5) printf '%s' '█▀▀█▄▀▀    ▄█▀▀█▄▄   ▀▀▄█▀▀█' ;;
+		6) printf '%s' '█▄▄███▄ ▄▄█▀      █▄ ▄███▄▄█' ;;
+		7) printf '%s' '    █  █           ▀█  █    ' ;;
+		8) printf '%s' '    ▀▄ ▀▄▄        ▄▄▀ ▄▀    ' ;;
+		9) printf '%s' '     █   ▀▀▀▀▀▀▀▀▀▀   █     ' ;;
+		10) printf '%s' '      █  ▄▀      ▀▄  █      ' ;;
+		11) printf '%s' '      █▄█▀        ▀█▄█      ' ;;
+		12) printf '%s' '    ▄▀▀▀█▀▀▀▀▀▀▀▀▀▀█▀▀▀▄    ' ;;
+		13) printf '%s' '    ▀▄▄█▀          ▀█▄▄▀    ' ;;
 	esac
 }
 

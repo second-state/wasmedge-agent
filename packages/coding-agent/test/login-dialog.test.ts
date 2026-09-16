@@ -3,7 +3,7 @@ import stripAnsi from "strip-ansi";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginDialogComponent } from "../src/modes/interactive/components/login-dialog.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
-import { WASMEDGE_BUTTERFLY_LOGO } from "../src/themes/wasmedge-logo.js";
+import { WASMEDGE_LOGO } from "../src/themes/wasmedge-logo.js";
 
 const mocks = vi.hoisted(() => ({
 	execFile: vi.fn(),
@@ -103,7 +103,7 @@ describe("LoginDialogComponent", () => {
 
 		dialog.showAuth("https://example.com/challenge", "Code: abc-123");
 		const output = stripAnsi(dialog.render(88).join("\n"));
-		const firstLogoLine = WASMEDGE_BUTTERFLY_LOGO.split("\n")[0]?.trim() ?? "";
+		const firstLogoLine = WASMEDGE_LOGO.split("\n")[0]?.trim() ?? "";
 
 		expect(output).toContain("Login to Prime Inference");
 		expect(output).toContain(firstLogoLine);
