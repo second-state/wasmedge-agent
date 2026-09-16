@@ -6,6 +6,12 @@ import { PrimeOnboardingSplashComponent } from "../src/modes/interactive/compone
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 import { WASMEDGE_LOGO } from "../src/themes/wasmedge-logo.js";
 
+/** A run of the mark's last row with no space in it: the backdrop shows
+ *  through the mark's spaces, so a whole row never appears contiguously. */
+const LAST_ROW_MARK = (WASMEDGE_LOGO.split("\n").at(-1) ?? "")
+	.split(" ")
+	.reduce((longest, run) => (run.length > longest.length ? run : longest), "");
+
 describe("PrimeOnboardingSplashComponent", () => {
 	beforeAll(() => {
 		initTheme("dark");
@@ -131,6 +137,54 @@ describe("PrimeOnboardingSplashComponent", () => {
 		expect(secondRender).not.toBe(firstRender);
 		expect(secondRender).toContain("Welcome to WasmEdge Agent");
 		expect(secondRender).toContain("Press Enter to login with Prime Intellect");
+	});
+
+	it("draws the mark in one row per frame, then holds it", () => {
+		vi.useFakeTimers();
+		const logoRows = WASMEDGE_LOGO.split("\n");
+		const firstRow = logoRows[0]?.trim() ?? "";
+		const component = new PrimeOnboardingSplashComponent(
+			() => {},
+			() => {},
+			{ getRows: () => 36, requestRender: () => {}, animationIntervalMs: 20 },
+		);
+
+		const opening = stripAnsi(component.render(100).join("\n"));
+		expect(opening).toContain(firstRow);
+		expect(opening).not.toContain(LAST_ROW_MARK);
+
+		vi.advanceTimersByTime(20 * (logoRows.length - 1));
+		const revealed = stripAnsi(component.render(100).join("\n"));
+		expect(revealed).toContain(LAST_ROW_MARK);
+
+		vi.advanceTimersByTime(20 * 50);
+		expect(stripAnsi(component.render(100).join("\n"))).toContain(LAST_ROW_MARK);
+		component.dispose();
+	});
+
+	it("shows the whole mark when it is not animating", () => {
+		const component = new PrimeOnboardingSplashComponent(
+			() => {},
+			() => {},
+			{ getRows: () => 36 },
+		);
+
+		expect(stripAnsi(component.render(100).join("\n"))).toContain(LAST_ROW_MARK);
+	});
+
+	it("finishes the draw-in when progress replaces the hint", () => {
+		vi.useFakeTimers();
+		const component = new PrimeOnboardingSplashComponent(
+			() => {},
+			() => {},
+			{ getRows: () => 36, requestRender: () => {}, animationIntervalMs: 20 },
+		);
+
+		expect(stripAnsi(component.render(100).join("\n"))).not.toContain(LAST_ROW_MARK);
+		component.showProgress("Preparing models...");
+		const output = stripAnsi(component.render(100).join("\n"));
+		expect(output).toContain(LAST_ROW_MARK);
+		expect(output).toContain("Preparing models...");
 	});
 
 	it("centers stacked content in narrow terminals", () => {
