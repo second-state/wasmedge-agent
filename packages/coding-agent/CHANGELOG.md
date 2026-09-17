@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+- Ported 43 changes from upstream releases 0.7.1 through 0.9.5, the ones
+  that apply to this fork without touching the runtime it replaced. Every
+  commit names its upstream origin; the numbers below are upstream pull
+  requests.
+- Daemon: workers tombstoned by a failed start revive on retry (#836); a new
+  top-level daemon session no longer inherits a subagent depth from the
+  supervisor (#1496); a supervised session rename succeeds once the
+  supervisor has approved the name (#1841); a remote agent message is sent
+  exactly once even when the daemon request times out (#1700); daemon
+  shutdown waits for in-flight bash commands without polling (#1858);
+  finished agents no longer linger as "classifying" in the agents view
+  (#1985). The supervisor now owns an append-only spawn ledger as the
+  authority for subagent families (#1387, #1987).
+- Agents view: expansion state survives leaving and returning (#1135), idle
+  and inactive sessions sort by last message time (#1134), a draft prompt is
+  stashed instead of refused when the view opens (#1372), the splash hint
+  reads "type to search sessions" (#1367), rows show the subagent's model and
+  effort (#1479), and the summary under the prompt is a bordered tile
+  (#1586).
+- Interactive mode: Down Arrow stays in a nonempty prompt until the cursor
+  reaches the end (#1226); OSC 8 hyperlinks and bare URLs open on click in
+  fullscreen mode, with `terminal.fullscreenMouse: false` to keep native
+  Cmd-click instead (#1270, #1299, #1385); `/update` replaces the TUI process
+  in place on POSIX with Node 26.1 or newer (#1631); `/traces` autocompletes
+  its subcommands (#2208); model search ranks stronger matches first while
+  preferring signed-in providers (#539); a null assistant content block
+  renders instead of crashing (#1256).
+- Credentials and providers: an env var that is set but empty counts as a
+  missing credential (#1513); Codex model discovery reports a supported
+  client version, so `openai-codex` models are visible to subagents (#1375);
+  `/fast` works with OpenAI API-key authentication (#1609).
+- Prompts and compaction: literal dollar sequences in prompt arguments are
+  preserved (#2128); compaction summaries record file edits performed inside
+  cells, so `<modified-files>` reflects the default toolset (#2226).
+- Non-interactive use: agent-spawned shells default GIT_EDITOR, EDITOR,
+  VISUAL and PAGER to non-interactive values, so git and pagers fail fast
+  instead of hanging (#2219); a non-interactive boot stops waiting on a pipe
+  nobody writes to, tunable with `PI_STDIN_TIMEOUT_MS` (#2285).
+- Bash tool: destructive git discards (`git reset --hard`, `git clean -f`,
+  `git checkout -- .`, `git restore .`) are refused while the tree has
+  uncommitted changes, with `allowDestructiveGit: true` or
+  `PI_BASH_ALLOW_DESTRUCTIVE_GIT=1` as the bypass (#2275).
+- ACP assistant chunks identify message boundaries across autonomous turns
+  (#1781). CI workflow actions are pinned by digest (#1250).
+
 - The WasmEdge mark replaces the butterfly inherited from upstream in the
   header, the onboarding splash, the login dialog, and the installer's
   splash. The artwork is the WasmEdge Runtime icon from cncf/artwork; the

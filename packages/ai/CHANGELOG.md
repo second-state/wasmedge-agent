@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Ported from upstream releases 0.7.1 through 0.9.5 (numbers are upstream
+  pull requests): the Anthropic-compatible prompt-cache marker advances to
+  the latest tool result (#1927); orphaned tool results are dropped from
+  provider history after an aborted or errored assistant turn (#2127);
+  LiteLLM maximum-context rejections count as context overflow, so
+  compaction and recovery kick in (#2129); the impersonated Claude Code
+  version is 2.1.257, so Claude Fable 5.x works over Anthropic OAuth
+  (#1993); `/fast` (service tier `priority`) is available to the OpenAI
+  API-key models GPT-5.4, GPT-5.5 and GPT-5.6, with the GPT-5.6 fast-pricing
+  multiplier corrected to 2x (#1609). The unused `getOverflowPatterns()`
+  export is gone; use `isContextOverflow()` (#1850).
+
 - The OAuth callback page shows the WasmEdge mark instead of the butterfly
   inherited from upstream.
 

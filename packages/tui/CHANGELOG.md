@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Ported from upstream (numbers are upstream pull requests):
+  fullscreen mode opens OSC 8 hyperlinks and bare URLs on left click, for
+  terminals such as Ghostty that gate native link handling while mouse
+  reporting is on (#1270, #1299); the editor no longer takes Down Arrow away
+  from an unfinished prompt (#1226).
+
 ## [0.0.1] - 2026-09-11
 
 ## [0.7.0] - 2026-08-05
