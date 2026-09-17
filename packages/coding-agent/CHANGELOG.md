@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- The first run no longer starts the Prime Inference sign-in on its own. When
+  no provider is configured, the onboarding splash now opens the same
+  provider picker as `/login`, and nothing is contacted until a provider
+  is chosen there.
 - Ported 43 changes from upstream releases 0.7.1 through 0.9.5, the ones
   that apply to this fork without touching the runtime it replaced. Every
   commit names its upstream origin; the numbers below are upstream pull

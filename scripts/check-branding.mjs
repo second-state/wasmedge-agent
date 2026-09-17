@@ -818,18 +818,6 @@ const ALLOWLIST = [
 			"Prime Inference sign-in copy: the account being connected really is a Prime Intellect one, and the provider is untouched by the rebrand (rule R1). Only that clause is exempt, so prose of ours elsewhere in this file still fails",
 	},
 	{
-		glob: "packages/coding-agent/src/modes/interactive/components/prime-onboarding-splash.ts",
-		allow: [/login with Prime Intellect/],
-		reason:
-			"the same Prime Inference sign-in, on the onboarding splash's action label (rule R1); only that clause is exempt",
-	},
-	{
-		glob: "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
-		allow: [/Signing in to Prime Intellect/],
-		reason:
-			"the progress line for the Prime Inference sign-in the splash starts (rule R1); only that clause is exempt, in a file that is otherwise all ours",
-	},
-	{
 		glob: "packages/coding-agent/test/login-dialog.test.ts",
 		allow: [/Connect your Prime Intellect account/],
 		reason: "the covering test asserts that Prime Inference sign-in copy verbatim (rule R1); only that clause is exempt",
@@ -838,18 +826,7 @@ const ALLOWLIST = [
 		glob: "packages/coding-agent/test/prime-onboarding-splash.test.ts",
 		allow: [/with Prime Intellect/, /your Prime Intellect account/, /connected to Prime Intellect/],
 		reason:
-			"the covering test asserts the splash's Prime Inference sign-in copy and rejects several earlier wordings of it by name (rule R1); only those three clause shapes are exempt",
-	},
-	{
-		glob: "packages/coding-agent/test/interactive-mode-status.test.ts",
-		allow: [/Signing in to Prime Intellect/],
-		reason: "the covering test pins that Prime Inference progress line verbatim (rule R1); only that clause is exempt",
-	},
-	{
-		glob: "packages/coding-agent/test/suite/regressions/4658-onboarding-transitions.test.ts",
-		allow: [/Signing in to Prime Intellect/],
-		reason:
-			"the onboarding-transition regression test records that same Prime Inference progress line in its expected transcript (rule R1); only that clause is exempt",
+			"the covering test rejects, by name, the earlier wordings of the Prime Inference sign-in the onboarding splash used to offer (rule R1); only those three clause shapes are exempt",
 	},
 	// The rename announcement lived in coding-agent's Unreleased section until
 	// 0.0.1 was cut, and had an entry here naming each legacy literal it could
