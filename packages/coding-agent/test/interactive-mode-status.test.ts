@@ -3702,7 +3702,7 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("models");
 	});
 
-	test("opens Prime login before the Models tab when no models are available", async () => {
+	test("opens the provider picker, and signs in nowhere, when no models are available", async () => {
 		const fakeThis = createPrimeCliHarness(false);
 		fakeThis.connectionState = createConnectionState({ model: undefined });
 		fakeThis.getModelCandidates = vi.fn(async () => []);
@@ -3725,11 +3725,11 @@ describe("InteractiveMode Prime CLI onboarding", () => {
 		const onboarding = runOnboardingFlow.call(fakeThis, false);
 		await flushAsyncWork();
 
-		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith();
-		expect(showProgress).toHaveBeenNthCalledWith(1, "Signing in to Prime Intellect...");
-		expect(showProgress).toHaveBeenNthCalledWith(2, "Preparing models...");
-		expect(fakeThis.prepareForModelSelectionAfterLogin).toHaveBeenCalledTimes(1);
-		expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("models");
+		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith("choose a provider");
+		expect(fakeThis.createAuthFlows).not.toHaveBeenCalled();
+		expect(showProgress).not.toHaveBeenCalled();
+		expect(fakeThis.prepareForModelSelectionAfterLogin).not.toHaveBeenCalled();
+		expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("providers");
 		expect(dismiss).not.toHaveBeenCalled();
 
 		configuration.resolve();

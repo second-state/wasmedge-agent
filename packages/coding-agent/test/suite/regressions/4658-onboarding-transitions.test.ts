@@ -70,7 +70,7 @@ describe("ENG-4658 onboarding transitions", () => {
 		}
 	});
 
-	test("keeps the splash mounted until first-launch model selection closes", async () => {
+	test("keeps the splash mounted until the first-launch provider picker closes", async () => {
 		const harness = await createHarness({ provider: "prime-inference", withConfiguredAuth: false });
 		harnesses.push(harness);
 		const order: string[] = [];
@@ -83,6 +83,8 @@ describe("ENG-4658 onboarding transitions", () => {
 		fakeThis.uiServices = { modelRegistry: harness.session.modelRegistry };
 		fakeThis.getModelCandidates = vi.fn(async () => []);
 		fakeThis.showOnboardingSplash = vi.fn(async () => splash);
+		// A first run must not sign in anywhere on its own: the picker is the
+		// only way a provider gets contacted.
 		fakeThis.createAuthFlows = vi.fn(() => ({
 			runPrimeInferenceLogin: async (): Promise<AuthenticationResult> => {
 				order.push("login");
@@ -105,21 +107,16 @@ describe("ENG-4658 onboarding transitions", () => {
 		});
 
 		const onboarding = fakeThis.runOnboardingFlow(false);
-		await vi.waitFor(() => expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("models"));
+		await vi.waitFor(() => expect(fakeThis.showConfigurationMenu).toHaveBeenCalledWith("providers"));
 
 		expect(order).not.toContain("dismiss");
 		configuration.resolve();
 		await onboarding;
 
-		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith();
-		expect(order).toEqual([
-			"progress:Signing in to Prime Intellect...",
-			"login",
-			"progress:Preparing models...",
-			"prepare",
-			"configuration:models",
-			"dismiss",
-		]);
+		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith("choose a provider");
+		expect(fakeThis.createAuthFlows).not.toHaveBeenCalled();
+		expect(fakeThis.prepareForModelSelectionAfterLogin).not.toHaveBeenCalled();
+		expect(order).toEqual(["configuration:providers", "dismiss"]);
 	});
 
 	test("keeps the configuration overlay mounted while provider authentication is pending", async () => {

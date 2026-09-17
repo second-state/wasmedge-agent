@@ -1778,9 +1778,12 @@ export class InteractiveMode {
 		return true;
 	}
 
-	private async showOnboardingModelSelection(splash: OnboardingSplashHandle): Promise<void> {
+	private async showOnboardingConfiguration(
+		splash: OnboardingSplashHandle,
+		tab: Extract<ConfigurationMenuTab, "providers" | "models">,
+	): Promise<void> {
 		try {
-			await this.showConfigurationMenu("models");
+			await this.showConfigurationMenu(tab);
 		} finally {
 			splash.dismiss();
 		}
@@ -1794,7 +1797,7 @@ export class InteractiveMode {
 				return;
 			}
 
-			await this.showOnboardingModelSelection(splash);
+			await this.showOnboardingConfiguration(splash, "models");
 			return;
 		}
 
@@ -1804,21 +1807,16 @@ export class InteractiveMode {
 			return;
 		}
 
-		const splash = await this.showOnboardingSplash();
+		// Nothing is configured yet. Hand over to the same provider picker that
+		// /login opens: the user chooses whom to sign in with, and no provider is
+		// contacted until they do. The picker moves itself to the model list once
+		// a login succeeds.
+		const splash = await this.showOnboardingSplash("choose a provider");
 		if (!splash) {
 			return;
 		}
 
-		splash.showProgress("Signing in to Prime Intellect...");
-		const authResult = await this.createAuthFlows().runPrimeInferenceLogin();
-		if (authResult.status !== "success") {
-			splash.dismiss();
-			return;
-		}
-
-		splash.showProgress("Preparing models...");
-		await this.prepareForModelSelectionAfterLogin(authResult);
-		await this.showOnboardingModelSelection(splash);
+		await this.showOnboardingConfiguration(splash, "providers");
 	}
 
 	private getMarkdownThemeWithSettings(): MarkdownTheme {

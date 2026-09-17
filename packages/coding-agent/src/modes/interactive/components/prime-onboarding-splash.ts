@@ -122,7 +122,7 @@ export class PrimeOnboardingSplashComponent implements Component {
 		if (this.progressMessage) {
 			return [{ text: this.progressMessage, tone: "muted" }];
 		}
-		const actionLabel = this.options.continueActionLabel ?? "login with Prime Intellect";
+		const actionLabel = this.options.continueActionLabel ?? "choose a provider";
 		return [
 			{ text: "Press ", tone: "muted" },
 			{ text: "Enter", tone: "accent", bold: true },
