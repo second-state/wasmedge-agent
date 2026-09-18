@@ -60,21 +60,30 @@ describe("OAuthSelectorComponent", () => {
 		]);
 	});
 
-	it("sorts Prime Inference first within every login auth-state group", () => {
-		const cases: Array<{ status: AuthStatus; configuredProviderLeads: boolean }> = [
-			{ status: { configured: true, source: "environment" }, configuredProviderLeads: false },
-			{ status: { configured: false, source: "stale", label: "expired" }, configuredProviderLeads: true },
-			{ status: { configured: false }, configuredProviderLeads: true },
+	it("gives Prime Inference no special place in any login auth-state group", () => {
+		// OpenAI is always configured from the environment. When the other two
+		// share that state, the whole list sorts by name; otherwise OpenAI leads
+		// its group and the other two still sort by name within theirs.
+		const cases: Array<{ status: AuthStatus; expectedOrder: string[] }> = [
+			{
+				status: { configured: true, source: "environment" },
+				expectedOrder: ["Anthropic", "OpenAI", "Prime Inference"],
+			},
+			{
+				status: { configured: false, source: "stale", label: "expired" },
+				expectedOrder: ["OpenAI", "Anthropic", "Prime Inference"],
+			},
+			{ status: { configured: false }, expectedOrder: ["OpenAI", "Anthropic", "Prime Inference"] },
 		];
 
-		for (const { status, configuredProviderLeads } of cases) {
+		for (const { status, expectedOrder } of cases) {
 			const selector = new OAuthSelectorComponent(
 				"login",
 				AuthStorage.inMemory(),
 				[
-					{ id: "anthropic", name: "Anthropic", authType: "api_key" },
 					{ id: PRIME_INFERENCE_PROVIDER_ID, name: "Prime Inference", authType: "api_key" },
 					{ id: "openai", name: "OpenAI", authType: "api_key" },
+					{ id: "anthropic", name: "Anthropic", authType: "api_key" },
 				],
 				() => {},
 				() => {},
@@ -83,16 +92,10 @@ describe("OAuthSelectorComponent", () => {
 			);
 
 			const output = stripAnsi(selector.render(120).join("\n"));
-			const primeIndex = output.indexOf("Prime Inference");
-			const anthropicIndex = output.indexOf("Anthropic");
-			const openAiIndex = output.indexOf("OpenAI");
+			const positions = expectedOrder.map((name) => output.indexOf(name));
 
-			expect(primeIndex).toBeLessThan(anthropicIndex);
-			if (configuredProviderLeads) {
-				expect(openAiIndex).toBeLessThan(primeIndex);
-			} else {
-				expect(primeIndex).toBeLessThan(openAiIndex);
-			}
+			expect(positions.every((index) => index >= 0)).toBe(true);
+			expect([...positions].sort((a, b) => a - b)).toEqual(positions);
 		}
 	});
 
