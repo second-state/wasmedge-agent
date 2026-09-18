@@ -6,6 +6,9 @@
   no provider is configured, the onboarding splash now opens the same
   provider picker as `/login`, and nothing is contacted until a provider
   is chosen there.
+- The provider picker no longer places Prime Inference at the top of every
+  group. Providers sort by auth state, then OAuth before API key, then by
+  name, and Prime Inference takes its place under P like any other.
 - Ported 43 changes from upstream releases 0.7.1 through 0.9.5, the ones
   that apply to this fork without touching the runtime it replaced. Every
   commit names its upstream origin; the numbers below are upstream pull
