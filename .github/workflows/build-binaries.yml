@@ -46,7 +46,7 @@ jobs:
       release_base_url: ${{ steps.base_url.outputs.release_base_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -238,7 +238,7 @@ jobs:
       PUBLISH_PRODUCTION: ${{ needs.release-context.outputs.publish_production }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.BUILD_REF }}
           persist-credentials: false
@@ -315,7 +315,7 @@ jobs:
       RELEASE_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.BUILD_REF }}
           persist-credentials: false
