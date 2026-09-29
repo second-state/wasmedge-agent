@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-29
+
 - Ported from upstream (numbers are upstream pull requests):
   fullscreen mode opens OSC 8 hyperlinks and bare URLs on left click, for
   terminals such as Ghostty that gate native link handling while mouse

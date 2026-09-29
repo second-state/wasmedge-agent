@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-29
+
 - Ported from upstream releases 0.7.1 through 0.9.5 (numbers are upstream
   pull requests): the Anthropic-compatible prompt-cache marker advances to
   the latest tool result (#1927); orphaned tool results are dropped from

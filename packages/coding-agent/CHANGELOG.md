@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-29
+
 - The first run no longer starts the Prime Inference sign-in on its own. When
   no provider is configured, the onboarding splash now opens the same
   provider picker as `/login`, and nothing is contacted until a provider
