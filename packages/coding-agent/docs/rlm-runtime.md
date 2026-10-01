@@ -196,9 +196,11 @@ On reload, the aggregate is reapplied to the parent message. Context-tree report
 
 `rlm::harness` is a persisted state ledger for prompt notes, memories, reusable skill references, sub-agent specifications, and refinement events. It is not a second execution engine.
 
-Session-local state lives in the session artifact directory under `harness/harness_state.json`, mounted into cells at `/agent/harness`; explicitly global entries live under `~/.wasmedge-agent/harness/`, mounted at `/agent/harness-global`. Unlike the bridge-backed capabilities, harness access is direct file I/O over these preopens. The guest store re-syncs from disk when the file's mtime moves, so host-side `/refine` writes and cell writes do not overwrite each other, and saves are atomic (tmp + rename).
+Session-local state lives in the session artifact directory under `harness/harness_state.json`, mounted into cells at `/agent/harness`; explicitly global entries live under `~/.wasmedge-agent/harness/`, mounted at `/agent/harness-global`. Harness storage uses direct file I/O over these preopens. The guest store reloads when the file's mtime moves and saves atomically (tmp + rename); this is not a cross-process transaction lock.
 
 `/refine` runs a dedicated review over the current trajectory and applies small create/update/delete edits. Rollback uses recorded before/after snapshots. The base system prompt remains immutable; refinements are supplemental state. Skill entries reference mounted crates (`{"type": "rust", "use": "agent_lib::skills::<crate>", ...}`); kernel-era `python` references remain readable but can no longer be created.
+
+Skill `create_skill`, `update_skill`, and `update("skill", ...)` calls require a live bridge and passing sandboxed unit/integration tests before saving, using the same test runner as `/refine`. Tests receive only disposable scratch access. The guest reloads the store after testing and rejects an update if that entry changed in the meantime. Skill test requests use the cell budget instead of the ordinary 30-second bridge timeout; cancellation, cell end, or disconnection cancels their host work. Non-skill CRUD and deletion retain direct file access. Manual harness file writes can still bypass this API quality gate because the preopens remain writable.
 
 ## Goal Requests
 

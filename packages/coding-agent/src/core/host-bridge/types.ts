@@ -4,11 +4,19 @@
  * TUI and session events understand. Born in the kernel era, carried over
  * unchanged so the rendering pipeline needed no rewrite. */
 
+export interface HostRequestContext {
+	/** Cancel cooperative work when the cell ends or its connection closes. */
+	signal: AbortSignal;
+}
+
 /**
  * Handles one typed request from guest code (e.g. "rlm.run", "goal.complete").
  * The returned record is sent back verbatim as the reply payload.
  */
-export type HostRequestHandler = (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+export type HostRequestHandler = (
+	payload: Record<string, unknown>,
+	context?: HostRequestContext,
+) => Promise<Record<string, unknown>>;
 
 /** Host request handlers keyed by request type. */
 export type HostRequestHandlers = Record<string, HostRequestHandler>;

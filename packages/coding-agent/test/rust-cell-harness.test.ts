@@ -25,7 +25,7 @@ const CELL_CODE = `use agent_lib::prelude::*;
 fn main() -> Result<()> {
     let mut harness = rlm::harness::local()?;
     harness.create_memory("Build Uses Ninja", "ninja -C out")?;
-    harness.create_skill(
+    let skill_error = harness.create_skill(
         "Log Parser",
         "Parse CI logs",
         serde_json::json!({
@@ -34,7 +34,8 @@ fn main() -> Result<()> {
             "call_pattern": "agent_lib::skills::log_parser::run(path)?"
         }),
         serde_json::json!({"path": "required"}),
-    )?;
+    ).unwrap_err();
+    println!("skill-error={skill_error:#}");
     println!("overview:\\n{}", harness.overview()?);
     match rlm::harness::global() {
         Ok(_) => println!("global=ok"),
@@ -50,7 +51,7 @@ describe.skipIf(!available)("rust cell <-> harness store integration", () => {
 		for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("cells write entries the host reads, without clobbering host state", { timeout: 300_000 }, async () => {
+	it("preserves memory CRUD but rejects skill registration without a bridge", { timeout: 300_000 }, async () => {
 		const root = mkdtempSync(join(tmpdir(), "harness-int-"));
 		tempDirs.push(root);
 		const cwd = join(root, "project");
@@ -112,7 +113,7 @@ describe.skipIf(!available)("rust cell <-> harness store integration", () => {
 		const state = loadHarnessState(harnessDir, "local");
 		expect(Object.keys(state.entries.memory).sort()).toEqual(["build_uses_ninja", "host_seeded"]);
 		expect(state.entries.memory.host_seeded?.content).toBe("written by the host");
-		const skill = state.entries.skill.log_parser;
-		expect(skill?.reference).toMatchObject({ type: "rust", use: "agent_lib::skills::log_parser" });
+		expect(result.stdout).toContain("RLM_BRIDGE_ADDR is not set");
+		expect(state.entries.skill.log_parser).toBeUndefined();
 	});
 });

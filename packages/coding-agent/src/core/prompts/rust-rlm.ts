@@ -54,6 +54,10 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
 - Continual harness state: \`rlm::harness::local()?\` / \`rlm::harness::global()?\`
   (memories, skills, prompt notes, subagent specs — create/update/delete/list/
   overview). Keep entries small and evidence-backed.
+  Skill create/update calls require a live bridge and automatically run the mounted
+  crate's tests in WasmEdge before saving. Write deterministic unit/integration tests
+  using only /scratch; do not run generated skill tests as native host binaries.
+  Use the harness APIs to edit entries.
 
 Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
 dependencies yourself. If a task genuinely needs another crate, tell the user (they

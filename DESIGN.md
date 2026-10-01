@@ -326,7 +326,7 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 **分派**：`BridgeServer` 收到 `req` → 查 `HostRequestHandlers[type]`（**現有 registry 原封重用**，含 `rlm.run`/`goal.*`/`agent_message.*`/`mcp.*`/`model.info` 全部 handler）→ handler 回傳 JSON → 回 `res`。`cellSourceCode` 注入：BridgeServer 持有當前 cell 的 code（對映 `handleHostRequest` 注入 `activeExecution.code`），供 subagent spawn 顯示歸因。新增 handler：`websearch.run`（§4.1）與 `display.*`（emit 專用，不進 req 路徑）；`deps.add` 延至 Phase 2（D15）。
 
-**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報）；cell 結束時 host 等待 in-flight handler 完成再收尾（對映 `HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。**沒有 control-channel 死結問題**——bridge 與 cell 的 stdout 是兩條獨立通道，host 端 handler 在 TS event loop 處理，與 cell 進程無鎖依賴（REPORT §3.3）。
+**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報；skill tests 改用 cell budget，見 §4.2）；cell 結束時取消合作式 handler，再等待其他 in-flight handler 收尾（`HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。**沒有 control-channel 死結問題**——bridge 與 cell 的 stdout 是兩條獨立通道，host 端 handler 在 TS event loop 處理，與 cell 進程無鎖依賴（REPORT §3.3）。
 
 **對映現制的差異聲明**：現制 comm 允許 cell 結束後的 detached asyncio task 繼續發訊（`onLateSentAgentMessage` LRU 機制）；新制 cell 進程結束即斷線，**無 late message**——這是簡化（一個 cell 的 side effect 隨 cell 終結），`agent_message` 要在 cell 存活期間送出。此語意差異需寫進 prompt（§3）。
 
@@ -514,9 +514,11 @@ emits a diff to the user); write whole files with std::fs when generating them.
 3. 升格為正式 skill：skill-creator 指南教模型把成熟的 helpers 搬出成獨立 skill crate + SKILL.md + `#[cfg(test)]` 測試，host 提供 `skills.package` host request 做 scaffold。
 4. **品質閘（D19 定案：Phase 1 soft、Phase 2 強制）**：Phase 1 僅教義要求（refine prompt 與 skill-creator 指南要求先跑 `cargo test`）；Phase 2 以沙箱內測試（`cargo test --target wasm32-wasip1`、wasmedge 為 test runner）升級為 refine `create_skill` handler 的硬驗證。注意：host 在 native 跑模型寫的 test 等於繞沙箱執行任意代碼——**強制閘只能以沙箱內測試實作**，這是 D19 分期的根本原因。
 
-**D19 部分實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
+**D19 登錄閘實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
 
-**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。Guest `rlm::harness` 與直接 harness 檔案寫入仍未強制測試；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
+**Guest API 閘（2026-10-01）**：`rlm::harness::{local,global}` 的 `create_skill`、`update_skill` 與 `update("skill", …)` 透過 `harness.skill.test` host request 共用同一個 WasmEdge 測試器；host 明確回覆通過後，guest 才保存 entry。一般 update 測試既有 reference，明確 update 測試新 reference。沒有 bridge／handler、失敗或逾時皆不寫入。測試後無條件重載 store；同一 entry 在等待期間被修改時拒絕更新，其他 entry 的修改會保留。Skill test request 使用 `RLM_CELL_TIMEOUT_MS`（runner 注入）的等待預算，仍受 parent cell 剩餘時間限制。Bridge 以獨立於 payload 的 context 傳遞 AbortSignal；cell deadline、abort、end 或連線關閉會取消此測試，既有不接收 signal 的 handlers 仍享原本 5 秒收尾窗口。
+
+**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。直接 harness 檔案寫入仍可繞過 API 品質閘，preopens 仍可寫；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
 
 ### 4.3 Harness / refine 修改
 
@@ -680,7 +682,7 @@ wasmedge-agent/
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
-- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest 直接 harness 寫入的強制閘與 `skills.package` scaffold 尚待實作。
+- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD API 已共用測試器；原始檔案寫入限制與 `skills.package` scaffold 尚待實作。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。
 
 ---
@@ -838,7 +840,7 @@ fn main() -> Result<()> {
 | `req` / `res` | G→H / H→G | id, type, payload / id, status, payload\|error | 同步 host request；type 即現有 handler 鍵 |
 | `emit` / `ack` | G→H / H→G | id, type, payload | display.diff、display.attachment |
 
-逾時：req 30s（guest 端）；host 收尾等待 in-flight 5s。錯誤碼：`hello` 失敗、unknown type（"host request type X is not available in this session"——沿用現制訊息）、payload 驗證失敗（rlm-runtime.ts 既有驗證原樣觸發）。
+逾時：一般 req 30s（guest 端），skill test request 使用 cell budget；host 收尾先取消合作式工作，再等待其他 in-flight 5s。錯誤碼：`hello` 失敗、unknown type（"host request type X is not available in this session"——沿用現制訊息）、payload 驗證失敗（rlm-runtime.ts 既有驗證原樣觸發）。
 
 ### C. Benchmark 任務清單（Phase 0）
 

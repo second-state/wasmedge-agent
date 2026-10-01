@@ -8532,6 +8532,16 @@ export class AgentSession {
 				provider: this.model?.provider ?? null,
 				input: this.model?.input ?? [],
 			}),
+			"harness.skill.test": async (payload, context) => {
+				const reference = payload.reference;
+				if (typeof reference !== "object" || reference === null || Array.isArray(reference)) {
+					throw new Error("harness.skill.test requires a Rust reference object");
+				}
+				if (!this._rustCellProvisioner) throw new Error("sandboxed skill tests are unavailable");
+				await this._rustCellProvisioner.testSkill(reference as Record<string, unknown>, context?.signal);
+				context?.signal.throwIfAborted();
+				return { passed: true };
+			},
 			// D12: guests never talk to the network; the Serper key stays host-side.
 			"websearch.run": createWebsearchHostHandler({
 				resolveApiKey: () => this._resolveSerperApiKey(),

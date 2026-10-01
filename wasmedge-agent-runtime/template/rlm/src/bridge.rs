@@ -5,10 +5,10 @@
 //! `RLM_BRIDGE_ADDR` / `RLM_BRIDGE_TOKEN` / `RLM_CELL_ID` env the host sets per
 //! cell. The guest is single-threaded and every send synchronously awaits its
 //! reply (`res` for `req`, `ack` for `emit`), so frames never interleave.
-//! Requests time out after 30s guest-side; the host's per-cell budget is the
-//! hard backstop. A transport failure discards the connection so the next call
-//! reconnects fresh — requests are never auto-retried (a `req` may have side
-//! effects like spawning a subagent).
+//! Ordinary requests time out after 30s guest-side; skill tests use the cell
+//! budget. The host's per-cell budget is the hard backstop. A transport failure
+//! discards the connection so the next call reconnects fresh — requests are
+//! never auto-retried (a `req` may have side effects like spawning a subagent).
 //!
 //! On wasm32-wasip1 the socket comes from WasmEdge's WASI socket extension via
 //! `wasmedge_wasi_socket`; native builds (unit tests) use `std::net`.
@@ -154,10 +154,17 @@ fn with_conn<T>(f: impl FnOnce(&mut Conn) -> Result<T>) -> Result<T> {
 
 /// Send a typed host request and return the reply payload (DESIGN.md §2.7).
 pub(crate) fn request(request_type: &str, payload: Value) -> Result<Value> {
+    request_with_timeout(request_type, payload, REQUEST_TIMEOUT)
+}
+
+/// Long-running skill tests use the cell budget; ordinary requests keep the
+/// default transport timeout. The host still enforces the cell's deadline.
+pub(crate) fn request_with_timeout(request_type: &str, payload: Value, timeout: Duration) -> Result<Value> {
     with_conn(|conn| {
         let id = conn.next_id;
         conn.next_id += 1;
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let deadline = Instant::now().checked_add(timeout)
+            .ok_or_else(|| Error::bridge("bridge request timeout is too large"))?;
         conn.send_frame(
             &json!({"v": PROTOCOL_VERSION, "kind": "req", "id": id, "type": request_type, "payload": payload}),
             deadline,
