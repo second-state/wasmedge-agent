@@ -2,16 +2,16 @@
 
 ## Executive summary
 
-A fresh 144-run campaign compared stock Prime Agent's IPython runtime (A) with this fork's built-in Rust/WasmEdge runtime (F) over the repository's complete 12-task bench suite, two Claude models, and three repetitions per cell.
+A 144-run campaign compared stock Prime Agent's IPython runtime (A), pinned at the revision below, with this fork's built-in Rust/WasmEdge runtime (F): **12 distinct tasks × two models × three repetitions × two groups**. Each group has 72 runs, not 72 distinct tasks. These are August 10 revisions, not the current upstream or fork.
 
 - F passed **72/72 (100%)**; A passed **69/72 (95.8%)**.
 - F's overall median wall time was **33.47s**, versus **19.12s** for A: **1.75×**.
 - On per-model medians, F was **1.98×** A for Opus 5 and **1.74×** A for Sonnet 4.6.
-- F used **1.76×** A's median output tokens on Opus and **1.55×** on Sonnet.
-- F used fewer model-facing cells (median 2 versus A's 3–4), but each Rust/WasmEdge cell had about **15–16×** A's IPython cell latency.
-- F passed the D20 acceptance gate for both models: pass rate was at least A minus 15 percentage points and median output tokens stayed below 2.0× A.
+- F used **1.76×** A's reported output-token p50 on Opus and **1.55×** on Sonnet (the analyzer uses an upper-middle convention; see §3.1).
+- F used fewer model-facing cells (median 2 versus A's 3–4), but its cell p50 was about **15–16×** A's IPython cell p50.
+- F passed the recorded D20 acceptance gate for both models: pass rate was at least A minus 15 percentage points and the analyzer's output-token p50 stayed below 2.0× A.
 
-The result is a correctness/cost trade: the fork was more reliable in this sample, while taking about 1.6× the mean end-to-end time and 1.55–1.76× the median output tokens.
+All three baseline failures were Sonnet repetitions of `08-rust-rename`; Opus passed all runs in both groups. The result is a sample-specific pass-count difference with higher time and output-token usage. Language, tool semantics, prompts, and execution environment changed together, so the difference cannot be attributed to the Rust compiler alone. The data do not establish that extra time or tokens caused improved correctness.
 
 ## 1. Compared revisions and environment
 
@@ -22,17 +22,20 @@ The result is a correctness/cost trade: the fork was more reliable in this sampl
 | Fork F | local `main` at `ceea1cdcfdbd16c72cc728fb722be6dc40ddbaf4` |
 | A runtime | stock built-in IPython tool |
 | F runtime | built-in Rust cells compiled to `wasm32-wasip1` and run in WasmEdge |
+| Host harness | TypeScript in both pinned revisions; the fork adapts tool registration, session wiring, prompts, and persistence |
 | WasmEdge | 0.14.1, repository-local `.wasmedge/` installation |
 | Rust | rustc/cargo 1.97.0; `wasm32-wasip1` installed |
 | Node.js | 24.13.1 |
 | Bun | 1.2.21 (not part of measured agent execution) |
 | Host | macOS arm64 |
 | Models | `gateway/anthropic/claude-sonnet-4-6`, `gateway/anthropic/claude-opus-5` |
-| Repetitions | 3 per task/group/model cell |
+| Repetitions | 3 per task/group/model combination |
 | Raw campaign size | 144 runs, about 20 GB locally |
 | Timeouts | 0 |
 
 A used a separate clean worktree so the sibling checkout's uncommitted `packages/ai/src/models.generated.ts` change could not affect the baseline. F ran from this repository's merged `main`. Both groups used the same user `models.json`, provider endpoint, task fixtures, prompts, offline checks, serial scheduler, and per-run isolated agent directory.
+
+Here, shared prompts means the benchmark's task prompts; the agents' system prompts and tool instructions differ. The baseline's [package manifest at the pinned revision](https://github.com/PrimeIntellect-ai/prime-agent/blob/c22549a37b73cc603c6f0d202517cb0ca856c7d3/packages/coding-agent/package.json) identifies its TypeScript build and IPython-backed CLI. Host implementation language and model-generated cell language are separate dimensions.
 
 ## 2. Command and isolation
 
@@ -62,14 +65,25 @@ Before the campaign:
 
 ### 3.1 Analyzer output
 
-| Model | Group | Runs | Pass | Output tokens median | Input tokens median | Cells median | Compile-error share | Cell p50 |
+| Model | Group | Runs | Pass | Output tokens p50 | Input tokens p50 | Cells p50 | Compile-error share | Cell p50 |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | Opus 5 | A | 36 | 100% | 443 | 0* | 3 | 0% | 15ms |
 | Opus 5 | F | 36 | 100% | 781 | 0* | 2 | 23% | 226ms |
 | Sonnet 4.6 | A | 36 | 91.7% | 781 | 0* | 4 | 0% | 13ms |
 | Sonnet 4.6 | F | 36 | 100% | 1,213 | 0* | 2 | 33% | 212ms |
 
-`*` The gateway's streaming responses did not provide input-token usage, so input tokens are unavailable rather than actually zero.
+`0*` means unavailable: the gateway's streaming responses did not provide input-token usage.
+
+**Statistic definition (clarified 2026-10-02):** [the analyzer](../poc/bench/analyze.ts) sorts values and selects index `floor(n × p / 100)` (zero-based). Its function named `median` calls this p50 operation: for an even sample it selects the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.
+
+The conventional sample medians below are recomputed from the unchanged [144-row CSV](benchmark-comparison-2026-08-10.csv). Wall-time medians in §3.2 already use this definition. Per-task medians use three repetitions, so the definitions agree there.
+
+| Model | A output-token median | F output-token median | F/A |
+|---|---:|---:|---:|
+| Opus 5 | 427.5 | 755.5 | 1.77× |
+| Sonnet 4.6 | 767.5 | 1,186 | 1.55× |
+
+These corrected labels and additional statistics do not change the raw runs or the historical GO decision; both conventional median ratios also remain below 2.0×.
 
 ### 3.2 Wall-clock distribution
 
@@ -88,7 +102,7 @@ Ratios:
 |---|---:|---:|---:|
 | Median wall time | 1.98× | 1.74× | 1.75× |
 | Mean wall time | 1.62× | 1.63× | 1.63× |
-| Median output tokens | 1.76× | 1.55× | — |
+| Output-token p50 (historical analyzer) | 1.76× | 1.55× | — |
 | Cell p50 | 15.1× | 16.3× | — |
 
 The sum of measured run wall times was 3,983.82s. The campaign occupied about 103 minutes of wall-clock time because the driver also settles and tears down the shared daemon between runs.
@@ -146,7 +160,7 @@ The largest outlier was Sonnet on `07-todo-scan`: F used 4.23× the wall time an
 
 ## 5. Failure analysis
 
-All three formal failures were the same cell:
+All three formal failures were repetitions of the same task/model/group combination:
 
 ```text
 08-rust-rename | A | gateway/anthropic/claude-sonnet-4-6 | reps 1–3
@@ -169,7 +183,7 @@ No run in either group timed out. No F run failed its offline check.
 D20 requires, per model:
 
 1. pass rate at least A minus 15 percentage points;
-2. median output tokens no more than 2.0× A;
+2. output-token p50 no more than 2.0× A (the analyzer convention used for this campaign; §3.1);
 3. both models pass.
 
 | Model | Pass comparison | Token comparison | Verdict |
@@ -183,10 +197,10 @@ Compared with the 2026-08-07 M5 report, F retained 100% pass rate. Its Sonnet ou
 
 ## 7. Interpretation and next work
 
-1. **Correctness:** F was at least as reliable as A in this campaign and recovered from compile errors without losing a task.
+1. **Observed task outcomes:** F passed 72/72 runs versus A's 69/72 over 12 distinct tasks. The entire pass-count difference was Sonnet on one rename task; both Opus groups passed 36/36. This is not evidence of a general correctness improvement or a compiler-only effect.
 2. **End-to-end latency:** F's mean wall time was 1.63× A for both models. This is the primary user-visible performance cost.
-3. **Cell latency:** Rust compilation plus WasmEdge startup made an individual F cell about 15–16× slower than an IPython cell. F partially compensated by putting more work into fewer cells.
-4. **Token cost:** F used more assistant turns and 1.55–1.76× median output tokens. The gap is highly task-dependent rather than a fixed runtime tax.
+3. **Cell latency:** F's measured cell p50 was about 15–16× A's. F cells include compilation and WasmEdge startup, and the groups perform different work per cell. These measurements do not isolate VM speed or provide a full breakdown of the end-to-end time difference.
+4. **Token cost:** F used more assistant turns and 1.55–1.76× the historical output-token p50 (or 1.55–1.77× conventional medians). The gap varies by task. The report does not measure how much extra time was spent reading compiler diagnostics.
 5. **Priority investigation:** profile Sonnet `07-todo-scan`, then `11-join-report`; inspect why the agent emits extra code/repair turns and whether system-prompt guidance or helper APIs can shorten the loop.
 6. **Secondary optimization:** reduce cold Rust-cell startup/compile cost. Even a 100–150ms reduction per cell will not erase model latency, but it improves interactive feedback and tool-heavy tasks.
 
@@ -209,9 +223,10 @@ The CSV is regenerable from the raw formal runs with `node poc/bench/analyze.ts`
 
 ## 9. Limitations
 
-- Three repetitions per cell reduce but do not eliminate hosted-model variance.
+- There are 12 distinct tasks; repeated runs of the same task/model are not 72 independent task types per group. Three repetitions do not establish broad reliability or eliminate hosted-model variance.
 - The provider omitted streamed input-token usage and complete monetary cost, so this report compares output tokens rather than total billed tokens or currency.
-- A and F have different tool semantics by design; the result measures end-to-end task completion, not isolated VM throughput.
+- Language, tool semantics, system prompts, and execution environment change together; there is no ablation isolating the compiler's contribution. The result measures end-to-end task completion, not isolated VM throughput.
 - Wall time includes model latency, daemon/session work, compilation, tool execution, and retries. Cell p50 isolates only model-facing cell tool duration.
 - The campaign ran on one macOS arm64 host and one provider endpoint; it is not a cross-platform runtime microbenchmark.
 - The benchmark's serial execution avoids daemon-socket interference but makes the campaign sensitive to service conditions over its 103-minute window.
+- The August 6 PoC's recovery-cell counts and WasmEdge 0.17.1 feasibility microbenchmark are separate measurements. This campaign used WasmEdge 0.14.1 and predates the October runtime fixes; it does not measure their performance or effectiveness.

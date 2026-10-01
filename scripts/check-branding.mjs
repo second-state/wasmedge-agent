@@ -715,11 +715,12 @@ const ALLOWLIST = [
 			/Prime Agent vs WasmEdge Agent benchmark/,
 			/stock Prime Agent's IPython runtime/,
 			/`PrimeIntellect-ai\/prime-agent`/,
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/c22549a37b73cc603c6f0d202517cb0ca856c7d3\/packages\/coding-agent\/package\.json/,
 			/prime-agent-clean-bench\/prime-agent\.sh/,
 			/`PRIME_AGENT_CODING_AGENT_DIR`/,
 		],
 		reason:
-			"a dated record of a campaign that was really run on 2026-08-10 against the real upstream binary (rule R2): the two products compared, the upstream worktree pinned by SHA, the literal command line that launched it, and the environment variable the harness actually set. Rebranding any of them would make a measurement record claim something that did not happen. Only these five literals are exempt, so a newly branded string added to this file still fails",
+			"a dated record of a campaign that was really run on 2026-08-10 against the real upstream binary (rule R2): the two products compared, the upstream worktree and its package manifest pinned by SHA, the literal command line that launched it, and the environment variable the harness actually set. Rebranding any of them would make a measurement record claim something that did not happen. Only these historical literals and the exact manifest URL are exempt, so a newly branded string added to this file still fails",
 	},
 	{
 		glob: "examples/showcase/README.md",
