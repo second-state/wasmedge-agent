@@ -80,6 +80,23 @@ describe.skipIf(!available)("refinement skill gate (real WasmEdge, faux provider
 			error: expect.stringContaining("sandboxed skill tests failed"),
 		});
 		expect(JSON.parse(readFileSync(created.harnessStatePath, "utf8")).entries.skill.example).toEqual(before);
+		writeFileSync(
+			source,
+			`pub fn run() -> u32 { 42 }
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+extern "C" { fn sock_open(family: u32, kind: u32, fd: *mut u32) -> u32; }
+#[test] fn network() {
+    let mut fd = 0;
+    unsafe { std::hint::black_box(sock_open(1, 1, &mut fd)); }
+}`,
+		);
+		h.setResponses([propose("update")]);
+		const network = await h.session.refine();
+		expect(network.appliedEdits[0]).toMatchObject({
+			applied: false,
+			error: expect.stringContaining("skill test import not allowed"),
+		});
+		expect(JSON.parse(readFileSync(created.harnessStatePath, "utf8")).entries.skill.example).toEqual(before);
 		writeFileSync(source, "pub fn run() -> u32 { 42 }\n#[test] fn hangs() { loop { std::hint::black_box(1); } }");
 		h.setResponses([propose("update")]);
 		const exhausted = await h.session.refine();

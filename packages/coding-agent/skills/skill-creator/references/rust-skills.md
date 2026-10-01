@@ -141,6 +141,13 @@ Before registering a Rust skill through `/refine` or `rlm::harness`:
 Tests run against a disposable copy of the workspace, with only `/scratch`
 preopened. Project files, session state, harness stores, and the host bridge
 are unavailable: test pure logic and use fixtures written under `/scratch`.
+Before running any tests, the host validates all compiled modules and checks
+imports against a fixed set of non-network WASI Preview 1 functions. Socket/DNS
+calls, plugin APIs, unknown imports, and non-function imports reject registration,
+even when unused. Keep tests independent of network and bridge calls; test pure
+logic with local fixtures. The host JavaScript engine only validates and inspects
+modules without instantiating them; unsupported Wasm features also fail closed.
+WasmEdge runs tests with `--force-interpreter` to ignore embedded AOT native code.
 Doctests are excluded. Do not execute model-written tests natively on the host.
 Each crate uses the configured `rustCell.cellTimeoutMs` budget for queueing,
 building, and execution; cancellation prevents applying the proposal. Guest
@@ -154,7 +161,7 @@ harness CRUD requires the host bridge; harness stores are not preopened, and
 writable mount roots must be separate from those stores. Passing tests does
 not establish coverage or task correctness.
 Cargo build scripts/proc macros retain the existing host trust boundary;
-network egress restriction remains a separate runtime gap.
+network egress restriction for ordinary cells remains a separate runtime gap.
 
 ## Verifying a Rust Skill
 
