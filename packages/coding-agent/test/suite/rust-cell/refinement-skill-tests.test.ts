@@ -42,6 +42,7 @@ describe.skipIf(!available)("refinement skill gate (real WasmEdge, faux provider
 		expect(loaded.skills).toHaveLength(1);
 		harness = await createHarness({
 			persistSession: true,
+			isolateSessionStorage: true,
 			settings: { rustCell: { cellTimeoutMs: 240_000, cellGasLimit: 1_000_000, cellMemoryPageLimit: 128 } },
 			resourceLoader: createTestResourceLoader({ skills: loaded.skills }),
 		});

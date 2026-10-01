@@ -290,8 +290,8 @@ rlm::refine      // status() / run(instructions, global)
 rlm::heartbeat   // create / list / update / delete
 rlm::observe     // list_agents / get_agent / recent_messages
 rlm::display     // diff(path, old, new) / attach_image(path)   → emit 事件（§2.9）
-rlm::harness     // 直讀寫 /agent/state/../harness/harness_state.json，沿用 schema v1
-                 // （含 mtime 偵測重載——harness.py 的 _sync_from_disk 移植）
+rlm::harness     // 經 harness.request 由 host 讀寫 harness_state.json，沿用 schema v1
+                 // host 驗證與測試 skill 後保存；guest 不掛載 harness stores
 rlm::mcp         // list_tools(server) / call_tool(server, tool, json)
 rlm::deps        // add(crate_name) -> Result<()>  // Phase 1 一律回 not-supported（D15）
 rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
@@ -516,9 +516,11 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 **D19 登錄閘實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
 
-**Guest API 閘（2026-10-01）**：`rlm::harness::{local,global}` 的 `create_skill`、`update_skill` 與 `update("skill", …)` 透過 `harness.skill.test` host request 共用同一個 WasmEdge 測試器；host 明確回覆通過後，guest 才保存 entry。一般 update 測試既有 reference，明確 update 測試新 reference。沒有 bridge／handler、失敗或逾時皆不寫入。測試後無條件重載 store；同一 entry 在等待期間被修改時拒絕更新，其他 entry 的修改會保留。Skill test request 使用 `RLM_CELL_TIMEOUT_MS`（runner 注入）的等待預算，仍受 parent cell 剩餘時間限制。Bridge 以獨立於 payload 的 context 傳遞 AbortSignal；cell deadline、abort、end 或連線關閉會取消此測試，既有不接收 signal 的 handlers 仍享原本 5 秒收尾窗口。
+**Guest API 閘（2026-10-01）**：`rlm::harness::{local,global}` 的所有 CRUD、overview 與 refinement event 操作改走 `harness.request`；host 從 session/scope 決定 store，不接受 guest 指定路徑或整份 state。`create_skill`、`update_skill` 與 `update("skill", …)` 由 host 驗證 reference、共用 WasmEdge 測試器、再保存 entry；不接受 guest 自報的測試結果、version/source。一般 update 測試既有 reference，明確 update 測試新 reference。測試後 host 無條件重載 store；同一 entry 在等待期間被修改時拒絕更新，其他 entry 的修改會保留。Skill mutation request 使用 `RLM_CELL_TIMEOUT_MS`（runner 注入）的等待預算，仍受 parent cell 剩餘時間限制。Bridge 以獨立於 payload 的 context 傳遞 AbortSignal；cell deadline、abort、end 或連線關閉會取消此測試。Rust API signatures/schema 不變，但無 bridge 的 standalone guest 現在連非 skill CRUD 也會失敗。
 
-**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。直接 harness 檔案寫入仍可繞過 API 品質閘，preopens 仍可寫；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
+**Harness 檔案邊界（2026-10-01）**：移除 `/agent/harness`、`/agent/harness-global` preopens。Runner 在編譯前與執行前，檢查 `/workspace`、`/agent/state`、`/scratch` 的實際路徑不得涵蓋或落在 local/global harness store 內；解析已存在的 symlink 與尚未建立 store 的祖先，也檢查既存 state-file symlink 目標。專案與 session/agent storage 必須分離；以 home 或包含 session storage 的專案為 cwd 可能被拒絕。此檢查不掃描 host 建立的 hard links，也不提供跨進程交易鎖或抵禦 host 同時更動檔案系統。
+
+**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。host 手動改寫 harness 檔案不經此 gate；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
 
 ### 4.3 Harness / refine 修改
 
@@ -526,7 +528,7 @@ emits a diff to the user); write whole files with std::fs when generating them.
 - `REFINEMENT_SYSTEM_PROMPT`：skill/subagent 段的 call form 換為 `agent_lib::skills::<x>` 與 `rlm::spawn("…")`；「Do not invent wrappers」條款保留原文精神。
 - `/refine` 流程、快照/回滾、auto-refine 治理（25 turns / 20min cooldown / compact 觸發）**零修改**。
 
-**實作註記（WP7，2026-08-07）**：(1) `rlm::harness` 直接檔案移植（非 host request）：cells 經 `/agent/harness`（session-local）與 `/agent/harness-global` rw preopens 讀寫 `harness_state.json`，與 host `/refine` 同檔；mtime 再同步防跨進程覆寫（沿 harness.py 語意），存檔 tmp+rename 原子。(2) rust reference 雙點驗證定稿：`{type:"rust", use, callable|call_pattern}`；python reference 讀取相容、拒建（明確 legacy 錯誤，guest 與 refinement.ts 同文）。(3) §3.2 的 `rlm::harness::*` capability 行補進教義（WP4 留白處）；REFINEMENT_SYSTEM_PROMPT skill 段與 JSON 範例改 mounted-crate 契約。(4) wasm 陷阱教訓：`std::process::id()` 在 wasm32-wasip1 直接 trap——原子存檔暫名改以 SystemTime 導出。(5) 時戳無 chrono（固定依賴集），以 civil-from-days 演算法自 SystemTime 導出 ISO-8601。
+**歷史實作註記（WP7，2026-08-07；直接 I/O 已由上述 host API 取代）**：(1) `rlm::harness` 直接檔案移植（非 host request）：cells 經 `/agent/harness`（session-local）與 `/agent/harness-global` rw preopens 讀寫 `harness_state.json`，與 host `/refine` 同檔；mtime 再同步防跨進程覆寫（沿 harness.py 語意），存檔 tmp+rename 原子。(2) rust reference 雙點驗證定稿：`{type:"rust", use, callable|call_pattern}`；python reference 讀取相容、拒建（明確 legacy 錯誤，guest 與 refinement.ts 同文）。(3) §3.2 的 `rlm::harness::*` capability 行補進教義（WP4 留白處）；REFINEMENT_SYSTEM_PROMPT skill 段與 JSON 範例改 mounted-crate 契約。(4) wasm 陷阱教訓：`std::process::id()` 在 wasm32-wasip1 直接 trap——原子存檔暫名改以 SystemTime 導出。(5) 時戳無 chrono（固定依賴集），以 civil-from-days 演算法自 SystemTime 導出 ISO-8601。
 
 ---
 
@@ -694,7 +696,7 @@ wasmedge-agent/
 | 層 | 內容 | 工具/位置 |
 |---|---|---|
 | 單元（TS） | workspace scaffold/版本 marker/守護回滾、compile 診斷解析、bridge framing/token/逾時、state 通知組裝 | vitest，`core/rust-cell/*.test.ts` |
-| 單元（Rust） | `rlm::state` 原子性、harness mtime 同步、display 縮圖、error 對映 | `cargo test`（native target 跑 guest 邏輯，bridge 以 mock） |
+| 單元（Rust） | `rlm::state` 原子性、harness bridge 契約、display 縮圖、error 對映 | `cargo test`（native target 跑 guest 邏輯，bridge 以 mock） |
 | 整合 | 真 cargo+wasmedge 的 cell 往返（成功/編譯錯/panic/逾時/中斷）、bridge e2e（fake handlers）、lib guard 回滾、resume 後 state 通知 | 專用 CI job（裝 rustup target + wasmedge；~2 分鐘） |
 | Suite | 沿用 `test/suite/harness.ts` + faux provider：腳本化模型回覆驅動 `rust` tool 全流程（**不花真 token**，上游既有機制） | `test/suite/rust-cell/` |
 | 回歸 | 對映上游 `regressions/` 慣例 | 同上游 |

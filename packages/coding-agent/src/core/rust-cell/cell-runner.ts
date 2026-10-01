@@ -2,10 +2,11 @@
  * -> structured result. DESIGN.md §2.3–§2.5. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
+import { assertHarnessMountsIsolated } from "./harness-mounts.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
@@ -61,6 +62,7 @@ export class CellRunner {
 		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
 		const interruptedStatus = () => (per.signal?.aborted ? "aborted" : "timeout");
 		const ws = this.opts.workspaceDir;
+		this.checkHarnessMounts();
 		ensureStateDir(ws);
 
 		let applied: AppliedLib | undefined;
@@ -222,24 +224,23 @@ export class CellRunner {
 		return result;
 	}
 
+	private checkHarnessMounts(): void {
+		const ws = this.opts.workspaceDir;
+		assertHarnessMountsIsolated(
+			{ "/workspace": this.opts.cwd, "/agent/state": join(ws, "state"), "/scratch": join(ws, ".scratch") },
+			[this.opts.harnessDir, this.opts.globalHarnessDir],
+		);
+	}
+
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
+		this.checkHarnessMounts();
 		const args: string[] = ["run", ...this.resourceArgs];
 		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}`);
 		if (this.mountLibReadonly) {
 			args.push("--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`);
 		}
 		args.push("--dir", `/agent/state:${join(ws, "state")}`);
-		// Harness stores are shared with the host /refine flow; rlm::harness
-		// handles concurrent writers via its mtime re-sync (DESIGN §4.3).
-		if (this.opts.harnessDir) {
-			mkdirSync(this.opts.harnessDir, { recursive: true });
-			args.push("--dir", `/agent/harness:${this.opts.harnessDir}`);
-		}
-		if (this.opts.globalHarnessDir) {
-			mkdirSync(this.opts.globalHarnessDir, { recursive: true });
-			args.push("--dir", `/agent/harness-global:${this.opts.globalHarnessDir}`);
-		}
 		args.push("--dir", `/scratch:${createScratchDir(ws)}`);
 		for (const [name, value] of Object.entries(cellEnv)) {
 			args.push("--env", `${name}=${value}`);
