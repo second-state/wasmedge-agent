@@ -186,6 +186,7 @@ import {
 import type { ModelRegistry } from "./model-registry.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
+import { createHarnessHostHandler } from "./refinement/harness-api.js";
 import {
 	type AutoRefineReason,
 	type AutoRefineReview,
@@ -8438,7 +8439,7 @@ export class AgentSession {
 				// Mount ALL discovered rust skills (visibility only gates the prompt),
 				// mirroring the kernel-era install-everything venv.
 				rustSkills: getRustSkillRuntimeInfo(this._resourceLoader.getSkills().skills),
-				// rlm::harness stores; shared with /refine (mtime-guarded, §4.3).
+				// Host-owned harness stores; excluded from writable preopens (§4.3).
 				harnessDir: this._localHarnessStateDir(),
 				globalHarnessDir: getGlobalHarnessStateDir(this._agentDir),
 				onDiagnostic: (message) => getLogger("coding-agent.rust-cell").warn(message),
@@ -8532,6 +8533,14 @@ export class AgentSession {
 				id: this.model?.id ?? null,
 				provider: this.model?.provider ?? null,
 				input: this.model?.input ?? [],
+			}),
+			"harness.request": createHarnessHostHandler({
+				resolveDirectory: (scope) =>
+					scope === "local" ? this._localHarnessStateDir() : getGlobalHarnessStateDir(this._agentDir),
+				testSkill: async (reference, signal) => {
+					if (!this._rustCellProvisioner) throw new Error("sandboxed skill tests are unavailable");
+					await this._rustCellProvisioner.testSkill(reference, signal);
+				},
 			}),
 			"harness.skill.test": async (payload, context) => {
 				const reference = payload.reference;

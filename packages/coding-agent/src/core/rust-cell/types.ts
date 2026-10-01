@@ -59,9 +59,9 @@ export interface RunnerOptions extends CellResourceLimits {
 	bridge?: BridgeServer;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
 	cellEnv?: Record<string, string>;
-	/** Session-local harness state dir, preopened rw at /agent/harness. */
+	/** Host-owned session-local harness dir; writable mounts must not overlap it. */
 	harnessDir?: string;
-	/** Global harness state dir, preopened rw at /agent/harness-global. */
+	/** Host-owned global harness dir; writable mounts must not overlap it. */
 	globalHarnessDir?: string;
 	/** Omitted for ephemeral sessions. */
 	history?: WorkspaceHistory;

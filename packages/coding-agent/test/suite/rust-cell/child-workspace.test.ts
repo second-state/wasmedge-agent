@@ -31,7 +31,7 @@ describe.skipIf(!available)("spawn-time library inheritance (real cells, faux pr
 		"freezes the parent library before the child's first cell and preserves child edits on reload",
 		{ timeout: 300_000 },
 		async () => {
-			const h = await createHarness({ persistSession: true });
+			const h = await createHarness({ persistSession: true, isolateSessionStorage: true });
 			harness = h;
 			const helper = (value: number) => `pub fn answer() -> u32 { ${value} }\n`;
 			h.setResponses([

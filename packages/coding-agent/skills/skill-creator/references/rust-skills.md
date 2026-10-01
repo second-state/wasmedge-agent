@@ -97,7 +97,7 @@ mod tests {
   re-exports the crate under exactly that name.
 - Compile target is `wasm32-wasip1`, executed by WasmEdge. Cells cannot spawn
   native processes; filesystem access is limited to preopens (`/workspace`,
-  `/agent/state`, `/agent/lib`, `/scratch`, and harness stores). Host APIs
+  `/agent/state`, `/agent/lib`, and `/scratch`). Host APIs
   (web search, spawn, messaging) go through `rlm`. Network restriction to
   the bridge is not yet enforced by the runtime.
 - Available workspace dependencies — declare with `{ workspace = true }`:
@@ -149,9 +149,10 @@ the bridge or ending the cell cancels its in-flight test.
 
 This checks the source snapshot at registration time. Editing the mounted
 source later does not automatically retest it. Ordinary cell/library edits
-and manual harness file edits do not pass through this gate. The harness
-preopens remain writable, so raw file writes can bypass the API gate. Passing
-tests does not establish coverage or task correctness.
+and host-side manual harness file edits do not pass through this gate. Guest
+harness CRUD requires the host bridge; harness stores are not preopened, and
+writable mount roots must be separate from those stores. Passing tests does
+not establish coverage or task correctness.
 Cargo build scripts/proc macros retain the existing host trust boundary;
 network egress restriction remains a separate runtime gap.
 

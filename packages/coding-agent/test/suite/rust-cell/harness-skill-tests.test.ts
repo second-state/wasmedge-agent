@@ -45,6 +45,7 @@ describe.skipIf(!available)("guest harness skill gate (real WasmEdge, faux provi
 		const { skills } = loadSkillsFromDir({ dir: root, source: "project" });
 		harness = await createHarness({
 			persistSession: true,
+			isolateSessionStorage: true,
 			settings: { rustCell: { cellTimeoutMs: 240_000 } },
 			resourceLoader: createTestResourceLoader({ skills }),
 		});

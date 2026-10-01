@@ -73,6 +73,8 @@ export interface HarnessOptions {
 	agentMessageController?: AgentSessionMessageController;
 	subagentRuntimeHost?: SubagentRuntimeHost;
 	persistSession?: boolean;
+	/** Rust cells must not mount their host harness stores under /workspace. */
+	isolateSessionStorage?: boolean;
 	rlmDepth?: number;
 	rlmMaxDepth?: number;
 	autonomous?: AgentAutonomousConfig;
@@ -118,8 +120,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
+	const sessionStorage = options.isolateSessionStorage ? createTempDir() : tempDir;
 	const sessionManager = options.persistSession
-		? SessionManager.create(tempDir, join(tempDir, "sessions"))
+		? SessionManager.create(tempDir, join(sessionStorage, "sessions"))
 		: SessionManager.inMemory();
 	const settingsManager = SettingsManager.inMemory(options.settings);
 
@@ -229,6 +232,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		cleanup() {
 			session.dispose();
 			fauxProvider.unregister();
+			if (sessionStorage !== tempDir)
+				rmSync(sessionStorage, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
 			if (existsSync(tempDir)) {
 				// Spawned fixture processes may still be flushing their final registry
 				// writes; retry briefly instead of failing the suite on ENOTEMPTY.

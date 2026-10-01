@@ -699,6 +699,28 @@ function parseProposal(text: string): RefinementProposal {
 	};
 }
 
+export function validateRustSkillReference(reference: Record<string, unknown>): string | undefined {
+	// Kernel-era python references load fine but cannot be (re)created —
+	// kept in sync with the guest validator in rlm::harness (DESIGN §4.3).
+	if (reference.type === "python") {
+		return `skill reference.type "python" is legacy (read-only); create rust skills with type "rust"`;
+	}
+	if (reference.type !== "rust") {
+		return `skill reference.type must be rust`;
+	}
+	const hasUse = typeof reference.use === "string" && reference.use.length > 0;
+	const hasCallable =
+		(typeof reference.callable === "string" && reference.callable.length > 0) ||
+		(typeof reference.call_pattern === "string" && reference.call_pattern.length > 0);
+	if (!hasUse) {
+		return `skill requires a rust use path (e.g. agent_lib::skills::my_skill)`;
+	}
+	if (!hasCallable) {
+		return `skill requires callable or call_pattern`;
+	}
+	return undefined;
+}
+
 function validateEdit(edit: RefinementEdit, computedId?: string): string | undefined {
 	if (!["create", "update", "delete"].includes(edit.action)) {
 		return `unsupported action ${String(edit.action)}`;
@@ -723,24 +745,8 @@ function validateEdit(edit: RefinementEdit, computedId?: string): string | undef
 		if (!reference) {
 			return `${edit.action} skill requires rust reference`;
 		}
-		// Kernel-era python references load fine but cannot be (re)created —
-		// kept in sync with the guest validator in rlm::harness (DESIGN §4.3).
-		if (reference.type === "python") {
-			return `${edit.action} skill reference.type "python" is legacy (read-only); create rust skills with type "rust"`;
-		}
-		if (reference.type !== "rust") {
-			return `${edit.action} skill reference.type must be rust`;
-		}
-		const hasUse = typeof reference.use === "string" && reference.use.length > 0;
-		const hasCallable =
-			(typeof reference.callable === "string" && reference.callable.length > 0) ||
-			(typeof reference.call_pattern === "string" && reference.call_pattern.length > 0);
-		if (!hasUse) {
-			return `${edit.action} skill requires a rust use path (e.g. agent_lib::skills::my_skill)`;
-		}
-		if (!hasCallable) {
-			return `${edit.action} skill requires callable or call_pattern`;
-		}
+		const error = validateRustSkillReference(reference);
+		if (error) return `${edit.action} ${error}`;
 	}
 	return undefined;
 }

@@ -6,34 +6,12 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
-static NEXT_HARNESS: AtomicUsize = AtomicUsize::new(0);
-
-struct HarnessDir(PathBuf);
-
-impl HarnessDir {
-    fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "rlm-bridge-harness-{}-{}", std::process::id(), NEXT_HARNESS.fetch_add(1, Ordering::SeqCst)
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for HarnessDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 fn skill_reference() -> Value {
     json!({"type":"rust", "use":"agent_lib::skills::example", "callable":"run"})
 }
@@ -145,6 +123,8 @@ fn missing_env_is_a_bridge_error() {
     let _guard = ENV_LOCK.lock().unwrap();
     rlm::test_support::reset_connection();
     std::env::remove_var("RLM_BRIDGE_ADDR");
+    assert!(rlm::harness::local().is_err());
+    assert!(rlm::harness::global().is_err());
     let err = rlm::host_request("any.type", json!({})).unwrap_err();
     let typed = err.downcast_ref::<rlm::Error>().unwrap();
     assert_eq!(typed.kind, rlm::ErrorKind::Bridge);
@@ -251,96 +231,82 @@ fn ack_errors_surface_as_host_errors_and_keep_the_connection() {
 }
 
 #[test]
-fn harness_skill_mutations_require_test_confirmation() {
-    let dir = HarnessDir::new();
-    let calls = AtomicUsize::new(0);
-    let mut host = mock_host(move |frame| {
-        assert_eq!(frame["type"], "harness.skill.test");
-        assert_eq!(frame["payload"]["reference"], skill_reference());
-        let call = calls.fetch_add(1, Ordering::SeqCst);
-        match call {
-            0 => Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":{}})),
-            2 => Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"error","error":"tests failed"})),
-            _ => Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":{"passed":true}})),
-        }
+fn harness_operations_use_scoped_host_requests() {
+    let mut host = mock_host(|frame| {
+        assert_eq!(frame["type"], "harness.request");
+        let payload = &frame["payload"];
+        let scope = payload["scope"].as_str().unwrap();
+        assert!(matches!(scope, "local" | "global"));
+        let entry = json!({"id":"example", "kind":payload["kind"], "title":"Example", "content":"host value", "scope":scope});
+        let value = match payload["operation"].as_str().unwrap() {
+            "open" | "delete" => json!(true),
+            "get" => Value::Null,
+            "list" => json!([entry]),
+            "overview" => json!("from the host"),
+            "create" | "update" => entry,
+            "record_refinement" => json!({"id":"refine_0001", "trigger":payload["trigger"]}),
+            other => panic!("unexpected operation {other}"),
+        };
+        Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":{"value":value}}))
     });
     with_bridge_env(host.port, "tok-ok", || {
-        std::env::set_var("RLM_HARNESS_DIR", &dir.0);
-        let mut harness = rlm::harness::local().unwrap();
-        let err = harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap_err();
-        assert!(err.to_string().contains("did not confirm"));
-        assert!(harness.get("skill", "example").unwrap().is_none());
-        let entry = harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap();
-        let err = harness.update("skill", "example", "Example", "rejected").unwrap_err();
-        assert!(err.to_string().contains("tests failed"));
-        assert_eq!(harness.get("skill", "example").unwrap(), Some(entry));
-        let updated = harness.update_skill("example", "Example", "second", skill_reference(), json!({"input":"optional"})).unwrap();
-        assert_eq!(updated.version, 2);
-        assert_eq!(updated.arguments, json!({"input":"optional"}));
-        std::env::remove_var("RLM_HARNESS_DIR");
+        let mut local = rlm::harness::local().unwrap();
+        assert_eq!(local.create_memory("Example", "one").unwrap().content, "host value");
+        local.create_prompt_note("Example", "two").unwrap();
+        local.create_subagent("Example", "three").unwrap();
+        local.create_skill("Example", "four", skill_reference(), json!({})).unwrap();
+        local.update("skill", "local:example", "Example", "five").unwrap();
+        local.update_skill("example", "Example", "six", skill_reference(), json!({"input":"optional"})).unwrap();
+        assert!(local.get("memory", "missing").unwrap().is_none());
+        assert_eq!(local.list(Some("memory")).unwrap().len(), 1);
+        assert!(local.delete("memory", "example").unwrap());
+        assert_eq!(local.record_refinement("manual", &["changed"], "test", "done").unwrap().id, "refine_0001");
+        assert_eq!(local.overview().unwrap(), "from the host");
+        assert_eq!(rlm::harness::global().unwrap().create_memory("Example", "global").unwrap().scope, "global");
     });
     let frames = host.handle.take().unwrap().join().unwrap();
-    assert_eq!(frames.len(), 5); // handshake + all four attempted mutations
+    assert_eq!(frames[5]["payload"]["reference"], skill_reference());
+    assert_eq!(frames[6]["payload"]["id"], "local:example");
+    assert!(frames[6]["payload"].get("reference").is_none());
+    assert_eq!(frames[7]["payload"]["arguments"], json!({"input":"optional"}));
+    assert_eq!(frames[11]["payload"]["changes"], json!(["changed"]));
 }
 
 #[test]
-fn harness_reloads_after_tests_and_rejects_concurrent_entry_changes() {
-    let dir = HarnessDir::new();
-    let file = dir.0.join("harness_state.json");
-    let calls = AtomicUsize::new(0);
-    let mut host = mock_host(move |frame| {
-        let mtime = std::fs::metadata(&file).unwrap().modified().unwrap();
-        let mut state: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        let call = calls.fetch_add(1, Ordering::SeqCst);
-        if call == 0 || call == 2 {
-            let id = if call == 0 { "concurrent" } else { "failed_test_write" };
-            let mut memory = state["entries"]["memory"]["before"].clone();
-            memory["id"] = json!(id);
-            state["entries"]["memory"][id] = memory;
-        } else {
-            state["entries"]["skill"]["example"]["content"] = json!("concurrent update");
-            state["entries"]["skill"]["example"]["version"] = json!(2);
+fn harness_propagates_host_errors_and_rejects_missing_results() {
+    let mut host = mock_host(|frame| {
+        let operation = &frame["payload"]["operation"];
+        if operation == "create" {
+            return Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"error","error":"sandboxed skill tests failed"}));
         }
-        std::fs::write(&file, serde_json::to_vec(&state).unwrap()).unwrap();
-        std::fs::File::open(&file).unwrap().set_times(std::fs::FileTimes::new().set_modified(mtime)).unwrap();
-        if call == 2 {
-            return Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"error","error":"tests failed"}));
-        }
-        Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":{"passed":true}}))
+        let payload = if operation == "open" { json!({"value":true}) } else { json!({"passed":true}) };
+        Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":payload}))
     });
     with_bridge_env(host.port, "tok-ok", || {
-        std::env::set_var("RLM_HARNESS_DIR", &dir.0);
         let mut harness = rlm::harness::local().unwrap();
-        harness.create_memory("Before", "keep").unwrap();
-        harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap();
-        assert!(harness.get("memory", "concurrent").unwrap().is_some());
-        let err = harness.update("skill", "example", "Example", "should not overwrite").unwrap_err();
-        assert!(err.to_string().contains("changed while tests ran"));
-        assert_eq!(harness.get("skill", "example").unwrap().unwrap().content, "concurrent update");
-        let err = harness.update("skill", "example", "Example", "rejected").unwrap_err();
-        assert!(err.to_string().contains("tests failed"));
-        harness.create_memory("After Failure", "keep").unwrap();
-        assert!(harness.get("memory", "failed_test_write").unwrap().is_some());
-        std::env::remove_var("RLM_HARNESS_DIR");
+        let err = harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap_err();
+        assert!(err.to_string().contains("sandboxed skill tests failed"));
+        let err = harness.update("skill", "example", "Example", "second").unwrap_err();
+        assert!(err.to_string().contains("missing value"));
+        assert!(harness.get("memory", "missing").is_err());
     });
     host.handle.take().unwrap().join().unwrap();
 }
 
 #[test]
-fn harness_skill_tests_use_the_cell_request_timeout() {
-    let dir = HarnessDir::new();
-    let mut host = mock_host(|_| {
+fn harness_skill_mutations_use_the_cell_request_timeout() {
+    let mut host = mock_host(|frame| {
+        if frame["payload"]["operation"] == "open" {
+            return Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"ok","payload":{"value":true}}));
+        }
         std::thread::sleep(std::time::Duration::from_millis(200));
         None
     });
     with_bridge_env(host.port, "tok-ok", || {
-        std::env::set_var("RLM_HARNESS_DIR", &dir.0);
         std::env::set_var("RLM_CELL_TIMEOUT_MS", "1");
         let mut harness = rlm::harness::local().unwrap();
         let err = harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap_err();
         assert!(err.to_string().contains("timed out"), "{err:#}");
-        assert!(harness.get("skill", "example").unwrap().is_none());
-        std::env::remove_var("RLM_HARNESS_DIR");
         std::env::remove_var("RLM_CELL_TIMEOUT_MS");
     });
     host.handle.take().unwrap().join().unwrap();

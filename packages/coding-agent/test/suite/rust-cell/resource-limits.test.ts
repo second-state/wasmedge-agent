@@ -26,7 +26,11 @@ describe.skipIf(!available)("resource limits through AgentSession (faux provider
 		"applies %s from settings",
 		{ timeout: 180_000 },
 		async (name) => {
-			harness = await createHarness({ persistSession: true, settings: { rustCell: { [name]: 1 } } });
+			harness = await createHarness({
+				persistSession: true,
+				isolateSessionStorage: true,
+				settings: { rustCell: { [name]: 1 } },
+			});
 			harness.setResponses([
 				fauxAssistantMessage(fauxToolCall("rust", { code: 'fn main() { println!("should not run"); }' }), {
 					stopReason: "toolUse",
