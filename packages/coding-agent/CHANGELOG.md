@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The readonly preopen probe now runs an inert Wasm module instead of executing the submitted cell a second time. Cancellation and the cell deadline cover the build queue, compilation, probe, and execution.
 - Failed or interrupted Rust cell builds now restore the previous cell source and all library changes, including the helper module index. Invalid lib batches and compiler startup failures no longer leave partially applied source changes.
 
 ## [0.0.2] - 2026-09-29
