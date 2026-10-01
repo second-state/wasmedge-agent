@@ -157,6 +157,7 @@ export class CellRunner {
 
 	private async executeInner(input: CellInput, per: PerCallOptions): Promise<CellResult> {
 		const started = Date.now();
+		const cellId = per.cellId ?? `cell-${randomBytes(6).toString("hex")}`;
 		const deadline = AbortSignal.timeout(this.opts.cellTimeoutMs);
 		const signal = per.signal ? AbortSignal.any([per.signal, deadline]) : deadline;
 		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
@@ -265,7 +266,6 @@ export class CellRunner {
 		const cellEnv: Record<string, string> = { ...this.opts.cellEnv };
 		if (bridge) {
 			await bridge.start();
-			const cellId = per.cellId ?? `cell-${randomBytes(6).toString("hex")}`;
 			bridge.beginCell({
 				cellId,
 				code: input.code,
@@ -310,7 +310,16 @@ export class CellRunner {
 			exitCode: exec.exitCode ?? undefined,
 		};
 		if (exec.aborted || exec.timedOut) return this.result(interruptedStatus(), base);
-		return this.result(exec.exitCode === 0 ? "ok" : "error", base);
+		const result = this.result(exec.exitCode === 0 ? "ok" : "error", base);
+		if (result.status === "ok" && this.opts.history) {
+			try {
+				result.workspaceCommit = this.opts.history.snapshot(cellId);
+			} catch (error) {
+				result.workspaceCommitError = truncate(error instanceof Error ? error.message : String(error));
+			}
+			result.durationMs = Date.now() - started;
+		}
+		return result;
 	}
 
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
@@ -422,6 +431,9 @@ export function composeToolText(result: CellResult): string {
 		} else if (result.exitCode !== undefined && result.exitCode !== 0) {
 			parts.push(`[cell exited with code ${result.exitCode}]`);
 		}
+	}
+	if (result.workspaceCommitError) {
+		parts.push(`[cell succeeded, but its workspace snapshot failed: ${result.workspaceCommitError}]`);
 	}
 	return parts.join("\n").trim();
 }

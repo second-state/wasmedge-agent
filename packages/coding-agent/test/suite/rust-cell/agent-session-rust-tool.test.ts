@@ -3,6 +3,7 @@
  * a genuine compile + WasmEdge run, tool-result composition, and cross-cell
  * workspace persistence. Skipped without the toolchain + warm template. */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,5 +100,11 @@ describe.skipIf(!available)("AgentSession drives the real rust tool (suite)", ()
 		const failureText = toolResultTexts(harness).at(-1) ?? "";
 		expect(failureText).toContain("mismatched types");
 		expect(harness.session.messages.at(-1)?.role).toBe("assistant");
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", join(root, "workspace"), ...args], { encoding: "utf-8" }).trim();
+		expect(git("rev-list", "--count", "HEAD")).toBe("3");
+		expect(git("show", "HEAD:cell/src/main.rs")).toBe(READ_CELL.trim());
+		expect(JSON.parse(git("show", "HEAD:state/state.json"))).toEqual({ counter: 41 });
+		expect(git("log", "--format=%B")).toContain("Tool-Call-ID:");
 	});
 });

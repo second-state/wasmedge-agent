@@ -130,6 +130,8 @@
 - `lib` 路徑驗證：僅接受 `src/**`（相對 `agent_lib/`）、拒絕 `..` 與絕對路徑；`Cargo.toml` 不可經此改動（依賴政策走 D15）。
 - 非 persisted session（`--no-session`）：workspace 放 OS temp、不 git；lib 回滾改用編譯前記憶體備份。
 
+**D5 實作註記（2026-10-01）**：persisted workspace 已有獨立 Git repo、初始快照與成功 cell 的 commit（含序號及 tool call id）。僅納入 scaffold source/manifests、`agent_lib`、skill 掛載與 `state/`；排除 `target/`、`vendor/`、scratch，外部 skill symlink 只版本化連結。專案目錄與 harness stores 不在此 repo。Git 失敗獨立回報，不重跑已成功的 cell；失敗 cell 不 commit、不回滾 runtime 副作用。上面的 `.workspace-version` scaffold 升級仍未實作。
+
 ### 2.2 RustCellManager（TS API）
 
 取代 `KernelManager`，但介面刻意模仿其形狀以縮小 `AgentSession` 的改動面（對映 REPORT §1.12 的 85 處耦合點中多數只需改型別名）：

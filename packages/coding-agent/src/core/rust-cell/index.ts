@@ -16,6 +16,7 @@ import {
 	type RustSkillMount,
 	syncRustSkills,
 } from "./workspace.js";
+import { WorkspaceHistory } from "./workspace-history.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -148,6 +149,8 @@ export class RustCellProvisioner {
 				onDiagnostic: this.options.onDiagnostic,
 			});
 		}
+		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
+		history?.ensure();
 		return new CellRunner({
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,
@@ -158,6 +161,7 @@ export class RustCellProvisioner {
 			cellEnv: this.options.cellEnv,
 			harnessDir: this.options.harnessDir,
 			globalHarnessDir: this.options.globalHarnessDir,
+			history,
 		});
 	}
 

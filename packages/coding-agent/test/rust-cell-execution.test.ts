@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBuildConcurrency, withBuildPermit } from "../src/core/rust-cell/build-gate.js";
-import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import { CellRunner, composeToolText } from "../src/core/rust-cell/cell-runner.js";
+import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 
 interface Invocation {
 	phase: "build" | "probe" | "run";
@@ -45,7 +47,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 
-	function fixture(cellTimeoutMs = 20_000) {
+	function fixture(cellTimeoutMs = 20_000, persist = false) {
 		const ws = mkdtempSync(join(tmpdir(), "cell-execution-"));
 		dirs.push(ws);
 		mkdirSync(join(ws, "agent_lib", "src", "helpers"), { recursive: true });
@@ -69,7 +71,9 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 						.map((line) => JSON.parse(line) as Invocation)
 				: [];
 		};
-		const runner = new CellRunner({ cwd: ws, workspaceDir: ws, cargoBin, wasmedgeBin, cellTimeoutMs });
+		const history = persist ? new WorkspaceHistory(ws) : undefined;
+		history?.ensure();
+		const runner = new CellRunner({ cwd: ws, workspaceDir: ws, cargoBin, wasmedgeBin, cellTimeoutMs, history });
 		return { ws, main, mod, behavior, invocations, runner };
 	}
 
@@ -82,6 +86,30 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		const probe = calls[1];
 		expect(probe.args).toContain(`/agent/lib:${join(f.ws, "agent_lib")}:readonly`);
 		expect(existsSync(probe.args.at(-1)!)).toBe(false);
+	});
+
+	it("snapshots successful cells only and reports a commit failure without repeating execution", async () => {
+		const f = fixture(20_000, true);
+		const count = () =>
+			execFileSync("git", ["-C", f.ws, "rev-list", "--count", "HEAD"], { encoding: "utf-8" }).trim();
+		const success = await f.runner.execute({ code: "first" }, { cellId: "tool-first" });
+		expect(success.workspaceCommit).toMatch(/^[0-9a-f]{40,64}$/);
+		expect(count()).toBe("2");
+		f.behavior({ runExit: 1 });
+		expect((await f.runner.execute({ code: "panics" })).status).toBe("error");
+		expect(count()).toBe("2");
+		f.behavior({ buildExit: 1 });
+		expect((await f.runner.execute({ code: "broken" })).status).toBe("compile_error");
+		expect(count()).toBe("2");
+		f.behavior({});
+		writeFileSync(join(f.ws, ".git", "index.lock"), "locked");
+		const uncommitted = await f.runner.execute({ code: "last" });
+		expect(uncommitted.status).toBe("ok");
+		expect(uncommitted.workspaceCommit).toBeUndefined();
+		expect(uncommitted.workspaceCommitError).toContain("index.lock");
+		expect(composeToolText(uncommitted)).toContain("cell succeeded, but its workspace snapshot failed");
+		expect(count()).toBe("2");
+		expect(f.invocations().filter((call) => call.phase === "run")).toHaveLength(3);
 	});
 
 	it.each(["stdout", "stderr"] as const)("drops a failed readonly mount reported on %s", async (stream) => {
