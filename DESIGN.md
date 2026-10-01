@@ -8,6 +8,8 @@
 - 撰寫日期：2026-08-06
 - **狀態：已定稿**——同日完成六輪逐節審閱，23 項決策（D1–D23）全數定案；審閱軌跡見 §11
 
+**閱讀方式**：定稿表示設計決策已確認，不表示全部完成。各節實作註記記錄後續落地範圍；歷史量測不代表目前版本性能。現況見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md)；引用量測時須保留 revision／環境標註。
+
 ---
 
 ## 目錄
@@ -34,7 +36,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 沿用自 prime-agent（不動）                                            │
+│ 保留並調整的 TypeScript host                                        │
 │  TUI / Print / JSON / RPC / ACP clients                              │
 │  Daemon supervisor ── Session worker（一棵 session tree 一進程）      │
 │    └ AgentSession                                                    │
@@ -75,7 +77,7 @@
 | `wasmedge` | 每 cell 一次，短命（**無長命 kernel 進程**） | 取代長命 `ipykernel` |
 | BridgeServer（TS，worker 內 dispatcher） | 每 session 一個；每 cell 綁定 private stdio pipes，結束即斷開 | 取代 ZMQ 三通道 |
 
-關鍵差異：現制的「持久性」載體是 kernel 進程的記憶體；新制的持久性載體是**磁碟上的 workspace**（git 版本化）。因此 worker 崩潰/重啟後毫無狀態損失——不需要 forkserver、不需要 dill、不需要 busy-kernel interrupt 流程（cell 短命，逾時直接 kill）。
+關鍵差異：現制的「持久性」載體是 kernel 進程的記憶體；新制的持久性載體是**磁碟上的 workspace**（git 版本化）。已成功寫入的 state／library 可跨 worker 重啟保留，未落盤狀態與進行中的副作用沒有無損或交易式恢復保證。Cell 短命，逾時直接 kill。
 
 **已確認取捨（D11）**：無長命進程意味著 cell 之間不能在記憶體保留大型資料結構，每個 cell 對大輸入需重讀重解析。正式接受此語意；緩解模式為「解析一次、以 `rlm::state`/blobs（bincode 等序列化）存中間形式、後續 cell 載入預處理結果」。若 PoC/實運行顯示為真瓶頸，再評估 resident data service（不預先設計）。
 
@@ -120,13 +122,13 @@
 
 **Scaffold 流程**（`WorkspaceManager.ensure()`，對映 `ensureKernelPython`）：
 
-1. 若 workspace 不存在：從安裝時預建的**模板**複製（macOS `clonefile` / Linux reflink，毫秒級），模板含已編譯好的 prelude 依賴 target 快取 → **消除 4.8s 冷啟動**（REPORT §2.4），首 cell 即 0.3s 級。
+1. 若 workspace 不存在：從預建的**模板**複製，嘗試重用 prelude 的 target 快取。Cache 可重用時可避免 REPORT §2.4 曾量到的 4.8s 冷依賴編譯；toolchain、依賴、library 或快取狀態改變仍可能重編，沒有固定首 cell 延遲保證。
 2. `git init` + 初始 commit（`.gitignore`: `target/`）。
 3. 版本 marker `.workspace-version`（對映 `.bootstrap-version` schema 8 的機制）：記錄模板版本、prelude crate 集 hash、rustc/wasmedge 版本；不符時重建 scaffold 但**保留 `agent_lib/src/helpers`、`skills` 掛載與 `state/`**（使用者資產不可因升級消失——優於現制 venv 整個 rm -rf 的做法）。
 
-**Lib 變更與防磚（D14 定案：宣告式）**：`/agent/lib` 對 guest 是**唯讀** preopen；模型擴充函式庫的唯一路徑是工具呼叫的選配 `lib` 參數（§2.5）。host 在編譯前寫入宣告的檔案，lib 與 cell **同次編譯**——lib 編不過 → 檔案回滾、cell 不執行、診斷即 tool result。推論：**每個成功執行過 cell 的 workspace 必然處於可編譯狀態**，不存在「事後偵測＋補救回滾」路徑。
+**Lib 變更與防磚（D14 定案：宣告式）**：`/agent/lib` 對 guest 是**唯讀** preopen；模型經工具呼叫的選配 `lib` 參數擴充函式庫（§2.5）。host 在編譯前寫入宣告的檔案，lib 與 cell **同次編譯**；失敗或中斷的 build 回復先前 cell source、提供的 lib edits 與 generated helper index，不執行本次 cell。這是還原先前來源的保證，不是「workspace 永遠可編譯」：外部修改、可編輯 skill source 或依賴變動仍可破壞下次 build。編譯成功後的 panic、timeout 或 import-policy 拒絕不回滾來源，runtime 副作用也不交易式回滾。
 
-- 每次 cell 成功執行後，host `git add -A && git commit`（訊息含 cell 序號與 tool call id）——replay 的資料基礎。
+- Persisted workspace 每次 cell 成功執行後，host commit 指定範圍的來源與狀態（訊息含 cell 序號與 tool call id）；這是歷史快照，不等於完整 trajectory replay。
 - `lib` 路徑驗證：僅接受 `src/**`（相對 `agent_lib/`）、拒絕 `..` 與絕對路徑；`Cargo.toml` 不可經此改動（依賴政策走 D15）。
 - 非 persisted session（`--no-session`）：workspace 放 OS temp、不 git；lib 回滾改用編譯前記憶體備份。
 
@@ -198,7 +200,7 @@ cargo build --release --target wasm32-wasip1 \
 - **offline + vendored**：安裝時 `cargo vendor` 把 prelude 依賴鎖進 `~/.wasmedge-agent/vendor/`（全域共享、唯讀）；workspace 的 `.cargo/config.toml` 指向它。cell 編譯**永不碰網路**（供應鏈與決定性雙重理由）。
 - **依賴政策（D15 定案）**：Phase 1 prelude 集**鎖死**；使用者可經 settings `preludeExtra` 追加（session 啟動時 host 重新 vendor）。`rlm::deps::add` 在 Phase 1 回明確的 not-supported 錯誤（指示改請使用者調 settings）；動態新增延至 Phase 2 以 curated 白名單實作（host 抓取 → re-vendor → 改 Cargo.toml → commit）。
 - **診斷處理**：解析 message-format JSON 流，取 `rendered` 欄位串接（strip ANSI 後截斷 65,536）。編譯失敗 → `status: "compile_error"`、`isError: true`、**不執行**；診斷全文就是 tool result（REPORT §2.2 的一等回饋原則）。
-- **profile**：release（0.28s 實測基準即 release）。`[profile.release] debug = false, incremental = true`；`codegen-units` 預設。不做 wasm-opt/strip（cell 短命，體積無關緊要）。
+- **profile**：release（REPORT 的 0.28s 是特定小程式、暖快取下的 release 量測，不是固定 build 延遲）。`[profile.release] debug = false, incremental = true`；`codegen-units` 預設。不做 wasm-opt/strip。
 - 快取：per-session `target/`（模板預熱）。不跨 session 共享 target（鎖競爭與污染風險 > 收益；模板複製已解決冷啟動）。
 
 ### 2.4 執行管線
@@ -490,7 +492,7 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 **掛載**（取代 venv editable install）：`WorkspaceManager.syncRustSkills()`：
 
-1. workspace `Cargo.toml` 的 members 加入 `[skills 目錄的 path dependency]`（path 指向 skill 原地，**不複製**——等價 editable 語意：改 skill 原始碼、下個 cell 重編譯即生效，0.3s）。
+1. workspace `Cargo.toml` 的 members 加入 `[skills 目錄的 path dependency]`（path 指向 skill 原地，**不複製**——等價 editable 語意：改 skill 原始碼、下個 cell 重編譯；成本依程式與快取而定）。
 2. `agent_lib/src/skills/mod.rs` 生成 `pub use <crate> as <name>;` re-export。
 3. 變更偵測：skill `Cargo.toml` hash 進 `.workspace-version`（對映 `pyprojectHash` 機制）；skill 依賴需通過 vendored registry 或觸發一次 `deps.add` 流程。
 4. 失敗策略沿用：單一 skill 編譯失敗 → 從 members 移除 + 警告診斷（不可拖垮整個 workspace——對映「install failure only warns」）。
@@ -517,7 +519,7 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 1. 工具呼叫附 `lib` 參數新增 `src/helpers/log_parse.rs`（host 自動維護 `helpers/mod.rs` 的 `pub mod` 宣告，或模型將 mod.rs 一併列入 lib 參數）；**同一呼叫的 cell 立即可 `use`**——lib 與 cell 同次編譯。
 2. Guard 即編譯步驟：lib 編不過 → 回滾＋診斷、cell 不跑（§2.1）——迴路天然強制「小步、可編譯」。
-3. 升格為正式 skill：skill-creator 指南教模型把成熟的 helpers 搬出成獨立 skill crate + SKILL.md + `#[cfg(test)]` 測試，host 提供 `skills.package` host request 做 scaffold。
+3. 升格為正式 skill：skill-creator 指南教模型把成熟的 helpers 搬出成獨立 skill crate + SKILL.md + `#[cfg(test)]` 測試；`skills.package` scaffold host request 尚待實作，現由模型依指南建立檔案。
 4. **品質閘（D19 定案：Phase 1 soft、Phase 2 強制）**：Phase 1 僅教義要求（refine prompt 與 skill-creator 指南要求先跑 `cargo test`）；Phase 2 以沙箱內測試（`cargo test --target wasm32-wasip1`、wasmedge 為 test runner）升級為 refine `create_skill` handler 的硬驗證。注意：host 在 native 跑模型寫的 test 等於繞沙箱執行任意代碼——**強制閘只能以沙箱內測試實作**，這是 D19 分期的根本原因。
 
 **D19 登錄閘實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
@@ -748,7 +750,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | D2 | `/workspace` 預設可寫 | 與現制行為對齊、PoC 對照公平；ro+patch 模式為 Phase 2 選項（RL 場景再啟用） |
 | D3 | T1 socket 起步 → CLI + stdio 過渡（2026-10-02）→ T2 host functions | 保留同步 guest API 與協議 v1；stdio 先移除 socket 需求，不新增 native binary 部署面（§2.7） |
 | D4 | Bridge 認證用 bearer token（非 HMAC 逐訊息簽章） | 每 session 隨機 64-hex token + active cell ID；現使用每 cell private pipes，token 同時區分 stdout protocol frames |
-| D5 | Workspace git 版本化 + agent_lib guard | 防磚、可審計、replay 基礎；成本僅每 cell 一次 commit（<10ms） |
+| D5 | Workspace git 版本化 + agent_lib guard | Persisted 成功 cells 保存指定範圍快照；失敗 builds 回復先前來源。Commit 成本依檔案量而變，沒有 <10ms 保證；非完整 replay（§2.1） |
 | D6 | 工具名 `rust`（不冒名 `ipython`） | 冒名會觸發上游 `hasIpython` 的全套 Python prompt（探索確認）；誠實命名 + fork 內改分支條件 |
 | D7 | Prompt 全新創作、面向通用 frontier models | 上游 base prompt 是「訓練過的前綴」，模仿無利；REPORT §3.6 |
 | D8 | 押 wasm32-wasip1 core module；CM/wasip2 列 Phase 3 | Rust tier-2 穩定 + WasmEdge 最成熟路徑；REPORT 附錄 B |
@@ -757,7 +759,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | D11 ✅ | 接受「無長命進程 → 大資料跨 cell 重讀」語意 | 緩解：state/blobs 序列化中間結果；resident data service 不預先設計，待實證瓶頸再議（§1.2） |
 | D12 ✅ | Guest 對外 I/O 一律 host-mediated——**產品原則，非過渡措施** | 一切 fetch/search 類能力以 host handler 擴充（websearch 模式）；guest 永不直連外網。決定性/replay/credential 隔離三重理由（§1.3 原則 4、§2.7）。D9 的 guest 強制力已由 runner import 政策補齊；host 權限邊界保留 |
 | D13 ✅ | `rust` + `bash` 雙內建工具 | 沙箱涵蓋 agent 自身計算、bash 為顯式越權通道的誠實敘事（§2.10）；與上游能力對齊、PoC 對照公平。approval 政策沿用現制 |
-| D14 ✅ | agent_lib 擴充走**宣告式 `lib` 參數**；`/agent/lib` 唯讀 preopen | 免 Rust-in-Rust 字串轉義、省 token；guard 併入編譯步驟（lib 編不過 → cell 不跑、原子回滾）→ workspace 恆處可編譯狀態；lib diff 免費渲染。代價：雙參數 schema、cell 內不能程式化生成 lib（經 state 中轉） |
+| D14 ✅ | agent_lib 擴充走**宣告式 `lib` 參數**；`/agent/lib` 唯讀 preopen | Cell 與 lib 同次編譯；build 失敗／中斷回復先前來源，非 runtime 交易式回滾或永遠可編譯保證（§2.1）。代價：雙參數 schema、cell 內不能程式化生成 lib（經 state 中轉） |
 | D15 ✅ | Phase 1 prelude 鎖死；`deps.add` 延至 Phase 2 curated 白名單 | 供應鏈面最小、WP3 縮小、決定性最強；使用者以 settings `preludeExtra` 調整。Phase 2 白名單：host 抓取 → re-vendor → commit |
 | D16 ✅ | 檔案操作教義 rust-first | 讀/搜/改檔走 rust cell（prelude helpers + state 重用），bash 保留給專案原生指令——RLM 理念的直接平移；代價為 cell 數增加，PoC 質性觀察項 |
 | D17 ✅ | Prompt 附一個完整 few-shot 範例；PoC treatment 組內 sub-A/B 定去留 | +~150 tokens 固定成本 vs 首錯率——用數據定案而非直覺（§3.2 範例、§6.2 sub-A/B） |

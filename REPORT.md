@@ -6,18 +6,20 @@
 - 撰寫日期：2026-08-06
 - 實測環境：macOS（Darwin 25.5.0，Apple Silicon）、rustc 1.97.0、WasmEdge 0.17.1（本機 master build）
 
+**引用範圍（2026-10-02 補註）**：本文件是 2026-08-06 的可行性研究，§3–§5 是當時的候選設計與路線，不是已實作功能清單；上游分析固定在上述 revision。§2.4 的小程式量測也不同於 [August 10 的 12-task benchmark](docs/benchmark-comparison-2026-08-10.md)（WasmEdge 0.14.1）。目前實作範圍見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md)。
+
 ---
 
 ## 0. 摘要（Executive Summary）
 
-**結論：可行，且不只是「把 Python 換成 Rust」的平移——WasmEdge + Rust 恰好補上 Prime Agent 自己明文承認的最大弱點（kernel 不是安全沙箱），並額外換來型別驗證、決定性執行與資源治理。代價是放棄 REPL 的即時求值與動態生態，改為「cell = 完整程式」的 compile-run 模型，並以顯式狀態層取代 in-memory namespace。**
+**結論：compile-run 原型可行。Rust 編譯提供型別檢查，WasmEdge 提供隔離 guest 執行的基礎；網路政策、資源上限與可重放性仍需具體的 runner 與 host 設計，不能由這次原型量測直接保證。代價是放棄 REPL 的即時求值與動態生態，改為「cell = 完整程式」的 compile-run 模型，並以顯式狀態層取代 in-memory namespace。**
 
 四個關鍵發現：
 
-1. **延遲不是問題（已實測）**。在本機量測：Rust cell 熱編譯（`wasm32-wasip1`，release，含 serde/serde_json）**0.28 秒**，WasmEdge 執行含狀態檔往返 **10ms**，冷編譯僅首次 4.8 秒。相對於 LLM 單輪推理的 5–60 秒，編譯延遲完全可忽略。
+1. **小程式的暖快取成本可量測**。本機 representative microbenchmark：Rust 熱編譯（`wasm32-wasip1`，release，含 serde/serde_json）**0.28 秒**，WasmEdge 執行含狀態檔往返 **10ms**，冷依賴編譯 **4.8 秒**。這些數字支持進一步測試 compile-run 模型，不是每個 cell 的固定延遲，也不證明完整 agent 的額外編譯／修錯成本可忽略。
 2. **架構上存在官方縫隙但不足以免 fork**。`AgentSessionConfig.baseToolsOverride` 註解明寫 "useful for custom runtimes"，可完全繞過 IPython；但 host bridge、goals、system prompt、skills、renderer 有數十處硬繫在 `ipython` 上（僅 `agent-session.ts` 就 85 處），乾淨的替換必須 fork。Prime Agent 本身就是 pi-mono 的 in-repo hard fork（四個 package 沿用 `@earendil-works/pi-*` 名稱）——「fork 一個完整 agent、換上自己的 runtime 理念」正是它自己的誕生方式。
 3. **可重用比例高**。Provider 層（34K 行）、agent loop（2.4K 行）、TUI（15K 行）、daemon/sessions/compaction/goals 等與 Python 無關；需要重寫的集中在 kernel 層（~3K 行）、ipython tool（0.7K 行）、prompt 教義、skills 安裝機制與 renderer。Harness 狀態（`harness_state.json` schema v1）、`/refine` 編輯協議、SKILL.md 格式、compaction 演算法皆為語言中立、可直接沿用。
-4. **語意對應有一處根本轉換**：IPython 的「持久 in-memory namespace」在 Rust/Wasm 沒有等價物。替代設計是三件套：**持久 workspace crate（程式碼即長期記憶）＋ 顯式狀態層（serde 檔案/KV，經 WASI preopen）＋ host bridge（host functions 或 loopback socket，1:1 對應現有 `host.request` comm 協議且更簡單）**。dill snapshot 的 best-effort 序列化在此模型下反而變成 100% 可靠——狀態本來就在檔案。
+4. **語意對應有一處根本轉換**：IPython 的「持久 in-memory namespace」在 Rust/Wasm 沒有等價物。替代設計是三件套：**持久 workspace crate（程式碼即長期記憶）＋ 顯式狀態層（serde 檔案/KV，經 WASI preopen）＋ host bridge（候選方案為 host functions 或 loopback socket）**。顯式檔案避免依賴任意 Python 物件的 dill snapshot；恢復仍取決於成功寫入、儲存完整性與格式相容性。
 
 **建議路線**：三階段混合。Phase 0 用 SDK 的 `baseToolsOverride` 掛一個 Rust-cell 工具在原版 prime-agent 上跑真任務（不 fork、1–2 週），量測模型以 cell=program 模式工作的 token 成本與成功率；數據支持後 Phase 1 正式 fork 置換 runtime 層（4–8 週 MVP）；「從頭打造 Rust-native host」保留為 Second State 戰略選項（全 Rust 堆疊 + LlamaEdge/WASI-NN 本地推理），但成本高一個量級，不建議作為第一步。
 
@@ -222,9 +224,9 @@ Prompt 組裝（`system-prompt.ts:116-166`）：RLM base prompt → subagent 指
 
 | # | WasmEdge + Rust 對應 | 評價 |
 |---|---|---|
-| 1 | compile-run：熱編譯 **0.28s** + 執行 **10ms**（本機實測，§2.4）；rustc 診斷直接作為 tool result 回給模型 | **可接受**。LLM 推理延遲主導整個迴路；rustc 錯誤訊息品質對 LLM 修錯極友善 |
+| 1 | compile-run：熱編譯 **0.28s** + 執行 **10ms**（本機小程式，§2.4）；rustc 診斷直接作為 tool result 回給模型 | 支持進一步實驗；完整迴路的延遲與修錯成本需另量測 |
 | 2 | **無直接等價**。替代三件套：持久 workspace crate（`agent_lib`，程式碼即記憶）＋ 顯式狀態層（serde → `/state` preopen 或 host KV）＋ 每 cell 是完整程式 | **根本轉換**（§2.3）。哲學從 state-as-objects 變 state-as-code+data |
-| 3 | 免費獲得：狀態本來就在檔案，跨 session **100% 可靠**（vs dill 的 best-effort 掉東西） | **反超** |
+| 3 | 顯式檔案狀態可跨 session 讀取，不依賴任意物件的序列化；仍需處理寫入失敗與格式相容性 | 需驗證恢復路徑 |
 | 4 | Cargo.toml 宣告 + 預選 prelude（serde/serde_json/regex/…須 wasm32-wasip1 相容）；`cargo add` 經 host 政策；共享 target dir 快取 | **受限**。資料科學生態明顯弱於 Python（§2.6） |
 | 5 | 沙箱內無 shell（這是特性不是缺陷）。專案指令走 host 側 policied `bash` tool（原始碼已存在於 `tools/bash.ts`，啟用即可）或 `host.exec` host function | **需重新設計信任邊界**（§3.7）。與 prime-agent 的雙環境紀律一致 |
 | 6 | Host functions（embedder 註冊）或 guest 經 WASI socket 連 host loopback JSON-RPC。**無 Jupyter shell/control 死結問題**；host 端 `HostRequestHandlers` registry 原封重用 | **反超**（更簡單、更可靠） |
@@ -242,7 +244,7 @@ Prompt 組裝（`system-prompt.ts:116-166`）：RLM base prompt → subagent 指
 - 換個角度，這其實與 RLM 論文的精神**同構**：RLM 的主張是「context 放進變數、用程式操作」；Rust 版把「變數」實體化為 `/state` 裡的 serde 資料與 `agent_lib` 裡的函式。**程式碼本身變成第一級的長期記憶**——模型累積的不是易失的 in-memory 物件，而是型別檢查過、可測試、可重用的函式庫。這與 Continual Harness 的自我改進理念疊加得更好，不是更差。
 - 對模型的實際負擔：不能再「戳一下看看」（`df.head()` 式探索）。每次探索都是一個小程式。緩解手段：cell 模板、`agent_lib` 預置高階 helper（`read_lines`、`grep`、`walk`、`json_query`…）、以及把常見探索模式做成一行呼叫。
 
-### 2.4 實測數據（本機）
+### 2.4 實測數據（representative microbenchmark，本機）
 
 在報告撰寫過程中於本機完成的 micro-benchmark（一個典型 cell：讀 `/workspace` 目錄、統計檔案、serde_json 狀態檔讀改寫）：
 
@@ -254,16 +256,20 @@ Prompt 組裝（`system-prompt.ts:116-166`）：RLM base prompt → subagent 指
 | 產物大小 | 206 KB | release、未 strip/wasm-opt |
 | 狀態持久化 | ✅ | `state.json` 跨兩次執行正確累積（run #1 → run #2） |
 
-環境：Apple Silicon macOS、rustc 1.97.0、WasmEdge 0.17.1（本機 build）。結論：**每 cell 端到端 ~0.3s**，佔 LLM 單輪延遲（5–60s）的 0.5–6%，在迭代迴路中不可感知。冷啟動 4.8s 僅發生在 session 首個 cell（且可用預建 target dir 消除）。AOT 對 cell 這種短命程式無必要（AOT 編譯本身比 interpreter 執行還久）；`agent_lib` 若長大可選擇性 AOT 快取。
+環境：Apple Silicon macOS、rustc 1.97.0、WasmEdge 0.17.1（本機 build）。0.28s 與 0.01s 分別是上述小程式的暖編譯與執行量測；未涵蓋完整 agent 的排隊、bridge、host handlers、模型推理或修錯迴路。206 KB 也是此程式的產物大小，不能推廣為任意 cell 的固定值。本節未提供足以建立延遲分布或服務水準的重複量測。
 
-### 2.5 反轉優勢：WasmEdge 版本能主張什麼
+暖模板在 target cache 可重用時可避免這次量到的 4.8s 冷依賴編譯；toolchain、依賴、library 或快取狀態改變仍可能觸發重編。此 microbenchmark 不足以判定所有 workload 的 AOT 取捨；當前 runner 的 interpreter 要求另見 runtime 文件。
 
-1. **真沙箱**。prime-agent 文件三處明言 kernel 不是沙箱、要求使用者自備隔離。WASI capability 模型讓「agent 的計算」deny-by-default：只 preopen `/workspace` 與 `/state`，無 ambient 網路/檔案系統/進程。這是從 0 到 1 的差異，不是改良。
-2. **型別系統 = 免費 verifier**。Python cell 的錯誤在 runtime 才爆；Rust cell 的大類錯誤在 0.28s 的編譯就攔下，且 rustc 診斷（span、suggestion、error code）是結構化的修錯提示。對「agent 自己寫技能、自己迭代」的場景，`cargo test` + 型別檢查讓自我改進有品質閘——prime-agent 的 skill creator 沒有任何等價機制。
-3. **決定性與可重放**。Wasm 執行決定性 + 全部 side effect 走可記錄的 host 邊界（preopen FS + host functions）⇒ trajectory 可完整重放。對 Prime Intellect 系（verifiers、PRIME-RL）與任何 RL 訓練場景，**這是把 agent 執行變成合法 RL environment 的性質**——Python kernel 永遠給不了。
-4. **資源治理**。gas metering（cost limit）、memory page limit、async cancel、子進程 timeout：每個 cell 有硬預算。ipython 只有「盡力 interrupt、等 5 秒、不行就殺 kernel 丟狀態」。
-5. **冷啟動與密度**。10ms 級 instance 啟動 + MB 級 footprint，天然適合 server-side 大規模並行 agent（對照 forkserver 為了 Python 冷啟動做的複雜工程）。
-6. **生態一致性（Second State 視角）**：與 WasmEdge/LlamaEdge/WASI-NN 同堆疊——Phase 3 可讓同一個 runtime 跑本地 LLM 推理（llama.cpp backend），形成「模型與工具同沙箱」的完整故事。
+### 2.5 設計收益與待驗證目標
+
+以下區分原型證據與設計目標；目前實作範圍另見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md)。
+
+1. **Guest 隔離**。WASI preopens 限制 guest 的檔案存取，但原 T1 socket 方案沒有強制網路出口政策；不能由 preopens 推論無 ambient network。Host bash、編譯器及 host handlers 也不在 guest 沙箱內。
+2. **編譯期回饋**。Rust compiler 可攔截部分型別與借用錯誤，診斷可供模型修正；編譯通過不等於任務正確。測試需另外執行，0.28s 不是任意程式的驗證時間保證。
+3. **可重放目標**。Host 邊界提供記錄位置，但完整 trajectory replay 還需要捕捉檔案、時間、隨機值、外部回應及並行順序等輸入。Wasm 或 Git snapshots 本身不提供完整重放。
+4. **資源治理設計**。Gas、linear-memory page limit、取消與 timeout 是不同控制項；要分別接線與驗證，也不能視為 host 編譯、handlers 或整棵子 agent 樹的總資源上限。
+5. **部署成本待測**。§2.4 的 10ms 是小程式執行含狀態往返，沒有獨立分解 instance 啟動時間，也未量測 MB 級 footprint 或大量並行密度。
+6. **生態整合目標**。WasmEdge/LlamaEdge/WASI-NN 可作為後續本地推理的候選堆疊；本次實驗沒有驗證模型與工具共用沙箱的部署。
 
 ### 2.6 劣勢與誠實的代價
 
@@ -330,7 +336,7 @@ rlm::{diff, attach_image}                           // rich output → 同樣的
 
 三條慣例取代 IPython 的變數持久性：
 
-1. **小資料走 `rlm::state`**：解析結果、計數、todo、中繼結論——serde 進 `/state/state.json`，跨 cell/session 100% 可靠（對照 dill 的 best-effort）。
+1. **小資料走 `rlm::state`**：解析結果、計數、todo、中繼結論——serde 進 `/state/state.json`，供後續 cell/session 顯式讀取；可靠性取決於寫入與恢復路徑。
 2. **可重用邏輯進 `agent_lib`**：模型覺得某段邏輯會再用，就把函式寫進 `agent_lib/src/`（cell 裡直接寫檔即可），下個 cell `use` 得到，`cargo test -p agent_lib` 是自我改進的品質閘。這是 Continual Harness 的 skill 概念在語言層的自然延伸。
 3. **大資料留在檔案**：與現行 prime-agent 教義一致（子 agent 用檔案交棒）。
 
@@ -351,7 +357,7 @@ Compaction 通知的對應物：現制是探測 kernel namespace 列出活變數
 | 現制（Python） | 新制（Rust） |
 |---|---|
 | SKILL.md + `pyproject.toml` + `src/<name>/__init__.py` | SKILL.md + `Cargo.toml` + `src/lib.rs` |
-| `uv pip install --editable` 進 venv | 掛為 workspace member ＋ `agent_lib` re-export（無安裝步驟，改碼即生效——重編譯 0.3s） |
+| `uv pip install --editable` 進 venv | 掛為 workspace member ＋ `agent_lib` re-export；修改後需重編譯，成本依程式與快取而定 |
 | kernel 啟動時 pre-import、`await skill(...)` | `use agent_lib::skills::websearch;`，prompt XML 標注 `<rust_use>` |
 | `help()`/`inspect.signature` 內省 | rustdoc（`cargo doc` / rustdoc JSON）注入 SKILL.md 或按需查詢 |
 | 無品質閘 | **`cargo test` + 型別檢查**——skill-creator 產出的技能天生可驗證 |
@@ -379,7 +385,7 @@ Harness 的 skill entry 需把硬編碼的 `reference.type == "python"`（`harne
 
 - `%%bash` 的對應：**啟用既有的 `tools/bash.ts`**（原始碼已在、只是未註冊為內建）。專案指令（`npm test`、`cargo build`）本來就必須在真環境跑——這與 prime-agent 教義「不要假設 scratchpad 是目標專案的 runtime」完全一致，現在只是把這條紀律變成架構事實。`sandbox` extension 範例（sandbox-exec/bubblewrap）可疊加在 bash 上。
 - 必須避免 oversell：**沙箱涵蓋的是「agent 的自身計算」**；只要 bash tool 存在，整體系統就不是全沙箱。正確的主張是：把 prime-agent 裡「一切都在無沙箱 kernel 裡」收窄為「預設在沙箱、越權有名有姓可審計」。
-- 決定性紅利：wasm 執行決定性 + host 邊界全部可記錄（host_request transcript + preopen FS 快照）⇒ trajectory 可重放、可驗證——對 RL 訓練（verifiers/PRIME-RL 一系）是質變。
+- 可重放性是後續目標：host_request transcript 與 FS 快照提供部分材料，仍需記錄其他非決定性輸入，不能宣稱已能完整重放（§2.5）。
 
 ### 3.6 Prompt 教義改寫要點（新寫，非翻譯）
 

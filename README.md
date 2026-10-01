@@ -2,7 +2,8 @@
 
 **A runtime-swap fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent): the model writes Rust instead of Python, and every cell runs sandboxed in [WasmEdge](https://github.com/WasmEdge/WasmEdge).**
 
-Status: **incubation (Phase 1)**. The runtime surgery is in progress. The public
+Status: the core Rust/WasmEdge runtime is implemented; further design work is
+tracked in `DESIGN.md`. The public
 surface is the fork's own: the command is `wasmedge-agent`, the environment
 prefix is `WASMEDGE_AGENT_*`, and configuration lives in `~/.wasmedge-agent`.
 `DESIGN.md` D25 held those at upstream identities until M5; that rename has
@@ -11,21 +12,31 @@ implementation details, not the public install path.
 
 ## What changes, what stays
 
-Prime Agent's design — one programmatic control-environment tool, recursive
+The benchmark baseline's design — one programmatic control-environment tool, recursive
 `rlm(...)` subagents, the continual harness — stays. What this fork replaces is
 the runtime under it:
 
-| | upstream | this fork |
+| | Benchmark baseline (`c22549a3`) | This fork |
 |---|---|---|
+| Host harness | TypeScript | Retained and adapted TypeScript harness |
 | Model-facing tool | `ipython` (persistent kernel) | `rust` (cell = complete program) |
 | Execution | host Python, no sandbox | `wasm32-wasip1` in WasmEdge, capability-scoped preopens |
 | Persistence | in-memory namespace + dill snapshots | explicit: `rlm::state` KV/blobs + growable `agent_lib` crate + files |
 | Feedback loop | runtime tracebacks | rustc diagnostics (compile errors are first-class feedback) |
 
-Design documents: `REPORT.md` (feasibility study), `DESIGN.md` (formalized
-design, decisions D1–D25), `docs/m1-measurement-report.md` (Phase 0 GO
-measurement: 146 runs, treatment passes 73/73 within the token gate),
-`poc/` (the Phase 0 extension, guest workspace template, and benchmark harness).
+This comparison describes the pinned baseline, not today's upstream main.
+The fork changes tool registration, session wiring, prompts, and persistence
+as well as the cell runtime. Cell builds are mandatory; sandboxed tests gate
+skill registration, not every edit. The runner rejects direct guest network
+imports and uses a stdio bridge for host capabilities. Host bash, Cargo build
+scripts/proc macros, and host handlers retain host permissions. See the
+[runtime architecture and trust boundary](packages/coding-agent/docs/rlm-runtime.md).
+
+Evidence and design:
+
+- [August 10 benchmark](docs/benchmark-comparison-2026-08-10.md): 12 distinct tasks, two models, three repetitions per group; fork 72/72 runs versus baseline 69/72, with higher wall time and output-token usage. All baseline failures were one Sonnet rename task; this does not isolate a compiler effect.
+- [M1 PoC report](docs/m1-measurement-report.md): a separate August 6 campaign with 146 runs including two smoke runs; treatment passed 73/73. Its recovery measurements are not from the August 10 benchmark.
+- [Feasibility study](REPORT.md), [design decisions](DESIGN.md), and [PoC source](poc/): historical measurements, planned work, and implementation notes.
 
 ## Try it
 
