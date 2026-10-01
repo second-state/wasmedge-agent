@@ -3,6 +3,7 @@
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
@@ -10,6 +11,7 @@ import { assertHarnessMountsIsolated } from "./harness-mounts.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
+import { validateWasiImports } from "./wasm-imports.js";
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -149,6 +151,20 @@ export class CellRunner {
 				: [];
 		const attachments: CellResult["attachments"] = [];
 		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
+		try {
+			const wasm = await readFile(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"), { signal });
+			await validateWasiImports(wasm, "cell", signal);
+		} catch (error) {
+			return this.result(signal.aborted ? interruptedStatus() : "error", {
+				started,
+				compileMs,
+				runMs: 0,
+				libApplied,
+				libReverted: false,
+				diffs,
+				stderr: truncate(`cell did not run: ${error instanceof Error ? error.message : String(error)}`),
+			});
+		}
 		const probe = await this.probeLibReadonly(remainingMs(), signal);
 		if (probe && (probe.aborted || probe.timedOut || probe.exitCode !== 0)) {
 			return this.result(probe.aborted || probe.timedOut ? interruptedStatus() : "error", {
@@ -165,7 +181,6 @@ export class CellRunner {
 		const bridge = this.opts.bridge;
 		const cellEnv: Record<string, string> = { ...this.opts.cellEnv };
 		if (bridge) {
-			await bridge.start();
 			bridge.beginCell({
 				cellId,
 				code: input.code,
@@ -176,7 +191,7 @@ export class CellRunner {
 					onSentAgentMessage: (message) => sentAgentMessages.push(message),
 				},
 			});
-			cellEnv.RLM_BRIDGE_ADDR = bridge.address;
+			cellEnv.RLM_BRIDGE_STDIO = "1";
 			cellEnv.RLM_BRIDGE_TOKEN = bridge.token;
 			cellEnv.RLM_CELL_ID = cellId;
 			cellEnv.RLM_CELL_TIMEOUT_MS = String(this.opts.cellTimeoutMs);
@@ -190,6 +205,9 @@ export class CellRunner {
 				timeoutMs: remainingMs(),
 				signal,
 				onChunk: per.onChunk,
+				bridge: bridge
+					? { token: bridge.token, attach: (connection) => bridge.attachStdio(connection) }
+					: undefined,
 			});
 		} finally {
 			// Cancels cooperative handlers, waits briefly for pending receipts,
@@ -235,7 +253,7 @@ export class CellRunner {
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
 		this.checkHarnessMounts();
-		const args: string[] = ["run", ...this.resourceArgs];
+		const args: string[] = ["run", "--force-interpreter", ...this.resourceArgs];
 		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}`);
 		if (this.mountLibReadonly) {
 			args.push("--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`);

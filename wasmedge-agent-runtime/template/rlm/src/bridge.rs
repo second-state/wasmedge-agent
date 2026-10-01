@@ -1,17 +1,17 @@
-//! (internal) TCP client to the host BridgeServer: JSON-lines framing, bearer
+//! (internal) Client to the host BridgeServer: JSON-lines framing, bearer
 //! token handshake, lockstep request/reply (DESIGN.md §2.7).
 //!
 //! One process-global connection, opened lazily on first use from the
-//! `RLM_BRIDGE_ADDR` / `RLM_BRIDGE_TOKEN` / `RLM_CELL_ID` env the host sets per
+//! `RLM_BRIDGE_STDIO` / `RLM_BRIDGE_TOKEN` / `RLM_CELL_ID` env the host sets per
 //! cell. The guest is single-threaded and every send synchronously awaits its
 //! reply (`res` for `req`, `ack` for `emit`), so frames never interleave.
 //! Ordinary requests time out after 30s guest-side; skill tests use the cell
 //! budget. The host's per-cell budget is the hard backstop. A transport failure
-//! discards the connection so the next call reconnects fresh — requests are
+//! renews the handshake on the next call — requests are
 //! never auto-retried (a `req` may have side effects like spawning a subagent).
 //!
-//! On wasm32-wasip1 the socket comes from WasmEdge's WASI socket extension via
-//! `wasmedge_wasi_socket`; native builds (unit tests) use `std::net`.
+//! WASI uses stdin/stdout only, without socket imports. Native protocol tests
+//! use `std::net` and RLM_BRIDGE_ADDR.
 
 use std::io::{ErrorKind as IoErrorKind, Read, Write};
 use std::sync::Mutex;
@@ -23,25 +23,34 @@ use serde_json::{json, Value};
 use crate::error::Error;
 
 #[cfg(not(target_os = "wasi"))]
-use std::net::TcpStream;
+use std::net::TcpStream as Stream;
 #[cfg(target_os = "wasi")]
-use wasmedge_wasi_socket::TcpStream;
+mod stdio;
+#[cfg(target_os = "wasi")]
+use stdio::Stream;
 
 pub(crate) const PROTOCOL_VERSION: u64 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const READ_CHUNK: usize = 16 * 1024;
+const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 struct Conn {
-    stream: TcpStream,
+    stream: Stream,
     buffer: Vec<u8>,
     next_id: u64,
+    #[cfg(target_os = "wasi")]
+    needs_handshake: bool,
+    prefix: Vec<u8>,
 }
 
 static CONN: Mutex<Option<Conn>> = Mutex::new(None);
 
 /// Whether this cell was started with a host bridge attached.
 pub(crate) fn available() -> bool {
+    #[cfg(target_os = "wasi")]
+    return std::env::var("RLM_BRIDGE_STDIO").is_ok_and(|v| v == "1");
+    #[cfg(not(target_os = "wasi"))]
     std::env::var("RLM_BRIDGE_ADDR").is_ok_and(|v| !v.is_empty())
 }
 
@@ -65,43 +74,93 @@ fn wait_or_timeout(deadline: Instant, doing: &str) -> Result<()> {
 
 impl Conn {
     fn connect() -> Result<Self> {
-        let addr = env_var("RLM_BRIDGE_ADDR")?;
-        let token = env_var("RLM_BRIDGE_TOKEN")?;
-        let cell = env_var("RLM_CELL_ID")?;
-        let stream = TcpStream::connect(&addr)
-            .map_err(|e| Error::bridge(format!("connecting to the host bridge at {addr}: {e}")))?;
-        stream
-            .set_nonblocking(true)
-            .map_err(|e| Error::bridge(format!("configuring the bridge socket: {e}")))?;
+        #[cfg(not(target_os = "wasi"))]
+        let (stream, prefix) = {
+            let addr = env_var("RLM_BRIDGE_ADDR")?;
+            let stream = Stream::connect(&addr).map_err(|e| {
+                Error::bridge(format!("connecting to the host bridge at {addr}: {e}"))
+            })?;
+            stream
+                .set_nonblocking(true)
+                .map_err(|e| Error::bridge(format!("configuring the bridge socket: {e}")))?;
+            (stream, Vec::new())
+        };
+        #[cfg(target_os = "wasi")]
+        let (stream, prefix) = {
+            if env_var("RLM_BRIDGE_STDIO")? != "1" {
+                return Err(Error::bridge("unsupported host bridge transport").into());
+            }
+            let token = env_var("RLM_BRIDGE_TOKEN")?;
+            (Stream, format!("\x1eRLM:{token}:").into_bytes())
+        };
         let mut conn = Conn {
             stream,
             buffer: Vec::new(),
             next_id: 1,
+            prefix,
+            #[cfg(target_os = "wasi")]
+            needs_handshake: false,
         };
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
-        conn.send_frame(
-            &json!({"v": PROTOCOL_VERSION, "kind": "hello", "token": token, "cell": cell}),
-            deadline,
-        )?;
-        let reply = conn.read_frame(deadline)?;
-        if reply.get("kind").and_then(Value::as_str) != Some("hello_ok") {
-            return Err(Error::bridge("host bridge rejected the handshake").into());
-        }
+        conn.handshake()?;
         Ok(conn)
     }
 
+    fn handshake(&mut self) -> Result<()> {
+        let token = env_var("RLM_BRIDGE_TOKEN")?;
+        let cell = env_var("RLM_CELL_ID")?;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        self.send_frame(
+            &json!({"v": PROTOCOL_VERSION, "kind": "hello", "token": token, "cell": cell}),
+            deadline,
+        )?;
+        loop {
+            let reply = self.read_frame(deadline)?;
+            if reply.get("kind").and_then(Value::as_str) == Some("hello_ok") {
+                return Ok(());
+            }
+            // Stdio stays open across transport timeouts. Drain replies to
+            // earlier requests before the new handshake acknowledgement; the
+            // host cancels that generation before acknowledging this one.
+            #[cfg(target_os = "wasi")]
+            if matches!(
+                reply.get("kind").and_then(Value::as_str),
+                Some("res" | "ack")
+            ) {
+                continue;
+            }
+            return Err(Error::bridge("host bridge rejected the handshake").into());
+        }
+    }
+
     fn send_frame(&mut self, frame: &Value, deadline: Instant) -> Result<()> {
-        let mut line = serde_json::to_vec(frame).context("encoding a bridge frame")?;
+        let bytes = serde_json::to_vec(frame).context("encoding a bridge frame")?;
+        if bytes.len() + 1 > MAX_FRAME_BYTES {
+            return Err(Error::bridge("bridge frame exceeds the line-length limit").into());
+        }
+        #[cfg(target_os = "wasi")]
+        std::io::stdout()
+            .flush()
+            .context("flushing stdout before a bridge frame")?;
+        let mut line = self.prefix.clone();
+        line.extend_from_slice(&bytes);
         line.push(b'\n');
         let mut remaining = &line[..];
         while !remaining.is_empty() {
+            if Instant::now() >= deadline {
+                return Err(Error::bridge("timed out writing to the host bridge").into());
+            }
             match self.stream.write(remaining) {
                 Ok(0) => return Err(Error::bridge("bridge connection closed while writing").into()),
                 Ok(n) => remaining = &remaining[n..],
-                Err(e) if e.kind() == IoErrorKind::WouldBlock || e.kind() == IoErrorKind::Interrupted => {
+                Err(e)
+                    if e.kind() == IoErrorKind::WouldBlock
+                        || e.kind() == IoErrorKind::Interrupted =>
+                {
                     wait_or_timeout(deadline, "writing to the host bridge")?;
                 }
-                Err(e) => return Err(Error::bridge(format!("writing to the host bridge: {e}")).into()),
+                Err(e) => {
+                    return Err(Error::bridge(format!("writing to the host bridge: {e}")).into())
+                }
             }
         }
         Ok(())
@@ -109,29 +168,49 @@ impl Conn {
 
     fn read_frame(&mut self, deadline: Instant) -> Result<Value> {
         loop {
+            if Instant::now() >= deadline {
+                return Err(Error::bridge("timed out waiting for a host bridge reply").into());
+            }
             if let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
                 let mut line: Vec<u8> = self.buffer.drain(..=pos).collect();
                 line.pop();
                 if line.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
-                return serde_json::from_slice(&line).context("decoding a bridge frame");
+                let frame: Value =
+                    serde_json::from_slice(&line).context("decoding a bridge frame")?;
+                if frame.get("v").and_then(Value::as_u64) != Some(PROTOCOL_VERSION) {
+                    return Err(Error::bridge("invalid bridge protocol version").into());
+                }
+                return Ok(frame);
             }
             let mut chunk = [0u8; READ_CHUNK];
             match self.stream.read(&mut chunk) {
                 Ok(0) => return Err(Error::bridge("bridge connection closed by the host").into()),
-                Ok(n) => self.buffer.extend_from_slice(&chunk[..n]),
-                Err(e) if e.kind() == IoErrorKind::WouldBlock || e.kind() == IoErrorKind::Interrupted => {
+                Ok(n) => {
+                    if self.buffer.len() + n > MAX_FRAME_BYTES {
+                        return Err(
+                            Error::bridge("bridge reply exceeds the line-length limit").into()
+                        );
+                    }
+                    self.buffer.extend_from_slice(&chunk[..n]);
+                }
+                Err(e)
+                    if e.kind() == IoErrorKind::WouldBlock
+                        || e.kind() == IoErrorKind::Interrupted =>
+                {
                     wait_or_timeout(deadline, "waiting for a host bridge reply")?;
                 }
-                Err(e) => return Err(Error::bridge(format!("reading from the host bridge: {e}")).into()),
+                Err(e) => {
+                    return Err(Error::bridge(format!("reading from the host bridge: {e}")).into())
+                }
             }
         }
     }
 }
 
-/// Run `f` on the live connection, connecting lazily. Transport errors discard
-/// the connection so the next call starts clean; host-reported errors keep it.
+/// Run `f` on the live connection, connecting lazily. Transport errors require
+/// a new handshake (a new socket on native); host-reported errors keep it.
 fn with_conn<T>(f: impl FnOnce(&mut Conn) -> Result<T>) -> Result<T> {
     let mut guard = CONN
         .lock()
@@ -140,13 +219,25 @@ fn with_conn<T>(f: impl FnOnce(&mut Conn) -> Result<T>) -> Result<T> {
         *guard = Some(Conn::connect()?);
     }
     let conn = guard.as_mut().expect("connection was just established");
+    #[cfg(target_os = "wasi")]
+    if conn.needs_handshake {
+        conn.handshake()?;
+        conn.needs_handshake = false;
+    }
     let result = f(conn);
     if let Err(error) = &result {
         let is_host_error = error
             .downcast_ref::<Error>()
             .is_some_and(|e| e.kind == crate::error::ErrorKind::Host);
         if !is_host_error {
-            *guard = None;
+            #[cfg(target_os = "wasi")]
+            {
+                conn.needs_handshake = true;
+            }
+            #[cfg(not(target_os = "wasi"))]
+            {
+                *guard = None;
+            }
         }
     }
     result
@@ -159,11 +250,16 @@ pub(crate) fn request(request_type: &str, payload: Value) -> Result<Value> {
 
 /// Long-running skill tests use the cell budget; ordinary requests keep the
 /// default transport timeout. The host still enforces the cell's deadline.
-pub(crate) fn request_with_timeout(request_type: &str, payload: Value, timeout: Duration) -> Result<Value> {
+pub(crate) fn request_with_timeout(
+    request_type: &str,
+    payload: Value,
+    timeout: Duration,
+) -> Result<Value> {
     with_conn(|conn| {
         let id = conn.next_id;
         conn.next_id += 1;
-        let deadline = Instant::now().checked_add(timeout)
+        let deadline = Instant::now()
+            .checked_add(timeout)
             .ok_or_else(|| Error::bridge("bridge request timeout is too large"))?;
         conn.send_frame(
             &json!({"v": PROTOCOL_VERSION, "kind": "req", "id": id, "type": request_type, "payload": payload}),

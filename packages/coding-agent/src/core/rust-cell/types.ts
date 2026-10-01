@@ -55,7 +55,7 @@ export interface RunnerOptions extends CellResourceLimits {
 	cargoBin: string;
 	/** Total per-cell budget in ms (compile + run). */
 	cellTimeoutMs: number;
-	/** Host bridge; when set, cells get RLM_BRIDGE_* env and rlm host calls work. */
+	/** Host bridge over private process stdio; no guest socket capability. */
 	bridge?: BridgeServer;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
 	cellEnv?: Record<string, string>;

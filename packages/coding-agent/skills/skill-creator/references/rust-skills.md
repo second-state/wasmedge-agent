@@ -98,8 +98,9 @@ mod tests {
 - Compile target is `wasm32-wasip1`, executed by WasmEdge. Cells cannot spawn
   native processes; filesystem access is limited to preopens (`/workspace`,
   `/agent/state`, `/agent/lib`, and `/scratch`). Host APIs
-  (web search, spawn, messaging) go through `rlm`. Network restriction to
-  the bridge is not yet enforced by the runtime.
+  (web search, spawn, messaging) go through `rlm` over private stdio pipes.
+  The runner rejects socket/DNS and plugin imports before executing cells,
+  even if unused; direct guest network calls are unavailable.
 - Available workspace dependencies — declare with `{ workspace = true }`:
   `rlm`, `anyhow`, `regex`, `serde`, `serde_json`, `walkdir`. The dependency
   set is fixed (crates.io additions are not supported in this phase); build
@@ -160,8 +161,9 @@ and host-side manual harness file edits do not pass through this gate. Guest
 harness CRUD requires the host bridge; harness stores are not preopened, and
 writable mount roots must be separate from those stores. Passing tests does
 not establish coverage or task correctness.
-Cargo build scripts/proc macros retain the existing host trust boundary;
-network egress restriction for ordinary cells remains a separate runtime gap.
+Cargo build scripts/proc macros retain the existing host trust boundary.
+Ordinary cells share the test import policy and interpreter requirement but
+have a stdio bridge for registered host capabilities.
 
 ## Verifying a Rust Skill
 
