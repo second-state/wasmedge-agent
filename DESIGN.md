@@ -132,7 +132,7 @@
 
 **D5 實作註記（2026-10-01）**：persisted workspace 已有獨立 Git repo、初始快照與成功 cell 的 commit（含序號及 tool call id）。僅納入 scaffold source/manifests、`agent_lib`、skill 掛載與 `state/`；排除 `target/`、`vendor/`、scratch，外部 skill symlink 只版本化連結。專案目錄與 harness stores 不在此 repo。Git 失敗獨立回報，不重跑已成功的 cell；失敗 cell 不 commit、不回滾 runtime 副作用。
 
-**Scaffold 升級實作註記（2026-10-01）**：`.workspace-version` 已記錄 template content hash、dependency hash、rustc/WasmEdge 版本與 library 預設檔案 hash。Provision 時版本不符，先在旁邊的 workspace 更新 host scaffold，保留 helpers、skills、state、cell source、Git history 與 library overrides；重新掛載 skills 並以 release/offline 編譯既有 cell，通過才切換。失敗保留原 workspace，切換中斷可由 upgrade journal 復原；前提是一個 session workspace 由一個 active runtime 擁有。沒有舊 marker 的 workspace 保守保留全部既有 library source。Marker 隨 child seed 複製並納入 Git；skill manifest 偵測繼續使用 `.skills-hash`。此 gate 只驗證 scaffold 升級的編譯相容性，D19 的強制測試仍屬 Phase 2。
+**Scaffold 升級實作註記（2026-10-01）**：`.workspace-version` 已記錄 template content hash、dependency hash、rustc/WasmEdge 版本與 library 預設檔案 hash。Provision 時版本不符，先在旁邊的 workspace 更新 host scaffold，保留 helpers、skills、state、cell source、Git history 與 library overrides；重新掛載 skills 並以 release/offline 編譯既有 cell，通過才切換。失敗保留原 workspace，切換中斷可由 upgrade journal 復原；前提是一個 session workspace 由一個 active runtime 擁有。沒有舊 marker 的 workspace 保守保留全部既有 library source。Marker 隨 child seed 複製並納入 Git；skill manifest 偵測繼續使用 `.skills-hash`。此 gate 只驗證 scaffold 升級的編譯相容性，D19 的 skill 登錄測試另見 §4.2，並非此 scaffold gate 的一部分。
 
 ### 2.2 RustCellManager（TS API）
 
@@ -514,6 +514,10 @@ emits a diff to the user); write whole files with std::fs when generating them.
 3. 升格為正式 skill：skill-creator 指南教模型把成熟的 helpers 搬出成獨立 skill crate + SKILL.md + `#[cfg(test)]` 測試，host 提供 `skills.package` host request 做 scaffold。
 4. **品質閘（D19 定案：Phase 1 soft、Phase 2 強制）**：Phase 1 僅教義要求（refine prompt 與 skill-creator 指南要求先跑 `cargo test`）；Phase 2 以沙箱內測試（`cargo test --target wasm32-wasip1`、wasmedge 為 test runner）升級為 refine `create_skill` handler 的硬驗證。注意：host 在 native 跑模型寫的 test 等於繞沙箱執行任意代碼——**強制閘只能以沙箱內測試實作**，這是 D19 分期的根本原因。
 
+**D19 部分實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
+
+**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。Guest `rlm::harness` 與直接 harness 檔案寫入仍未強制測試；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
+
 ### 4.3 Harness / refine 修改
 
 - Schema：`reference.type` 接受 `"rust"`；`reference` 欄位 `{type:"rust", use:"agent_lib::skills::x", callable:"run", call_pattern:"agent_lib::skills::x::run(…)?"}`。驗證雙點同步改：`refinement.ts:684-703` 與 guest `rlm::harness`（取代 `harness.py:128-138`）。既有 `"python"` entry 讀取相容（顯示為 legacy、不可新建）。
@@ -676,7 +680,7 @@ wasmedge-agent/
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
-- **沙箱內測試**：`cargo test --target wasm32-wasip1` + wasmedge test runner；並依 D19 升級 refine `create_skill` 為硬驗證（test 綠才准建 harness skill entry）。
+- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest 直接 harness 寫入的強制閘與 `skills.package` scaffold 尚待實作。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。
 
 ---

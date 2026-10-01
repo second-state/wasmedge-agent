@@ -77,16 +77,29 @@ pub fn run(text: &str, top: usize) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+
+    #[test]
+    fn counts_and_breaks_ties_alphabetically() {
+        assert_eq!(run("pear apple pear banana apple", 3), "apple: 2\npear: 2\nbanana: 1");
+        assert_eq!(run("", 3), "");
+        assert_eq!(run("apple", 0), "");
+    }
+}
 ```
 
 ## The Crate Contract
 
 - The `[package] name` must be the skill name with `-` → `_`. The mount
   re-exports the crate under exactly that name.
-- Compile target is `wasm32-wasip1` inside the WasmEdge sandbox: no network,
-  no processes, filesystem limited to the session preopens (`/workspace`,
-  `/state`, `/agent/lib`, `/scratch`). Host capabilities (web search, spawn,
-  messaging) go through the `rlm` crate.
+- Compile target is `wasm32-wasip1`, executed by WasmEdge. Cells cannot spawn
+  native processes; filesystem access is limited to preopens (`/workspace`,
+  `/agent/state`, `/agent/lib`, `/scratch`, and harness stores). Host APIs
+  (web search, spawn, messaging) go through `rlm`. Network restriction to
+  the bridge is not yet enforced by the runtime.
 - Available workspace dependencies — declare with `{ workspace = true }`:
   `rlm`, `anyhow`, `regex`, `serde`, `serde_json`, `walkdir`. The dependency
   set is fixed (crates.io additions are not supported in this phase); build
@@ -108,15 +121,34 @@ let reply = rlm::host_request("websearch.run", serde_json::json!({"query": query
 
 ## Quality Gate
 
-Before installing a skill, prove it compiles and behaves:
+Before registering a Rust skill through `/refine`:
 
-1. Write `#[cfg(test)]` unit tests for the pure logic in `src/lib.rs`.
-2. Mount the skill (start a session or `/reload`) and exercise it from a rust
-   cell — the first cell after a mount compiles the skill; compiler errors
-   surface in the cell result.
-3. A skill that fails to compile is unmounted with a warning diagnostic and
-   its crate is unavailable until fixed; the rest of the workspace keeps
-   working.
+1. Write deterministic `#[cfg(test)]` unit tests in `src/lib.rs` and, if
+   needed, integration tests in `tests/`. Use the standard Rust test harness.
+2. Mount the crate by starting a session or running `/reload`. A crate that
+   fails the mount's compile check is unmounted with a diagnostic; fix it and
+   reload before registration.
+3. `/refine` automatically builds the mounted crate's unit and integration
+   tests with `cargo test --release --offline --target wasm32-wasip1 --no-run
+   --lib --tests`, then executes the WASI test modules in WasmEdge. It accepts
+   create/update only when every module succeeds and at least one non-ignored
+   test passes. Failures are included in the refinement result; a failed update
+   preserves the prior harness entry. SDK `refineHarness` callers must supply
+   a sandboxed skill validator or skill create/update edits are rejected.
+
+Tests run against a disposable copy of the workspace, with only `/scratch`
+preopened. Project files, session state, harness stores, and the host bridge
+are unavailable: test pure logic and use fixtures written under `/scratch`.
+Doctests are excluded. Do not execute model-written tests natively on the host.
+Each crate uses the configured `rustCell.cellTimeoutMs` budget for queueing,
+building, and execution; cancellation prevents applying the proposal.
+
+This checks the source snapshot at registration time. Editing the mounted
+source later does not automatically retest it. Ordinary cell/library edits,
+direct `rlm::harness` writes, and manual harness file edits do not pass through
+this gate. Passing tests does not establish coverage or task correctness.
+Cargo build scripts/proc macros retain the existing host trust boundary;
+network egress restriction remains a separate runtime gap.
 
 ## Verifying a Rust Skill
 

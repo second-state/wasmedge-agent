@@ -113,6 +113,32 @@ export interface RefineOptions {
 	global?: boolean;
 }
 
+export type SkillTestValidator = (reference: Record<string, unknown>, signal?: AbortSignal) => Promise<void>;
+
+/** Results belong to this exact proposal, and are not persisted as permanent
+ * proof: subsequent refinements must test the current skill sources again. */
+export async function testRefinementSkills(
+	proposal: RefinementProposal,
+	validate?: SkillTestValidator,
+	signal?: AbortSignal,
+): Promise<ReadonlyMap<RefinementEdit, string | undefined>> {
+	const results = new Map<RefinementEdit, string | undefined>();
+	for (const edit of proposal.edits) {
+		signal?.throwIfAborted();
+		if (edit.kind !== "skill" || edit.action === "delete" || validateEdit(edit)) continue;
+		try {
+			if (!validate) throw new Error("sandboxed skill tests are unavailable");
+			await validate(edit.reference!, signal);
+			results.set(edit, undefined);
+		} catch (error) {
+			signal?.throwIfAborted();
+			results.set(edit, error instanceof Error ? error.message : String(error));
+		}
+	}
+	signal?.throwIfAborted();
+	return results;
+}
+
 export type AutoRefineReason = "turn_interval" | "compact";
 
 export interface AutoRefineReviewContext {
@@ -141,6 +167,7 @@ Continual harness components:
 - prompt: supplemental prompt notes only. The base system prompt is immutable and MUST NOT be rewritten.
 - memory: durable facts, decisions, failures, preferences, and outcomes.
 - skill: mounted Rust crate skill. Skill create/update edits MUST include a \`reference\` object with \`{"type":"rust"}\`, a \`use\` path (e.g. \`agent_lib::skills::my_skill\`), and a callable or call pattern; they also MUST include an \`arguments\` object describing accepted inputs, required fields, defaults, and constraints. Use \`{}\` for \`arguments\` only when the Rust callable truly needs no external inputs. Include the RLM-native call form \`agent_lib::skills::<crate>::run(...)?\`.
+- Skill create/update edits are accepted only after the mounted crate passes unit and integration tests in WasmEdge. Tests receive only a disposable /scratch directory, with no project/state/harness mounts or bridge. Add deterministic tests to the crate before proposing registration; reload skills after creating a crate. Passing tests does not prove task correctness.
 - subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn from a rust cell with \`let handle = rlm::spawn("sub-task")?;\`; admission returns immediately with \`rlm_child_id\`, \`name\`, \`session_dir\`, and \`model\`, never the child's answer. Results arrive only through explicit agent-message replies or files; children reply with \`rlm::msg::send_to_parent(message)?\`. Use \`rlm::list_subagents()?\` to recover direct child handles and \`rlm::msg::send_to_child(name, message)?\` for follow-ups. Do not invent wrappers like \`run_subagent(...)\`.
 
 Scope and persistence policy:
@@ -721,7 +748,13 @@ function validateEdit(edit: RefinementEdit, computedId?: string): string | undef
 export function applyRefinementProposal(
 	state: HarnessState,
 	proposal: RefinementProposal,
-	options: { id: string; rollbackOf?: string; scope?: HarnessScope; baselineState?: HarnessState },
+	options: {
+		id: string;
+		rollbackOf?: string;
+		scope?: HarnessScope;
+		baselineState?: HarnessState;
+		skillTestResults?: ReadonlyMap<RefinementEdit, string | undefined>;
+	},
 ): RefinementResult {
 	const appliedEdits: AppliedRefinementEdit[] = [];
 	const proposalModifiedKeys = new Set<string>();
@@ -769,6 +802,15 @@ export function applyRefinementProposal(
 		if (edit.action === "update" && !before) {
 			appliedEdits.push({ ...edit, id, applied: false, error: "entry not found" });
 			continue;
+		}
+		if (edit.kind === "skill") {
+			const testError = options.skillTestResults?.has(edit)
+				? options.skillTestResults.get(edit)
+				: "sandboxed skill tests must pass before skill registration";
+			if (testError !== undefined) {
+				appliedEdits.push({ ...edit, id, before, applied: false, error: testError });
+				continue;
+			}
 		}
 
 		const createdAt = before?.created_at ?? now();
@@ -1021,11 +1063,14 @@ export async function refineHarness(
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	validateSkill?: SkillTestValidator,
 ): Promise<RefinementResult> {
 	const plan = await planRefinement(messages, state, history, model, apiKey, options, headers, signal, thinkingLevel);
+	const skillTestResults = await testRefinementSkills(plan.proposal, validateSkill, signal);
 	return applyRefinementProposal(state, plan.proposal, {
 		id: plan.id,
 		rollbackOf: plan.rollbackOf,
 		scope: plan.rollbackScope ?? (options.global ? "global" : "local"),
+		skillTestResults,
 	});
 }
