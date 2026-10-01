@@ -383,6 +383,46 @@ describe("BridgeServer protocol v1", () => {
 		server.beginCell({ cellId: "cell-1", code: "" });
 		expect(() => server.beginCell({ cellId: "cell-2", code: "" })).toThrow(/already active/);
 	});
+
+	it.each(["cell abort", "cell end", "disconnect"])("cancels cooperative work on %s", async (cause) => {
+		let started!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		let stopped!: () => void;
+		const cancelled = new Promise<void>((resolve) => {
+			stopped = resolve;
+		});
+		let handlerSignal: AbortSignal | undefined;
+		const abort = new AbortController();
+		const server = makeServer({
+			handlers: {
+				"harness.skill.test": async (_payload, context) => {
+					handlerSignal = context!.signal;
+					started();
+					await new Promise<void>((resolve) =>
+						context!.signal.addEventListener("abort", () => resolve(), { once: true }),
+					);
+					stopped();
+					context!.signal.throwIfAborted();
+					return { passed: true };
+				},
+			},
+		});
+		await server.start();
+		server.beginCell({ cellId: "cell-1", code: "", signal: abort.signal });
+		const client = await handshake(server);
+		clients.push(client);
+		client.sendFrame({ v: 1, kind: "req", id: 1, type: "harness.skill.test" });
+		await entered;
+		if (cause === "cell abort") abort.abort(new Error("user cancelled"));
+		else if (cause === "cell end") await server.endCell();
+		else client.destroy();
+		await cancelled;
+		expect(handlerSignal?.aborted).toBe(true);
+		if (cause === "cell abort")
+			expect(await client.nextFrame()).toMatchObject({ status: "error", error: "user cancelled" });
+	});
 });
 
 /** Minimal PNG writer (RGBA8, no interlace) so the thumbnail test has a real

@@ -121,7 +121,7 @@ let reply = rlm::host_request("websearch.run", serde_json::json!({"query": query
 
 ## Quality Gate
 
-Before registering a Rust skill through `/refine`:
+Before registering a Rust skill through `/refine` or `rlm::harness`:
 
 1. Write deterministic `#[cfg(test)]` unit tests in `src/lib.rs` and, if
    needed, integration tests in `tests/`. Use the standard Rust test harness.
@@ -133,20 +133,25 @@ Before registering a Rust skill through `/refine`:
    --lib --tests`, then executes the WASI test modules in WasmEdge. It accepts
    create/update only when every module succeeds and at least one non-ignored
    test passes. Failures are included in the refinement result; a failed update
-   preserves the prior harness entry. SDK `refineHarness` callers must supply
-   a sandboxed skill validator or skill create/update edits are rejected.
+   preserves the prior harness entry. Guest `create_skill`, `update_skill`,
+   and `update("skill", ...)` call the same test runner through the bridge and
+   propagate failures without saving the entry. SDK `refineHarness` callers
+   must supply a sandboxed skill validator or skill create/update edits are rejected.
 
 Tests run against a disposable copy of the workspace, with only `/scratch`
 preopened. Project files, session state, harness stores, and the host bridge
 are unavailable: test pure logic and use fixtures written under `/scratch`.
 Doctests are excluded. Do not execute model-written tests natively on the host.
 Each crate uses the configured `rustCell.cellTimeoutMs` budget for queueing,
-building, and execution; cancellation prevents applying the proposal.
+building, and execution; cancellation prevents applying the proposal. Guest
+requests additionally share the calling cell's remaining budget, and closing
+the bridge or ending the cell cancels its in-flight test.
 
 This checks the source snapshot at registration time. Editing the mounted
-source later does not automatically retest it. Ordinary cell/library edits,
-direct `rlm::harness` writes, and manual harness file edits do not pass through
-this gate. Passing tests does not establish coverage or task correctness.
+source later does not automatically retest it. Ordinary cell/library edits
+and manual harness file edits do not pass through this gate. The harness
+preopens remain writable, so raw file writes can bypass the API gate. Passing
+tests does not establish coverage or task correctness.
 Cargo build scripts/proc macros retain the existing host trust boundary;
 network egress restriction remains a separate runtime gap.
 

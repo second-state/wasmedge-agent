@@ -43,6 +43,8 @@ export interface BridgeCellScope {
 	cellId: string;
 	/** Cell source, injected as `cellSourceCode` into handler payloads. */
 	code: string;
+	/** The runner's shared deadline and user cancellation signal. */
+	signal?: AbortSignal;
 	sinks?: BridgeEmitSinks;
 }
 
@@ -95,6 +97,7 @@ export class BridgeServer {
 	private port?: number;
 	private starting?: Promise<void>;
 	private scope?: BridgeCellScope;
+	private scopeAbort?: AbortController;
 	private readonly sockets = new Set<Socket>();
 	private readonly inFlight = new Set<Promise<void>>();
 
@@ -157,18 +160,20 @@ export class BridgeServer {
 			throw new Error(`bridge cell scope already active (${this.scope.cellId})`);
 		}
 		this.scope = scope;
+		this.scopeAbort = new AbortController();
 	}
 
-	/** Leave the cell scope: wait briefly for in-flight handlers (their side
-	 * effects should land even though the reply has no reader anymore), then
-	 * drop all guest connections. */
+	/** Cancel cooperative handlers, allow other in-flight effects to settle
+	 * briefly, then drop the cell's guest connections. */
 	async endCell(): Promise<void> {
+		this.scopeAbort?.abort(new Error("bridge cell ended"));
 		await this.waitForInFlight(IN_FLIGHT_SETTLE_TIMEOUT_MS);
 		for (const socket of this.sockets) {
 			socket.destroy();
 		}
 		this.sockets.clear();
 		this.scope = undefined;
+		this.scopeAbort = undefined;
 	}
 
 	async dispose(): Promise<void> {
@@ -182,6 +187,7 @@ export class BridgeServer {
 	}
 
 	private acceptConnection(socket: Socket): void {
+		const connectionAbort = new AbortController();
 		this.sockets.add(socket);
 		socket.setNoDelay(true);
 		let buffer = "";
@@ -199,7 +205,7 @@ export class BridgeServer {
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
 				if (line.trim()) {
-					authed = this.handleLine(socket, line, authed);
+					authed = this.handleLine(socket, line, authed, connectionAbort.signal);
 					if (socket.destroyed) return;
 				}
 				newline = buffer.indexOf("\n");
@@ -209,12 +215,13 @@ export class BridgeServer {
 			// Guest side went away mid-write; close handling is enough.
 		});
 		socket.on("close", () => {
+			connectionAbort.abort(new Error("bridge connection closed"));
 			this.sockets.delete(socket);
 		});
 	}
 
 	/** Returns the connection's new authed state. */
-	private handleLine(socket: Socket, line: string, authed: boolean): boolean {
+	private handleLine(socket: Socket, line: string, authed: boolean, signal: AbortSignal): boolean {
 		let message: unknown;
 		try {
 			message = JSON.parse(line);
@@ -246,7 +253,7 @@ export class BridgeServer {
 
 		switch (message.kind) {
 			case "req":
-				this.handleRequest(socket, message);
+				this.handleRequest(socket, message, signal);
 				break;
 			case "emit":
 				this.handleEmit(socket, message);
@@ -258,7 +265,7 @@ export class BridgeServer {
 		return true;
 	}
 
-	private handleRequest(socket: Socket, message: Record<string, unknown>): void {
+	private handleRequest(socket: Socket, message: Record<string, unknown>, signal: AbortSignal): void {
 		const id = message.id;
 		if (typeof id !== "number") {
 			this.diagnostic("bridge connection dropped: req frame without a numeric id");
@@ -267,7 +274,7 @@ export class BridgeServer {
 		}
 		const task = (async () => {
 			try {
-				const payload = await this.dispatchRequest(message);
+				const payload = await this.dispatchRequest(message, signal);
 				this.send(socket, {
 					v: BRIDGE_PROTOCOL_VERSION,
 					kind: "res",
@@ -291,12 +298,15 @@ export class BridgeServer {
 		});
 	}
 
-	private async dispatchRequest(message: Record<string, unknown>): Promise<Record<string, unknown>> {
+	private async dispatchRequest(
+		message: Record<string, unknown>,
+		connectionSignal: AbortSignal,
+	): Promise<Record<string, unknown>> {
 		if (typeof message.type !== "string" || message.type.length === 0) {
 			throw new Error("host request payload must have a string type");
 		}
 		const scope = this.scope;
-		if (!scope) {
+		if (!scope || !this.scopeAbort) {
 			throw new Error("no cell is active on this bridge");
 		}
 		const handler = this.handlers[message.type];
@@ -304,7 +314,13 @@ export class BridgeServer {
 			throw new Error(`host request type "${message.type}" is not available in this session`);
 		}
 		const payload = isRecord(message.payload) ? message.payload : {};
-		const result = await handler({ ...payload, cellSourceCode: scope.code });
+		const signal = AbortSignal.any([
+			this.scopeAbort.signal,
+			connectionSignal,
+			...(scope.signal ? [scope.signal] : []),
+		]);
+		signal.throwIfAborted();
+		const result = await handler({ ...payload, cellSourceCode: scope.code }, { signal });
 		if (message.type === "agent_message.send") {
 			this.collectSentAgentMessages(scope, result, payload);
 		}

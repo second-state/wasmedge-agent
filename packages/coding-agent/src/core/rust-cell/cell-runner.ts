@@ -164,6 +164,7 @@ export class CellRunner {
 			bridge.beginCell({
 				cellId,
 				code: input.code,
+				signal,
 				sinks: {
 					onDiff: (diff) => diffs.push(diff),
 					onAttachment: (attachment) => attachments.push(attachment),
@@ -173,6 +174,7 @@ export class CellRunner {
 			cellEnv.RLM_BRIDGE_ADDR = bridge.address;
 			cellEnv.RLM_BRIDGE_TOKEN = bridge.token;
 			cellEnv.RLM_CELL_ID = cellId;
+			cellEnv.RLM_CELL_TIMEOUT_MS = String(this.opts.cellTimeoutMs);
 		}
 
 		const runStarted = Date.now();
@@ -185,8 +187,8 @@ export class CellRunner {
 				onChunk: per.onChunk,
 			});
 		} finally {
-			// Waits briefly for in-flight handlers so their side effects (and
-			// receipts) land in this result, then drops the cell's connections.
+			// Cancels cooperative handlers, waits briefly for pending receipts,
+			// then drops the cell's connections.
 			if (bridge) await bridge.endCell();
 		}
 		const runMs = Date.now() - runStarted;

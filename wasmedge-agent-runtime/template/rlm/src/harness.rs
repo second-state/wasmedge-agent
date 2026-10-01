@@ -4,10 +4,12 @@
 //! host `/refine` command rewrites the same files, so every operation first
 //! re-syncs when the on-disk mtime moved (out-of-process write detection —
 //! without it a stale in-cell save would clobber host edits).
+//! Skill creates/updates additionally require a successful sandboxed test
+//! request to the host before this guest writes the entry.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -27,7 +29,7 @@ fn state_err(message: impl Into<String>) -> anyhow::Error {
 
 /// One reusable prompt note, memory, skill, or subagent record. Field names
 /// match the host `harness_state.json` schema exactly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
     pub kind: String,
@@ -135,6 +137,25 @@ fn slug(raw: &str, fallback: &str) -> String {
         .join("_");
     let base = if joined.is_empty() { fallback.to_string() } else { joined };
     base.chars().take(80).collect()
+}
+
+fn test_skill(reference: &Value) -> Result<()> {
+    validate_rust_skill_reference(reference)?;
+    let timeout = std::env::var("RLM_CELL_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(30));
+    let reply = crate::bridge::request_with_timeout(
+        "harness.skill.test",
+        json!({"reference": reference}),
+        timeout,
+    )?;
+    if reply.get("passed").and_then(Value::as_bool) != Some(true) {
+        return Err(state_err("host did not confirm sandboxed skill tests passed"));
+    }
+    Ok(())
 }
 
 /// ISO-8601 UTC timestamp without a chrono dependency (civil-from-days,
@@ -341,14 +362,31 @@ impl Harness {
         if self.kind_entries(kind)?.contains_key(&id) {
             return Err(state_err(format!("{kind} entry {id:?} already exists")));
         }
+        if kind == "skill" {
+            let tested = test_skill(fields.reference.as_ref().ok_or_else(|| state_err("skill requires a rust reference"))?);
+            // Tests yield to the host. Reload unconditionally, even on a
+            // filesystem whose mtime resolution hides a concurrent write.
+            self.load();
+            tested?;
+            if self.kind_entries(kind)?.contains_key(&id) {
+                return Err(state_err(format!("{kind} entry {id:?} already exists")));
+            }
+        }
         self.upsert(kind, &id, title, content, fields)
     }
 
     fn update_entry(&mut self, kind: &str, id: &str, title: &str, content: &str, fields: UpsertFields) -> Result<Entry> {
         self.sync_from_disk();
         let id = self.strip_scope_prefix(id)?.to_string();
-        if !self.kind_entries(kind)?.contains_key(&id) {
-            return Err(state_err(format!("{kind} entry {id:?} does not exist")));
+        let previous = self.kind_entries(kind)?.get(&id).cloned()
+            .ok_or_else(|| state_err(format!("{kind} entry {id:?} does not exist")))?;
+        if kind == "skill" {
+            let tested = test_skill(fields.reference.as_ref().unwrap_or(&previous.reference));
+            self.load();
+            tested?;
+            if self.kind_entries(kind)?.get(&id) != Some(&previous) {
+                return Err(state_err(format!("skill entry {id:?} changed while tests ran; retry the update")));
+            }
         }
         self.upsert(kind, &id, title, content, fields)
     }
@@ -400,9 +438,9 @@ impl Harness {
 
     /// Create a skill entry. `reference` must be a rust reference
     /// (`{"type":"rust","use":"agent_lib::skills::x","call_pattern":"…"}`);
-    /// `arguments` documents accepted inputs.
+    /// `arguments` documents accepted inputs. Requires passing sandboxed tests
+    /// through the host bridge; no entry is written on failure.
     pub fn create_skill(&mut self, title: &str, content: &str, reference: Value, arguments: Value) -> Result<Entry> {
-        validate_rust_skill_reference(&reference)?;
         self.create(
             "skill",
             title,
@@ -421,15 +459,13 @@ impl Harness {
     }
 
     /// Update an existing entry's title and content (other fields preserved).
+    /// Skill updates retest the stored reference through the host bridge.
     pub fn update(&mut self, kind: &str, id: &str, title: &str, content: &str) -> Result<Entry> {
-        if kind == "skill" {
-            // A skill's contract updates through update_skill so the reference
-            // stays validated; plain updates keep the stored reference.
-        }
         self.update_entry(kind, id, title, content, UpsertFields::default())
     }
 
-    /// Update a skill entry including its (validated) reference/arguments.
+    /// Update a skill entry including its reference/arguments, after sandboxed
+    /// tests of the new reference pass through the host bridge.
     pub fn update_skill(
         &mut self,
         id: &str,
@@ -438,7 +474,6 @@ impl Harness {
         reference: Value,
         arguments: Value,
     ) -> Result<Entry> {
-        validate_rust_skill_reference(&reference)?;
         self.update_entry(
             "skill",
             id,
@@ -569,15 +604,10 @@ mod tests {
             .unwrap_err();
         assert!(format!("{err:#}").contains("callable or call_pattern"));
 
-        let entry = harness
-            .create_skill(
-                "Fetcher",
-                "use it",
-                json!({"type": "rust", "use": "agent_lib::skills::fetcher", "call_pattern": "agent_lib::skills::fetcher::run(url)?"}),
-                json!({"url": "required"}),
-            )
-            .unwrap();
-        assert_eq!(entry.reference["type"], "rust");
+        validate_rust_skill_reference(&json!({
+            "type": "rust", "use": "agent_lib::skills::fetcher",
+            "call_pattern": "agent_lib::skills::fetcher::run(url)?"
+        })).unwrap();
     }
 
     #[test]
