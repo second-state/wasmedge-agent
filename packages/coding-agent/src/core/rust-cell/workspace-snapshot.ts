@@ -16,6 +16,7 @@ import type { RustSkillMount } from "./workspace.js";
 export const WORKSPACE_SEED_DIR = ".rust-workspace-seed";
 const INHERITED_MARKER = ".inherited-workspace";
 const SNAPSHOT_PATHS = [
+	".workspace-version",
 	".cargo",
 	"Cargo.toml",
 	"Cargo.lock",

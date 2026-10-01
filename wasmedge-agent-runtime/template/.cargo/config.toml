@@ -1,5 +1,7 @@
 [build]
 target = "wasm32-wasip1"
+# Keep the cache copied and validated with each workspace self-contained.
+build-dir = "target"
 
 [source.crates-io]
 replace-with = "vendored-sources"

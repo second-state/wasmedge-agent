@@ -7,6 +7,7 @@ const TRACKED_PATHS = [
 	".cargo/config.toml",
 	".skills-hash",
 	".inherited-workspace",
+	".workspace-version",
 	"Cargo.toml",
 	"Cargo.lock",
 	"agent_lib/Cargo.toml",
