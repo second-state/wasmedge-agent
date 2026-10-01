@@ -155,6 +155,21 @@ When a provider requests a retry delay longer than `retry.provider.maxRetryDelay
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
+| `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
+| `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
+
+Gas and memory limits apply to cells and each sandboxed skill test module. For example,
+`"rustCell": { "cellGasLimit": 100000000, "cellMemoryPageLimit": 4096 }`
+sets a gas budget and a 256 MiB linear-memory ceiling. Omit a limit or set it to
+`null` to retain WasmEdge's default; invalid values reject runtime setup instead
+of silently disabling the limit. Restart the session or use `/reload` after edits.
+
+These are per-execution limits, not a shared budget across cells, test modules,
+or subagents. Memory pages do not bound total process RSS, compiler memory, or
+host handlers; the host `bash` tool is outside both limits. Gas exhaustion returns a runtime error; a denied `memory.grow`
+can be handled by the guest, while a small cap can cause initialization or
+allocation failure. The wall-time budget remains active, including time
+spent waiting for host calls. The gas range also avoids truncation in WasmEdge 0.14.1.
 
 Toolchain locations are environment variables, not settings: `WASMEDGE_AGENT_CARGO`, `WASMEDGE_AGENT_WASMEDGE`, `WASMEDGE_AGENT_TEMPLATE_DIR`, `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`.
 

@@ -5,7 +5,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
-import type { CellInput, CellResult } from "../rust-cell/index.js";
+import type { CellInput, CellResourceLimits, CellResult } from "../rust-cell/index.js";
 import { composeToolText, RustCellProvisioner } from "../rust-cell/index.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
@@ -36,7 +36,7 @@ const rustSchema = Type.Object({
 export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
-export interface RustToolOptions {
+export interface RustToolOptions extends CellResourceLimits {
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
 	workspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
@@ -63,6 +63,8 @@ export function createRustToolDefinition(
 			cwd,
 			workspaceDir: options?.workspaceDir,
 			cellTimeoutMs: options?.cellTimeoutMs,
+			cellGasLimit: options?.cellGasLimit,
+			cellMemoryPageLimit: options?.cellMemoryPageLimit,
 		});
 
 	return {

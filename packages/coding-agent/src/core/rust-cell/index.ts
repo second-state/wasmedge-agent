@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
+import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
 import { testRustSkill } from "./skill-tests.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
 import {
@@ -30,6 +31,7 @@ export {
 	type BridgeServerOptions,
 } from "./bridge-server.js";
 export { CellRunner, composeToolText } from "./cell-runner.js";
+export type { CellResourceLimits } from "./resource-limits.js";
 export {
 	ensureTemplateReady,
 	isTemplateVendored,
@@ -59,7 +61,7 @@ export {
 	syncRustSkills,
 } from "./workspace.js";
 
-export interface RustCellProvisionerOptions {
+export interface RustCellProvisionerOptions extends CellResourceLimits {
 	/** Project directory mounted at /workspace. */
 	cwd: string;
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
@@ -96,7 +98,8 @@ export class RustCellProvisioner {
 	private bridgeServer: BridgeServer | undefined;
 
 	constructor(options: RustCellProvisionerOptions) {
-		this.options = options;
+		validateCellResourceLimits(options);
+		this.options = { ...options };
 	}
 
 	get hasRunner(): boolean {
@@ -123,6 +126,8 @@ export class RustCellProvisioner {
 			cargoBin: this.toolchainInfo!.cargoBin,
 			wasmedgeBin: this.toolchainInfo!.wasmedgeBin,
 			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+			cellGasLimit: this.options.cellGasLimit,
+			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
 			signal,
 		});
 	}
@@ -195,6 +200,8 @@ export class RustCellProvisioner {
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			cargoBin: this.toolchainInfo.cargoBin,
 			cellTimeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+			cellGasLimit: this.options.cellGasLimit,
+			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
 			bridge: this.bridgeServer,
 			cellEnv: this.options.cellEnv,
 			harnessDir: this.options.harnessDir,

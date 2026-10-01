@@ -676,6 +676,8 @@ wasmedge-agent/
 - 新能力：gas metering（statistics cost limit，`cellGasLimit` 設定）、memory page limit、`WasmEdge_Async*` cancel（interrupt 不再 SIGKILL、可拿部分輸出）、**deny-by-default 網路成為運行時強制**（guest 無 socket 能力，一切 I/O 過 host module）。
 - 部署：runner 隨 npm 包分發 prebuilt binaries（對映上游 build-binaries.yml 機制）。
 
+**資源上限提前落實於 T1（2026-10-01）**：stock WasmEdge CLI 已提供 `--gas-limit` 與 `--memory-page-limit`，因此不用等待 T2。`rustCell.cellGasLimit`（1–4294967295）及 `cellMemoryPageLimit`（1–65536，每頁 64 KiB）現在由 session、獨立 SDK tool、runner 與 sandboxed skill tests 共用；每個 cell／test module 各有獨立上限。預設省略／null 保留 runtime 預設，無效值拒絕啟動 runtime，不靜默降級；gas 上限刻意限於 uint32 範圍，避免 WasmEdge 0.14.1 CLI 的窄化轉型。Gas 耗盡是 runtime error，memory.grow 超限回失敗值（guest 可處理），過小的 memory cap 也可能導致初始化或配置失敗。Memory cap 是每個 linear memory 的頁數，不是 RSS／compiler／host handler／所有 children 的總額；timeout 照常執行。T2 host functions、runtime 網路限制與 Async cancel 仍未完成。
+
 ### 8.2 其他
 
 - **Curated deps.add（D15 後續）**：已驗證 wasm32-wasip1 相容的白名單（估 30–80 個常用 crate）；`rlm::deps::add` 限白名單內，host 抓取 → re-vendor → 改 Cargo.toml → commit。
@@ -721,7 +723,8 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
   "cellTimeoutMs": 120000,
   "workspaceWritePolicy": "rw",      // "ro" 於 Phase 2
   "preludeExtra": [],                 // 追加 crate（仍過 wasm 相容檢查）
-  "cellGasLimit": null                // Phase 2（T2）
+  "cellGasLimit": null,               // T1 已支援，預設不另設上限
+  "cellMemoryPageLimit": null         // 每個 linear memory 的 64 KiB 頁數
 }
 ```
 

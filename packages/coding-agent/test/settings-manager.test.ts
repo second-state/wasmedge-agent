@@ -409,6 +409,41 @@ describe("SettingsManager", () => {
 	});
 
 	describe("rustCell", () => {
+		it("merges resource limits and supports an explicit null override", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ rustCell: { cellGasLimit: 500_000, cellMemoryPageLimit: 64 } }),
+			);
+			writeFileSync(
+				join(projectDir, ".wasmedge-agent", "settings.json"),
+				JSON.stringify({ rustCell: { cellGasLimit: null } }),
+			);
+			expect(SettingsManager.create(projectDir, agentDir).getRustCellResourceLimits()).toEqual({
+				cellGasLimit: null,
+				cellMemoryPageLimit: 64,
+			});
+			expect(SettingsManager.inMemory({}).getRustCellResourceLimits()).toEqual({
+				cellGasLimit: undefined,
+				cellMemoryPageLimit: undefined,
+			});
+		});
+
+		it.each([
+			["cellGasLimit", "100"],
+			["cellGasLimit", 0],
+			["cellGasLimit", -1],
+			["cellGasLimit", 1.5],
+			["cellGasLimit", 0x1_0000_0000],
+			["cellMemoryPageLimit", false],
+			["cellMemoryPageLimit", 65_537],
+			["cellMemoryPageLimit", 0],
+		])("rejects invalid %s=%s instead of disabling the limit", (name, value) => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ rustCell: { [name]: value } }));
+			expect(() => SettingsManager.create(projectDir, agentDir).getRustCellResourceLimits()).toThrow(
+				`rustCell.${name} must be an integer`,
+			);
+		});
+
 		it("loads cellTimeoutMs and floors fractional values", () => {
 			expect(SettingsManager.inMemory({ rustCell: { cellTimeoutMs: 300_000 } }).getRustCellTimeoutMs()).toBe(
 				300_000,
