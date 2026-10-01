@@ -56,6 +56,12 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		const mod = join(ws, "agent_lib", "src", "helpers", "mod.rs");
 		writeFileSync(main, "original main");
 		writeFileSync(mod, "original helpers");
+		const target = join(ws, "target/wasm32-wasip1/release");
+		mkdirSync(target, { recursive: true });
+		writeFileSync(
+			join(target, "cell.wasm"),
+			Buffer.from("0061736d0100000001040160000003020100070a01065f737461727400000a040102000b", "hex"),
+		);
 		const cargoBin = join(ws, "cargo");
 		const wasmedgeBin = join(ws, "wasmedge");
 		writeFileSync(cargoBin, STUB, { mode: 0o755 });
@@ -83,9 +89,20 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		expect((await f.runner.execute({ code: "second cell" })).status).toBe("ok");
 		const calls = f.invocations();
 		expect(calls.map((call) => call.phase)).toEqual(["build", "probe", "run", "build", "run"]);
+		for (const call of calls.filter((call) => call.phase === "run"))
+			expect(call.args).toContain("--force-interpreter");
 		const probe = calls[1];
 		expect(probe.args).toContain(`/agent/lib:${join(f.ws, "agent_lib")}:readonly`);
 		expect(existsSync(probe.args.at(-1)!)).toBe(false);
+	});
+
+	it("rejects uninspectable artifacts before probing or executing", async () => {
+		const f = fixture();
+		writeFileSync(join(f.ws, "target/wasm32-wasip1/release/cell.wasm"), "invalid Wasm");
+		const result = await f.runner.execute({ code: "built source" });
+		expect(result.status).toBe("error");
+		expect(result.stderr).toContain("cannot inspect cell module");
+		expect(f.invocations().map((call) => call.phase)).toEqual(["build"]);
 	});
 
 	it("snapshots successful cells only and reports a commit failure without repeating execution", async () => {

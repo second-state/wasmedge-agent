@@ -1,19 +1,22 @@
-/** Host bridge protocol v1 (DESIGN.md §2.7): a loopback TCP listener speaking
- * newline-delimited JSON with a per-session bearer token. Guest cells connect
- * via wasmedge's WASI socket extension and send typed host requests (`req`,
+/** Host bridge protocol v1 (DESIGN.md §2.7): newline-delimited JSON with a
+ * per-session bearer token. Guest cells use process stdio; the optional TCP
+ * listener remains available to native clients. Both send host requests (`req`,
  * answered from the HostRequestHandlers registry) and rich-output events
  * (`emit`, acked for backpressure). One cell is in scope at a time — cells are
  * serialized — and its source code is injected into every handler payload for
  * subagent spawn attribution, mirroring the kernel-era handleHostRequest. */
 
 import { randomBytes } from "node:crypto";
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer, type Server } from "node:net";
+import type { Duplex } from "node:stream";
+import { resizeImage } from "../../utils/image-resize.js";
 import type {
 	CellAttachment,
 	CellDiffDisplay,
 	CellSentAgentMessage,
 	HostRequestHandlers,
 } from "../host-bridge/types.js";
+import { MAX_BRIDGE_FRAME_BYTES } from "./stdio-bridge.js";
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
@@ -23,7 +26,13 @@ const IN_FLIGHT_SETTLE_TIMEOUT_MS = 5000;
 
 /** Frame guard: attachments are base64 ≤ 28 MiB on the wire, so any
  * well-formed line fits. */
-const MAX_LINE_BYTES = 32 * 1024 * 1024;
+const MAX_LINE_BYTES = MAX_BRIDGE_FRAME_BYTES;
+
+interface ConnectionState {
+	authed: boolean;
+	abort: AbortController;
+	canReconnect: boolean;
+}
 
 /** Hard cap on attachment payloads (base64 chars), per DESIGN.md §2.9. */
 /** Wire cap for attachment payloads; the host thumbnails before sinking. */
@@ -98,7 +107,7 @@ export class BridgeServer {
 	private starting?: Promise<void>;
 	private scope?: BridgeCellScope;
 	private scopeAbort?: AbortController;
-	private readonly sockets = new Set<Socket>();
+	private readonly sockets = new Set<Duplex>();
 	private readonly inFlight = new Set<Promise<void>>();
 
 	constructor(options: BridgeServerOptions) {
@@ -128,7 +137,10 @@ export class BridgeServer {
 		if (this.port !== undefined) return Promise.resolve();
 		if (this.starting) return this.starting;
 		this.starting = new Promise<void>((resolve, reject) => {
-			const server = createServer((socket) => this.acceptConnection(socket));
+			const server = createServer((socket) => {
+				socket.setNoDelay(true);
+				this.acceptConnection(socket);
+			});
 			server.on("error", (error) => {
 				if (this.port === undefined) {
 					this.starting = undefined;
@@ -186,12 +198,16 @@ export class BridgeServer {
 		}
 	}
 
-	private acceptConnection(socket: Socket): void {
-		const connectionAbort = new AbortController();
+	/** Attach the current cell's private process pipes without opening a port. */
+	attachStdio(connection: Duplex): void {
+		if (!this.scope) throw new Error("no cell is active on this bridge");
+		this.acceptConnection(connection, true);
+	}
+
+	private acceptConnection(socket: Duplex, canReconnect = false): void {
+		const state: ConnectionState = { authed: false, abort: new AbortController(), canReconnect };
 		this.sockets.add(socket);
-		socket.setNoDelay(true);
 		let buffer = "";
-		let authed = false;
 
 		socket.on("data", (data: Buffer) => {
 			buffer += data.toString("utf-8");
@@ -205,7 +221,7 @@ export class BridgeServer {
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
 				if (line.trim()) {
-					authed = this.handleLine(socket, line, authed, connectionAbort.signal);
+					this.handleLine(socket, line, state);
 					if (socket.destroyed) return;
 				}
 				newline = buffer.indexOf("\n");
@@ -215,28 +231,27 @@ export class BridgeServer {
 			// Guest side went away mid-write; close handling is enough.
 		});
 		socket.on("close", () => {
-			connectionAbort.abort(new Error("bridge connection closed"));
+			state.abort.abort(new Error("bridge connection closed"));
 			this.sockets.delete(socket);
 		});
 	}
 
-	/** Returns the connection's new authed state. */
-	private handleLine(socket: Socket, line: string, authed: boolean, signal: AbortSignal): boolean {
+	private handleLine(socket: Duplex, line: string, state: ConnectionState): void {
 		let message: unknown;
 		try {
 			message = JSON.parse(line);
 		} catch {
 			this.diagnostic("bridge connection dropped: malformed JSON frame");
 			socket.destroy();
-			return authed;
+			return;
 		}
 		if (!isRecord(message) || message.v !== BRIDGE_PROTOCOL_VERSION || typeof message.kind !== "string") {
 			this.diagnostic("bridge connection dropped: invalid frame envelope");
 			socket.destroy();
-			return authed;
+			return;
 		}
 
-		if (!authed) {
+		if (!state.authed || (state.canReconnect && message.kind === "hello")) {
 			if (
 				message.kind !== "hello" ||
 				message.token !== this.bearerToken ||
@@ -245,27 +260,31 @@ export class BridgeServer {
 			) {
 				this.diagnostic("bridge connection dropped: handshake rejected");
 				socket.destroy();
-				return false;
+				return;
 			}
+			if (state.authed) {
+				state.abort.abort(new Error("bridge connection restarted"));
+				state.abort = new AbortController();
+			}
+			state.authed = true;
 			this.send(socket, { v: BRIDGE_PROTOCOL_VERSION, kind: "hello_ok" });
-			return true;
+			return;
 		}
 
 		switch (message.kind) {
 			case "req":
-				this.handleRequest(socket, message, signal);
+				this.handleRequest(socket, message, state.abort.signal);
 				break;
 			case "emit":
-				this.handleEmit(socket, message);
+				this.handleEmit(socket, message, state.abort.signal);
 				break;
 			default:
 				this.diagnostic(`bridge connection dropped: unsupported frame kind "${message.kind}"`);
 				socket.destroy();
 		}
-		return true;
 	}
 
-	private handleRequest(socket: Socket, message: Record<string, unknown>, signal: AbortSignal): void {
+	private handleRequest(socket: Duplex, message: Record<string, unknown>, signal: AbortSignal): void {
 		const id = message.id;
 		if (typeof id !== "number") {
 			this.diagnostic("bridge connection dropped: req frame without a numeric id");
@@ -275,6 +294,7 @@ export class BridgeServer {
 		const task = (async () => {
 			try {
 				const payload = await this.dispatchRequest(message, signal);
+				if (signal.aborted) return;
 				this.send(socket, {
 					v: BRIDGE_PROTOCOL_VERSION,
 					kind: "res",
@@ -283,6 +303,7 @@ export class BridgeServer {
 					payload,
 				});
 			} catch (error) {
+				if (signal.aborted) return;
 				this.send(socket, {
 					v: BRIDGE_PROTOCOL_VERSION,
 					kind: "res",
@@ -321,6 +342,7 @@ export class BridgeServer {
 		]);
 		signal.throwIfAborted();
 		const result = await handler({ ...payload, cellSourceCode: scope.code }, { signal });
+		signal.throwIfAborted();
 		if (message.type === "agent_message.send") {
 			this.collectSentAgentMessages(scope, result, payload);
 		}
@@ -351,7 +373,13 @@ export class BridgeServer {
 		}
 	}
 
-	private handleEmit(socket: Socket, message: Record<string, unknown>): void {
+	private handleEmit(socket: Duplex, message: Record<string, unknown>, signal: AbortSignal): void {
+		signal = AbortSignal.any([
+			signal,
+			...(this.scopeAbort ? [this.scopeAbort.signal] : []),
+			...(this.scope?.signal ? [this.scope.signal] : []),
+		]);
+		if (signal.aborted) return;
 		const id = message.id;
 		if (typeof id !== "number") {
 			this.diagnostic("bridge connection dropped: emit frame without a numeric id");
@@ -372,7 +400,7 @@ export class BridgeServer {
 			case "display.attachment": {
 				// Async: thumbnail before sinking; the ack (with an optional error)
 				// goes out only after processing, which also keeps backpressure.
-				void this.processAttachment(socket, id, payload);
+				void this.processAttachment(socket, id, payload, signal);
 				return;
 			}
 			default:
@@ -385,8 +413,15 @@ export class BridgeServer {
 	/** Validate, thumbnail (≤1200px / ≤350K base64 via the host photon
 	 * pipeline), sink, then ack — with an error field when the attachment
 	 * cannot enter context, so the cell sees the failure. */
-	private async processAttachment(socket: Socket, id: number, payload: Record<string, unknown>): Promise<void> {
+	private async processAttachment(
+		socket: Duplex,
+		id: number,
+		payload: Record<string, unknown>,
+		signal: AbortSignal,
+	): Promise<void> {
+		const scope = this.scope;
 		const ack = (error?: string) => {
+			if (signal.aborted) return;
 			if (error) this.diagnostic(`bridge emit display.attachment rejected: ${error}`);
 			this.send(socket, {
 				v: BRIDGE_PROTOCOL_VERSION,
@@ -410,7 +445,6 @@ export class BridgeServer {
 			// SVG passes through untouched (vector, no photon decode); everything
 			// else goes through the resize pipeline for dimension/size budgeting.
 			if (mimeType !== "image/svg+xml") {
-				const { resizeImage } = await import("../../utils/image-resize.js");
 				const resized = await resizeImage(
 					{ type: "image", data, mimeType },
 					{
@@ -435,7 +469,8 @@ export class BridgeServer {
 			);
 			return;
 		}
-		this.scope?.sinks?.onAttachment?.({ mimeType, data, ...(path ? { path } : {}) });
+		if (signal.aborted) return;
+		scope?.sinks?.onAttachment?.({ mimeType, data, ...(path ? { path } : {}) });
 		ack();
 	}
 
@@ -455,7 +490,7 @@ export class BridgeServer {
 		};
 	}
 
-	private send(socket: Socket, frame: Record<string, unknown>): void {
+	private send(socket: Duplex, frame: Record<string, unknown>): void {
 		if (socket.destroyed) return;
 		try {
 			socket.write(`${JSON.stringify(frame)}\n`);

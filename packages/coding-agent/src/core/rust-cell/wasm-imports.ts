@@ -56,15 +56,19 @@ const ALLOWED_WASI_FUNCTIONS = new Set([
 
 /** Compile only for validation/import inspection; never instantiate or call
  * guest code in the host's JavaScript engine. Unsupported modules are rejected
- * rather than executed without inspection. WasmEdge remains the test runtime. */
-export async function validateSkillTestImports(bytes: Uint8Array<ArrayBuffer>, signal?: AbortSignal): Promise<void> {
+ * rather than executed without inspection. WasmEdge remains the guest runtime. */
+export async function validateWasiImports(
+	bytes: Uint8Array<ArrayBuffer>,
+	purpose: "cell" | "skill test",
+	signal?: AbortSignal,
+): Promise<void> {
 	signal?.throwIfAborted();
 	let module: unknown;
 	try {
 		module = await WebAssembly.compile(bytes);
 	} catch (error) {
 		signal?.throwIfAborted();
-		throw new Error(`cannot inspect skill test module: ${error instanceof Error ? error.message : String(error)}`);
+		throw new Error(`cannot inspect ${purpose} module: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	signal?.throwIfAborted();
 	for (const imported of WebAssembly.Module.imports(module)) {
@@ -74,7 +78,7 @@ export async function validateSkillTestImports(bytes: Uint8Array<ArrayBuffer>, s
 			!ALLOWED_WASI_FUNCTIONS.has(imported.name)
 		) {
 			throw new Error(
-				`skill test import not allowed: ${JSON.stringify(imported.module)}.${JSON.stringify(imported.name)} (${imported.kind}); tests support only non-network WASI Preview 1 functions`,
+				`${purpose} import not allowed: ${JSON.stringify(imported.module)}.${JSON.stringify(imported.name)} (${imported.kind}); only non-network WASI Preview 1 functions are supported`,
 			);
 		}
 	}

@@ -1,5 +1,5 @@
 //! Bridge client framing/handshake tests against a mock host on the native
-//! target (the wasm backend swaps only the TcpStream type). Env vars and the
+//! target's TCP backend (WASI uses stdio). Env vars and the
 //! process-global connection are shared state, so tests run under one lock.
 
 #![cfg(not(target_os = "wasi"))]

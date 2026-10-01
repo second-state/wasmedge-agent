@@ -4,10 +4,10 @@
  * toolchain or the warm template is unavailable (DESIGN.md §9: these run in a
  * dedicated toolchain CI job, not the default shards). */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { BridgeServer } from "../src/core/rust-cell/bridge-server.js";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
@@ -27,6 +27,13 @@ const CELL_CODE = `use agent_lib::prelude::*;
 fn main() -> Result<()> {
     let reply = rlm::host_request("test.echo", serde_json::json!({"n": 41}))?;
     println!("echo={}", reply["n"]);
+    let large = "繁體字".repeat(32_768);
+    print!("before-large:");
+    let reply = rlm::host_request("test.large", serde_json::json!({"text": large}))?;
+    assert_eq!(reply["text"], large);
+    println!("after-large");
+    std::fs::write("/scratch/image.svg", r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#)?;
+    rlm::display::attach_image("/scratch/image.svg")?;
     let handle = rlm::spawn_named("review the API", "worker")?;
     println!("spawned={}", handle.rlm_child_id);
     rlm::display::diff("demo.txt", "old", "new")?;
@@ -65,6 +72,7 @@ describe.skipIf(!available)("rust cell <-> bridge integration", () => {
 					echoCellSource = String(payload.cellSourceCode ?? "");
 					return { n: (payload.n as number) + 1 };
 				},
+				"test.large": async (payload) => ({ text: payload.text }),
 				"rlm.run": async (payload) => {
 					seenTypes.push("rlm.run");
 					expect(payload.prompt).toBe("review the API");
@@ -89,6 +97,7 @@ describe.skipIf(!available)("rust cell <-> bridge integration", () => {
 			},
 		});
 		servers.push(bridge);
+		vi.spyOn(bridge, "start").mockRejectedValue(new Error("TCP listener must not start"));
 
 		const runner = new CellRunner({
 			cwd,
@@ -100,7 +109,6 @@ describe.skipIf(!available)("rust cell <-> bridge integration", () => {
 		});
 
 		// mkdir cwd only after the runner exists so realpath has a target.
-		const { mkdirSync } = await import("node:fs");
 		mkdirSync(cwd, { recursive: true });
 
 		const result: CellResult = await runner.execute({ code: CELL_CODE }, { cellId: "int-cell-1" });
@@ -108,6 +116,15 @@ describe.skipIf(!available)("rust cell <-> bridge integration", () => {
 		expect(result.stderr).toBe("");
 		expect(result.status).toBe("ok");
 		expect(result.stdout).toContain("echo=42");
+		expect(result.stdout).toContain("before-large:after-large");
+		expect(result.stdout).not.toContain("RLM:");
+		expect(result.attachments).toEqual([
+			{
+				mimeType: "image/svg+xml",
+				path: "/scratch/image.svg",
+				data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString("base64"),
+			},
+		]);
 		expect(result.stdout).toContain("spawned=child-7");
 		expect(result.stdout).toContain("delivery=queued");
 		expect(result.stdout).toContain('missing-err=host request type "missing.type" is not available');
@@ -135,5 +152,84 @@ describe.skipIf(!available)("rust cell <-> bridge integration", () => {
 		);
 		expect(second.status).toBe("ok");
 		expect(second.stdout).toContain("second=2");
+		expect(bridge.isStarted).toBe(false);
+		const callsBefore = seenTypes.length;
+		const blocked = await runner.execute({
+			code: `use agent_lib::prelude::*;
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+extern "C" { fn sock_open(family: u32, kind: u32, fd: *mut u32) -> u32; }
+fn main() -> Result<()> {
+    rlm::host_request("test.echo", serde_json::json!({"n":1}))?;
+    let mut fd = 0;
+    unsafe { std::hint::black_box(sock_open(1, 2, &mut fd)); }
+    Ok(())
+}`,
+		});
+		expect(blocked).toMatchObject({ status: "error", runMs: 0 });
+		expect(blocked.stderr).toContain('cell import not allowed: "wasi_snapshot_preview1"."sock_open"');
+		expect(seenTypes).toHaveLength(callsBefore);
 	});
+
+	it(
+		"renews a timed-out stdio request without replaying it or accepting a stale reply",
+		{ timeout: 180_000 },
+		async () => {
+			const root = mkdtempSync(join(tmpdir(), "bridge-stdio-timeout-"));
+			tempDirs.push(root);
+			const cwd = join(root, "project");
+			mkdirSync(cwd);
+			const workspace = ensureWorkspaceAt(join(root, "workspace"));
+			let mutations = 0;
+			let cancelled = 0;
+			const bridge = new BridgeServer({
+				handlers: {
+					"harness.request": async (payload, context) => {
+						if (payload.operation === "open") return { value: true };
+						mutations++;
+						await new Promise<void>((resolve) =>
+							context!.signal.addEventListener(
+								"abort",
+								() => {
+									cancelled++;
+									resolve();
+								},
+								{ once: true },
+							),
+						);
+						return { value: { id: "stale" } };
+					},
+					echo: async () => ({ fresh: true }),
+				},
+			});
+			servers.push(bridge);
+			const runner = new CellRunner({
+				cwd,
+				workspaceDir: workspace,
+				wasmedgeBin: toolchain!.wasmedgeBin,
+				cargoBin: toolchain!.cargoBin,
+				cellTimeoutMs: 120_000,
+				bridge,
+			});
+			const result = await runner.execute({
+				code: `use agent_lib::prelude::*;
+fn main() -> Result<()> {
+    std::env::set_var("RLM_CELL_TIMEOUT_MS", "100");
+    let mut harness = rlm::harness::local()?;
+    let error = harness.create_skill("Example", "test", serde_json::json!({"type":"rust", "use":"agent_lib::skills::example", "callable":"run"}), serde_json::json!({})).unwrap_err();
+    assert!(format!("{error:#}").contains("timed out"));
+    let fresh = rlm::host_request("echo", serde_json::json!({}))?;
+    assert_eq!(fresh["fresh"], true);
+    println!("recovered");
+    Ok(())
+}`,
+			});
+			expect(result, result.compileDiagnostics ?? result.stderr).toMatchObject({
+				status: "ok",
+				stdout: "recovered\n",
+			});
+			expect(mutations).toBe(1);
+			expect(cancelled).toBe(1);
+			expect(bridge.isStarted).toBe(false);
+		},
+	);
 });

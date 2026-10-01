@@ -8,6 +8,7 @@ import * as cellProcess from "../src/core/rust-cell/process.js";
 import { testRustSkill } from "../src/core/rust-cell/skill-tests.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, syncRustSkills } from "../src/core/rust-cell/workspace.js";
+import { socketClient } from "./fixtures/rust-cell-network.js";
 
 let toolchain: ToolchainInfo | undefined;
 try {
@@ -23,14 +24,14 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 	afterAll(() => {
 		for (const path of tempDirs) rmSync(path, { recursive: true, force: true });
 	});
-	function fixture(source: string, dependencies = "") {
+	function fixture(source: string) {
 		const root = mkdtempSync(join(tmpdir(), "skill-test-fixture-"));
 		tempDirs.push(root);
 		const workspace = ensureWorkspaceAt(join(root, "workspace"));
 		const cratePath = join(root, "example");
 		mkdirSync(join(cratePath, "src"), { recursive: true });
 		const cargoTomlPath = join(cratePath, "Cargo.toml");
-		writeFileSync(cargoTomlPath, `[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n${dependencies}`);
+		writeFileSync(cargoTomlPath, '[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n');
 		writeFileSync(join(cratePath, "src/lib.rs"), source);
 		syncRustSkills(workspace, [{ name: "example", crateName: "example", cratePath, cargoTomlPath }]);
 		return {
@@ -55,6 +56,7 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
         assert!(std::fs::write(path, "changed").is_err());
     }
     assert!(std::env::var("RLM_BRIDGE_ADDR").is_err());
+    assert!(std::env::var("RLM_BRIDGE_STDIO").is_err());
     std::fs::write("/scratch/result", "ok").unwrap();
 }`;
 		const f = fixture(source);
@@ -95,17 +97,11 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 			});
 			try {
 				const port = (server.address() as AddressInfo).port;
-				const f = fixture(
-					`pub fn connect() { wasmedge_wasi_socket::TcpStream::connect("127.0.0.1:${port}").unwrap(); }
-#[test] fn pure() { assert_eq!(2 + 2, 4); }`,
-					'\n[dependencies]\nwasmedge_wasi_socket = "0.5.5"\n',
-				);
+				const f = fixture(`${socketClient(port)}\n#[test] fn pure() { assert_eq!(2 + 2, 4); }`);
 				mkdirSync(join(f.cratePath, "tests"));
 				writeFileSync(join(f.cratePath, "tests/network.rs"), "#[test] fn network() { example::connect(); }");
 				const project = join(f.root, "project");
 				mkdirSync(project);
-				// Positive control: this fixture really connects in an ordinary T1
-				// cell. The policy below is specific to the sandboxed test runner.
 				const runner = new CellRunner({
 					cwd: project,
 					workspaceDir: f.workspace,
@@ -113,8 +109,28 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 					wasmedgeBin: toolchain!.wasmedgeBin,
 					cellTimeoutMs: 120_000,
 				});
-				const control = await runner.execute({ code: "fn main() { agent_lib::skills::example::connect(); }" });
-				expect(control, control.compileDiagnostics ?? control.stderr).toMatchObject({ status: "ok" });
+				const blocked = await runner.execute({
+					code: 'fn main() { std::fs::write("/workspace/ran", "yes").unwrap(); agent_lib::skills::example::connect(); }',
+				});
+				expect(blocked).toMatchObject({ status: "error", runMs: 0 });
+				expect(blocked.stderr).toMatch(/cell import not allowed.*sock_/);
+				expect(existsSync(join(project, "ran"))).toBe(false);
+				expect(connections).toBe(0);
+				// Positive control: the exact artifact really connects when invoked
+				// directly in stock WasmEdge, outside the cell/test import gates.
+				const control = await cellProcess.runProcess(
+					toolchain!.wasmedgeBin,
+					[
+						"run",
+						"--force-interpreter",
+						"--dir",
+						`/workspace:${project}`,
+						join(f.workspace, "target/wasm32-wasip1/release/cell.wasm"),
+					],
+					{ cwd: f.workspace, timeoutMs: 10_000 },
+				);
+				expect(control, control.stderr).toMatchObject({ exitCode: 0 });
+				expect(existsSync(join(project, "ran"))).toBe(true);
 				await vi.waitFor(() => expect(connections).toBe(1));
 				const processes = vi.spyOn(cellProcess, "runProcess");
 				try {

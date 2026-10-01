@@ -9,7 +9,7 @@ flowchart TD
     session["AgentSession · TypeScript<br/>rust tool + host request handlers"]
     provisioner["RustCellProvisioner · TypeScript<br/>toolchain checks · template clone · skill mounts"]
     runner["CellRunner · TypeScript<br/>cargo build → wasmedge run"]
-    bridge["BridgeServer · TypeScript<br/>loopback TCP + bearer token"]
+    bridge["BridgeServer · TypeScript<br/>private stdio + bearer token"]
     cell["cell.wasm · WasmEdge<br/>agent_lib + rlm crates"]
 
     session -->|"owns"| provisioner --> runner
@@ -37,12 +37,13 @@ Each `rust` tool call runs one complete program:
 1. Optional `lib` files are applied to `agent_lib/` (declarative extension, with backups).
 2. The cell source is written to `cell/src/main.rs` and compiled with `cargo build --release --offline -p cell`. Compiles across sessions share a concurrency gate (`WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`).
 3. A failed or interrupted build restores the previous cell source and lib files, including the generated helper module index. Compile errors return the rendered rustc diagnostics. Successful builds retain their source changes even if the cell later panics or times out; runtime side effects are not rolled back.
-4. On success the wasm binary runs under WasmEdge with explicit preopens: the project at `/workspace`, persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
-5. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
+4. The host validates the compiled module and rejects imports outside a fixed set of non-network WASI Preview 1 functions, before any cell code executes. Socket/DNS, plugin, unknown, and non-function imports are rejected even if unused. Validation uses the host JavaScript engine without instantiating the module; unsupported Wasm features fail closed. WasmEdge runs the accepted module with `--force-interpreter`, preventing embedded AOT native payloads from replacing the inspected code.
+5. Execution has explicit preopens: the project at `/workspace`, persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
+6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
 
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and functions promoted into `agent_lib`, are available to every later cell.
 
-Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example. Network egress restrictions for ordinary cells remain unenforced by the runtime.
+Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example.
 
 ## Workspace Lifecycle
 
@@ -103,7 +104,9 @@ sequenceDiagram
 | `src/core/rust-cell/index.ts` | Lazy provisioning: toolchain checks, template readiness, workspace clone, skill sync. |
 | `src/core/rust-cell/workspace-history.ts` | Local Git snapshots after successful persisted cells. |
 | `src/core/rust-cell/workspace-snapshot.ts` | Spawn-time library and cache copies with independent skill sources. |
-| `src/core/rust-cell/bridge-server.ts` | Loopback bridge, bearer-token auth, framing, attachment thumbnailing, request dispatch. |
+| `src/core/rust-cell/bridge-server.ts` | Bearer-token auth, framing, attachment thumbnailing, request dispatch. |
+| `src/core/rust-cell/stdio-bridge.ts` | Separate protocol frames from ordinary stdout and deliver private replies on stdin. |
+| `src/core/rust-cell/wasm-imports.ts` | Validate and enforce non-network imports for cells and skill tests. |
 | `src/core/refinement/harness-api.ts` | Host-owned harness CRUD, skill validation/test gate, and persistence. |
 | `src/core/tools/rust.ts` | Agent tool wrapper and output shaping. |
 | `src/core/agent-session.ts` | RLM policy, child creation, registry, usage attribution, cancellation, and goal handlers. |
@@ -114,9 +117,11 @@ The guest side does not call providers or implement an agent loop.
 
 ## Bridge Transport
 
-The bridge is a loopback TCP listener created per session and connected per cell. `CellRunner` passes `RLM_BRIDGE_ADDR`, `RLM_BRIDGE_TOKEN`, and `RLM_CELL_ID` into the cell's WASI environment; the guest authenticates with the session-scoped bearer token (the threat model of Jupyter token auth), then exchanges newline-delimited JSON frames.
+The bridge uses private process pipes; ordinary cells open no TCP listener or socket. `CellRunner` passes `RLM_BRIDGE_STDIO=1`, `RLM_BRIDGE_TOKEN`, and `RLM_CELL_ID` into the cell's WASI environment. The guest authenticates with the session token and active cell ID, then exchanges protocol-v1 newline-delimited JSON frames. Guest frames on stdout carry the prefix `\x1eRLM:<token>:`; the host removes those frames from visible output and writes replies only to stdin. stdin is reserved for the bridge. Ordinary stdout/stderr remain streamed, including output without a trailing newline and UTF-8 split across chunks. Frames are capped at 32 MiB.
 
-Guest calls are synchronous: `rlm::spawn` blocks the cell until the admission response arrives, which keeps the model-facing API free of async ceremony. Host handlers run concurrently on the host side; a cell that exits mid-request is disconnected and its side effects end with the cell. Display frames (`rlm::display::diff`, `attach_image`) are acknowledged per frame, and oversized or invalid attachments are reported back as frame errors without dropping the connection.
+Guest calls are synchronous: `rlm::spawn` blocks the cell until the admission response arrives. Ordinary requests have a 30-second guest deadline; skill registration tests use the cell budget. WASI polling keeps an absent reply from blocking past the guest deadline. After a transport timeout, the next call renews the handshake: the host aborts prior cooperative work and suppresses its late replies. Requests are never replayed automatically. Cell exit or cancellation also aborts cooperative host work; completed side effects are not rolled back. Display frames (`rlm::display::diff`, `attach_image`) are acknowledged per frame, and invalid attachments return frame errors without dropping the connection.
+
+This transport preserves the stock WasmEdge CLI and existing host handlers while closing the socket-import gap. The planned T2 native runner and host-function ABI remain separate work. The native Rust protocol tests retain a TCP backend with `RLM_BRIDGE_ADDR`; WASI cells do not use it. Persisted workspaces refresh their `rlm` scaffold through the normal upgrade path.
 
 Cells with no bridge (standalone `wasmedge` runs) degrade: `rlm::bridge_available()` is false and bridge calls return a host-unavailable error.
 
@@ -205,7 +210,7 @@ Session-local state lives in the session artifact directory under `harness/harne
 
 Skill `create_skill`, `update_skill`, and `update("skill", ...)` calls require a live bridge and passing sandboxed unit/integration tests before saving, using the same test runner as `/refine`. Tests receive only disposable scratch access. The host validates the reference, runs the tests, then reloads the store before saving and rejects an update if that entry changed in the meantime. Skill test requests use the cell budget instead of the ordinary 30-second bridge timeout; cancellation, cell end, or disconnection cancels their host work. The host ignores guest-supplied test results and entry version/source fields. Non-skill edits and deletion do not require tests.
 
-Sandboxed skill tests additionally require every artifact to pass an import allowlist before any module executes: only non-network WASI Preview 1 functions are accepted. Socket/DNS, plugin, unknown, and non-function imports are rejected. The host uses its JavaScript engine to validate modules and enumerate imports without instantiation; validation failures fail closed. Tests use `--force-interpreter` to execute the inspected Wasm code instead of any embedded AOT native payload. This denies guest network capabilities in skill tests, while ordinary T1 cells still use the socket bridge and retain their existing network gap. Cargo build scripts/proc macros continue to run on the host.
+Sandboxed skill tests share the cell import allowlist and interpreter requirement above. Every test artifact is checked before any module executes. Unlike ordinary cells, tests have no bridge connection or credentials. Cargo build scripts/proc macros continue to run on the host.
 
 Before compilation and again before execution, the runner rejects writable `/workspace`, `/agent/state`, or `/scratch` mounts that overlap either configured harness store, including symlinked mount roots, store parents, and existing state-file targets. Keep project directories separate from session/agent storage; using a home directory or a project containing its session storage as `/workspace` can now be rejected. This prevents direct guest file writes through the configured mounts. Host bash, build scripts/proc macros, host-created hard links, and concurrent host filesystem changes remain outside this boundary.
 
@@ -244,7 +249,7 @@ Exact artifact files are created only when their features are used. Non-persiste
 
 ## Trust Boundary
 
-Cells run as WebAssembly inside WasmEdge with only the preopened directories above: the agent's own computation is sandboxed by default, and provider credentials never enter the guest. Two honest limits: `/workspace` is writable in the default configuration, and the no-direct-network property currently rests on the crate surface rather than a runtime deny policy. The `bash` tool and the host toolchain (`cargo`, which can run build scripts) execute with the worker's OS permissions — their approval policy is the boundary for untrusted repositories. Installed skills and extensions are trusted code.
+Cells run as WebAssembly inside WasmEdge with only the preopened directories above. The runner denies direct guest networking through import validation and forced interpreter execution, including for cells with a bridge; network capabilities are available only through registered host handlers. This is a policy of the agent's runner, not a network restriction added to standalone WasmEdge. `/workspace` remains writable by default. The `bash` tool, host handlers, and the host toolchain (`cargo`, including build scripts/proc macros) execute with the worker's OS permissions. Installed skills and extensions are trusted code; the guest policy does not sandbox compilation or the whole agent.
 
 Provider credentials are resolved by the TypeScript host. The bounded model catalog crosses into the guest as metadata; the full auth store does not.
 
@@ -254,6 +259,7 @@ Provider credentials are resolved by the TypeScript host. The bounded model cata
 |---|---|
 | Toolchain missing | Provisioning fails with the doctor-style hint; `doctor --fix` repairs target/template issues. |
 | Compile error | Lib changes revert; rendered rustc diagnostics return as the tool result. |
+| Invalid module / disallowed import | Cell does not execute; the tool reports the policy error. Successfully compiled source changes remain. |
 | Depth limit reached | The host rejects `rlm.run`; the guest surfaces the typed error. |
 | Unsupported options | Host rejects the request. |
 | Requested model unavailable | Spawn fails instead of substituting another model. |

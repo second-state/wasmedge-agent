@@ -30,7 +30,7 @@
 
 ## 1. 總體架構
 
-### 1.1 系統圖（Phase 1 完成形態）
+### 1.1 系統圖（Phase 1 架構，含 2026-10-02 bridge 更新）
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -50,7 +50,7 @@
 │    ├ WorkspaceManager     session cargo workspace 的建立/守護/git 化  │
 │    ├ CompilePipeline      cargo build（offline、診斷解析、暖快取）     │
 │    ├ ExecPipeline         wasmedge 子進程（preopen、env、串流、逾時）  │
-│    └ BridgeServer         loopback TCP + JSON-lines（host bridge）    │
+│    └ BridgeServer         private stdio + JSON-lines（host bridge）   │
 │         └→ 分派到既有 HostRequestHandlers（原封重用）                  │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Guest（Wasm 沙箱內，wasm32-wasip1）                                   │
@@ -60,7 +60,7 @@
 │    └ rlm crate                   ← guest shim（≈prime-agent-runtime） │
 │         ├ rlm::state             /agent/state serde KV               │
 │         ├ rlm::spawn / msg / goal / display / harness / mcp          │
-│         └ bridge client（wasi socket → BridgeServer）                 │
+│         └ bridge client（stdin/stdout → BridgeServer）                │
 │                                                                      │
 │  Preopens：/workspace（專案）、/agent（lib+state）、/scratch          │
 └──────────────────────────────────────────────────────────────────────┘
@@ -73,7 +73,7 @@
 | Session worker（TS） | 同現制（daemon 管理） | 不變 |
 | `cargo build` | 每 cell 一次，短命 | —（新） |
 | `wasmedge` | 每 cell 一次，短命（**無長命 kernel 進程**） | 取代長命 `ipykernel` |
-| BridgeServer（TS，worker 內 listener） | session 首次用 `rust` 工具時 lazy 啟動，session 結束關閉 | 取代 ZMQ 三通道 |
+| BridgeServer（TS，worker 內 dispatcher） | 每 session 一個；每 cell 綁定 private stdio pipes，結束即斷開 | 取代 ZMQ 三通道 |
 
 關鍵差異：現制的「持久性」載體是 kernel 進程的記憶體；新制的持久性載體是**磁碟上的 workspace**（git 版本化）。因此 worker 崩潰/重啟後毫無狀態損失——不需要 forkserver、不需要 dill、不需要 busy-kernel interrupt 流程（cell 短命，逾時直接 kill）。
 
@@ -84,7 +84,7 @@
 1. **Host 權威不變**：credentials、provider 呼叫、child 生命週期、transcript、政策全在 TS host；guest 只有 thin shim（與現制同構，見 REPORT §1.2）。
 2. **程式碼即記憶**：跨回合資產只有三種形態——`agent_lib` 原始碼、`/agent/state` 資料、`/workspace` 專案檔案。全部可 diff、可版本化、可重放。
 3. **誠實的沙箱邊界**：wasm 沙箱涵蓋 agent 自身計算；`bash` 與 host bridge 是有名有姓的顯式越權通道（REPORT §3.5 邊界圖）。文件與 README 不得宣稱「全沙箱」。
-4. **決定性優先**：所有 side effect 過可記錄邊界（preopen FS + bridge），為 Phase 3 的 trajectory replay 留基礎；因此 guest 不直接持有網路能力（T1 的 socket 只准連 bridge，見 §2.7）。
+4. **決定性優先**：所有 side effect 過可記錄邊界（preopen FS + bridge），為 Phase 3 的 trajectory replay 留基礎；guest 不直接持有網路能力（stdio bridge + import 白名單，見 §2.7）。
 5. **對上游的最小侵入**：改動集中在整塊替換目錄；散改點維護於 `SYNC.md` 清單（§7.3）。
 
 ---
@@ -204,18 +204,22 @@ cargo build --release --target wasm32-wasip1 \
 ### 2.4 執行管線
 
 ```
-wasmedge \
-  --dir /workspace:<cwd><:ro 若 writePolicy=ro> \
-  --dir /agent/lib:<workspace>/agent_lib:ro \
+wasmedge run --force-interpreter \
+  --dir /workspace:<cwd> \
+  --dir /agent/lib:<workspace>/agent_lib:readonly \
   --dir /agent/state:<workspace>/state \
   --dir /scratch:<session-temp> \
-  --env RLM_BRIDGE_PORT=<port> --env RLM_BRIDGE_TOKEN=<token> \
+  --env RLM_BRIDGE_STDIO=1 --env RLM_BRIDGE_TOKEN=<token> \
+  --env RLM_CELL_ID=<tool-call-id> --env RLM_CELL_TIMEOUT_MS=<cell-budget-ms> \
   --env RLM_DEPTH=<n> --env RLM_SESSION_DIR=/agent \
   <workspace>/target/wasm32-wasip1/release/cell.wasm
 ```
 
+上述為 `CellRunner` 組裝的命令形狀；host 必須同時處理 stdout protocol frames 並向 stdin 回覆，不能只在 shell 設 env 就取得 bridge。Readonly preopen 由專用 inert module 探測；runtime 不支援時省略 library 掛載。Standalone 純計算 cell 可省略 bridge env，但直接呼叫 WasmEdge CLI 不含 agent 的 import 政策。
+
+- **執行前 import gate**：cargo 成功後 validate Wasm 並檢查全部 imports，只允許明列的非網路 WASI Preview 1 functions；失敗或取消不啟動 cell（§2.7）。強制 interpreter 避免 embedded AOT native code 繞過檢查。
 - `/agent/lib` 與 `/agent/state` 為**兩個獨立 preopen**（定案：不做合成 `/agent` 掛載，避免依賴 preopen 對 symlink 的行為；guest 路徑穩定為 `/agent/lib/src/...`、`/agent/state/...`）。`/agent/lib` 唯讀（D14——lib 變更只經 `lib` 參數）。
-- **stdout/stderr 串流**：pipe 逐 chunk 經 `onUpdate` 送 TUI（沿用 `tool_execution_update` 事件路徑，REPORT §1 agent 探索確認該路徑 runtime 無關）；host 累積並截斷。
+- **stdout/stderr 串流**：host 先從 stdout 分離 bridge frames，普通輸出逐 chunk 經 `onUpdate` 送 TUI；host 累積並截斷。stdin 專供 bridge 回覆。
 - **逾時**：單一 cell 總預算 `cellTimeoutMs`（預設 120,000；compile 與 run 共享）。逾時/使用者 abort → process group SIGKILL → `status: "timeout" | "aborted"`。
 - 執行後守護（§2.1）：lib guard → git commit。
 - 退出碼語意：`0` = ok；非 0（含 panic）= `status: "error"`，stderr 為主要回饋。
@@ -268,12 +272,12 @@ Lib 檔套用成功時，host 對每個 lib 檔自動合成 `KernelDiffDisplay`�
 
 ### 2.6 Guest `rlm` crate
 
-對映 `prime-agent-runtime`（Python 1,205 行 → 估 Rust 1–2K 行）。**全同步 API**（wasip1 無原生 async；bridge 呼叫延遲為 loopback RTT + handler 時間，且 `spawn` 語意本就 admission-only 立即返回——REPORT §2.2 第 10 項）。
+對映 `prime-agent-runtime`（Python 1,205 行 → 估 Rust 1–2K 行）。**全同步 API**（wasip1 無原生 async；bridge 呼叫延遲為 pipe 往返／poll + handler 時間，且 `spawn` 語意本就 admission-only 立即返回——REPORT §2.2 第 10 項）。
 
 ```rust
 // 模組佈局
 rlm::error       // pub struct Error { kind: Bridge|Host|State|Io, message } + Result<T>
-rlm::bridge      // (內部) TCP client、JSON-lines framing、token、重連
+rlm::bridge      // (內部) stdio client、JSON-lines framing、token、握手更新
 rlm::state       // get<T: DeserializeOwned>(key) -> Result<Option<T>>
                  // set<T: Serialize>(key, &T) / remove(key) / keys() -> Vec<String>
                  // put_blob(name, &[u8]) / get_blob(name)      → /agent/state（原子寫：tmp+rename）
@@ -299,11 +303,13 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 `SpawnHandle { rlm_child_id, name, session_dir, model }`——欄位名與現制 payload 完全一致（`rlm-runtime.ts` 的驗證邏輯零修改）。
 
-### 2.7 Host Bridge 協議規格 v1（T1）
+### 2.7 Host Bridge 協議規格 v1（CLI + stdio）
 
-**傳輸**：BridgeServer 在 `127.0.0.1:<ephemeral>` listen；port/token 經 `--env` 傳入 guest；guest 用 `wasmedge_wasi_socket` 建 TCP 連線（每 cell 一條持久連線，cell 結束即斷）。**Deny-by-default 網路的實現方式**：cell 的 wasm 不 link 任何其他網路能力，`rlm` crate 只連 bridge（guest 是我們發的 crate + 模型寫的 safe Rust，經由 crate API 才能碰 socket）；T2 換 host functions 後升級為運行時強制（§8.1、風險見 §11 D9）。
+**傳輸更新（2026-10-02）**：原 T1 TCP bridge 的 crate 約束無法阻止 unsafe／自帶 socket imports。現改用每 cell 的 private stdin/stdout pipes，保留 stock WasmEdge CLI、協議 v1、同步 guest API 與 host handlers；不啟動 TCP listener，WASI guest 不再依賴 `wasmedge_wasi_socket`。Runner 傳入 `RLM_BRIDGE_STDIO=1`、session token、active cell ID 與 cell 時間預算。Native Rust protocol tests 保留 TCP backend 與 `RLM_BRIDGE_ADDR`。這是 T2 native host-functions runner 前的過渡實作，不代表 §8.1 全部完成。
 
-**Framing**：newline-delimited JSON（UTF-8，一行一訊息；換行以 `\n`，訊息內字串已由 JSON 轉義）。
+**Guest 網路政策**：所有 cell（有無 bridge 皆同）與 skill tests 共用非網路 WASI Preview 1 function import 白名單。執行前由 host JavaScript engine validate/compile Wasm 並讀取 imports，不 instantiate；socket／DNS、plugin、未知 module/function、非 function imports 及無法驗證的 Wasm features 均拒絕，未使用的 import 也不放行。WasmEdge 必須以 `--force-interpreter` 執行已檢查的 Wasm code，忽略 embedded AOT native payload。這是 agent runner 的 admission policy，不是 stock WasmEdge CLI 的全域網路限制；guest 對外能力仍由已註冊 host handlers 提供。Host bash、Cargo build scripts/proc macros、host handlers 的權限不受此政策限制。
+
+**Framing**：newline-delimited JSON（UTF-8，一行一訊息；換行以 `\n`，訊息內字串已由 JSON 轉義）。Guest 每個 stdout frame 加上 `\x1eRLM:<token>:` 前綴；host 分離 protocol 與普通輸出，回覆僅送 private stdin。普通輸出不需以換行結尾，跨 chunk 的 UTF-8 與前綴均保留。stdin 專供 bridge 使用；frame 上限 32 MiB。
 
 ```jsonc
 // 1. 握手（guest → host，連線後第一則）
@@ -326,11 +332,11 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 **分派**：`BridgeServer` 收到 `req` → 查 `HostRequestHandlers[type]`（**現有 registry 原封重用**，含 `rlm.run`/`goal.*`/`agent_message.*`/`mcp.*`/`model.info` 全部 handler）→ handler 回傳 JSON → 回 `res`。`cellSourceCode` 注入：BridgeServer 持有當前 cell 的 code（對映 `handleHostRequest` 注入 `activeExecution.code`），供 subagent spawn 顯示歸因。新增 handler：`websearch.run`（§4.1）與 `display.*`（emit 專用，不進 req 路徑）；`deps.add` 延至 Phase 2（D15）。
 
-**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報；skill tests 改用 cell budget，見 §4.2）；cell 結束時取消合作式 handler，再等待其他 in-flight handler 收尾（`HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。**沒有 control-channel 死結問題**——bridge 與 cell 的 stdout 是兩條獨立通道，host 端 handler 在 TS event loop 處理，與 cell 進程無鎖依賴（REPORT §3.3）。
+**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報；skill tests 改用 cell budget，見 §4.2）。WASI `poll_oneoff` 檢查 stdin readiness，無回覆時每 5ms 重試至 deadline，host cell budget 為硬後盾。傳輸逾時後，下次呼叫重新握手；host 先 abort 舊 generation 的合作式工作並禁止晚到回覆，再回 hello_ok，guest 排除舊回覆後繼續。Request 絕不自動重送；host error 不重建連線。Cell 結束時取消合作式 handler，再等待其他 in-flight handler 收尾（`HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。Host 持續讀 stdout、獨立處理 handler 並寫 stdin；已完成副作用不回滾。
 
 **對映現制的差異聲明**：現制 comm 允許 cell 結束後的 detached asyncio task 繼續發訊（`onLateSentAgentMessage` LRU 機制）；新制 cell 進程結束即斷線，**無 late message**——這是簡化（一個 cell 的 side effect 隨 cell 終結），`agent_message` 要在 cell 存活期間送出。此語意差異需寫進 prompt（§3）。
 
-**實作註記（WP3，2026-08-06）**：(1) guest 端 30s 逾時以 non-blocking socket + 5ms poll 迴圈實現（`wasmedge_wasi_socket` 無 read timeout API）；host 端 cellTimeout 為硬後盾。guest 收發 lockstep（每 req/emit 同步等回應），故無 frame 交錯。(2) 傳輸層錯誤丟棄連線、下次呼叫重連；`req` 絕不自動重試（副作用如 spawn 不可重放）；host 回報的錯誤（`status:"error"`）保留連線。(3) `sentAgentMessages` 收據由 host 在 `agent_message.send` 成功時直接合成進 CellResult（取代現制的 iopub MIME 回收）。(4) `rlm::mcp::{list_tools,call_tool}` API 已就位，對應 host handler（host 側 MCP client 代理）隨 WP6 skills 遷移落地。(5) `attach_image` 先不縮圖（WP6 移植），guest 端強制 350K base64 上限。(6) handler registry 於 `_buildRuntime` 建立——與上游 kernel provisioner 同一掛點，controller 後綁（如 headless heartbeat）觸發 rebuild 自動帶入。
+**歷史實作註記（WP3，2026-08-06；socket 傳輸已由上述 stdio 取代）**：(1) guest 端 30s 逾時以 non-blocking socket + 5ms poll 迴圈實現（`wasmedge_wasi_socket` 無 read timeout API）；host 端 cellTimeout 為硬後盾。guest 收發 lockstep（每 req/emit 同步等回應），故無 frame 交錯。(2) 傳輸層錯誤丟棄連線、下次呼叫重連；`req` 絕不自動重試（副作用如 spawn 不可重放）；host 回報的錯誤（`status:"error"`）保留連線。(3) `sentAgentMessages` 收據由 host 在 `agent_message.send` 成功時直接合成進 CellResult（取代現制的 iopub MIME 回收）。(4) `rlm::mcp::{list_tools,call_tool}` API 已就位，對應 host handler（host 側 MCP client 代理）隨 WP6 skills 遷移落地。(5) `attach_image` 先不縮圖（WP6 移植），guest 端強制 350K base64 上限。(6) handler registry 於 `_buildRuntime` 建立——與上游 kernel provisioner 同一掛點，controller 後綁（如 headless heartbeat）觸發 rebuild 自動帶入。
 
 - `state.json`：單一 JSON object `{ "<key>": <any JSON> }`；guest 寫入原子（tmp+rename）；單檔軟上限 8 MiB（超過時 `rlm::state::set` 回 `Error::State`，指示改用 blob）。
 - `blobs/<name>`：任意 bytes；`keys()`/`list_blobs()` 供盤點。
@@ -516,13 +522,13 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 **D19 登錄閘實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
 
-**測試 import 政策（2026-10-01）**：skill 測試不需 bridge，現在於執行任何 test module 之前檢查所有編譯產物，只允許明列的非網路 WASI Preview 1 function imports。WASI socket／DNS、plugin、未知 module/function 或非 function imports 均拒絕，未使用的 import 也不放行。Host 以 JavaScript engine validate/compile module 並檢查 imports，不 instantiate 或執行 guest code；無法驗證（含 host engine 不支援的 Wasm features）同樣拒絕。實際測試仍只由 WasmEdge 以 `--force-interpreter` 執行已檢查的 Wasm code，避免 embedded AOT native payload 取代它；只有 disposable scratch，不傳入任何對外連線的 socket。檢查納入既有時間預算，取消／逾時後不執行測試。這只收緊 skill 測試的 guest 能力；一般 T1 cells 的 socket bridge 與網路缺口、host Cargo build scripts/proc macros 的信任邊界不變。
+**測試 import 政策（2026-10-01）**：skill 測試不需 bridge，現在於執行任何 test module 之前檢查所有編譯產物，只允許明列的非網路 WASI Preview 1 function imports。WASI socket／DNS、plugin、未知 module/function 或非 function imports 均拒絕，未使用的 import 也不放行。Host 以 JavaScript engine validate/compile module 並檢查 imports，不 instantiate 或執行 guest code；無法驗證（含 host engine 不支援的 Wasm features）同樣拒絕。實際測試仍只由 WasmEdge 以 `--force-interpreter` 執行已檢查的 Wasm code，避免 embedded AOT native payload 取代它；只有 disposable scratch，不傳入任何對外連線的 socket。檢查納入既有時間預算，取消／逾時後不執行測試。此政策於 2026-10-02 共用至一般 cells，bridge 改用 stdio（§2.7）。Host Cargo build scripts/proc macros 的信任邊界不變。
 
 **Guest API 閘（2026-10-01）**：`rlm::harness::{local,global}` 的所有 CRUD、overview 與 refinement event 操作改走 `harness.request`；host 從 session/scope 決定 store，不接受 guest 指定路徑或整份 state。`create_skill`、`update_skill` 與 `update("skill", …)` 由 host 驗證 reference、共用 WasmEdge 測試器、再保存 entry；不接受 guest 自報的測試結果、version/source。一般 update 測試既有 reference，明確 update 測試新 reference。測試後 host 無條件重載 store；同一 entry 在等待期間被修改時拒絕更新，其他 entry 的修改會保留。Skill mutation request 使用 `RLM_CELL_TIMEOUT_MS`（runner 注入）的等待預算，仍受 parent cell 剩餘時間限制。Bridge 以獨立於 payload 的 context 傳遞 AbortSignal；cell deadline、abort、end 或連線關閉會取消此測試。Rust API signatures/schema 不變，但無 bridge 的 standalone guest 現在連非 skill CRUD 也會失敗。
 
 **Harness 檔案邊界（2026-10-01）**：移除 `/agent/harness`、`/agent/harness-global` preopens。Runner 在編譯前與執行前，檢查 `/workspace`、`/agent/state`、`/scratch` 的實際路徑不得涵蓋或落在 local/global harness store 內；解析已存在的 symlink 與尚未建立 store 的祖先，也檢查既存 state-file symlink 目標。專案與 session/agent storage 必須分離；以 home 或包含 session storage 的專案為 cwd 可能被拒絕。此檢查不掃描 host 建立的 hard links，也不提供跨進程交易鎖或抵禦 host 同時更動檔案系統。
 
-**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。host 手動改寫 harness 檔案不經此 gate；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行，D9 網路出口限制亦未補齊，不應把這個 gate 描述成全面的惡意程式隔離。
+**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。host 手動改寫 harness 檔案不經此 gate；`skills.package` scaffold 仍待實作。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行；guest 網路限制見 §2.7，不應把這個 gate 描述成全面的惡意程式隔離。
 
 ### 4.3 Harness / refine 修改
 
@@ -675,12 +681,12 @@ wasmedge-agent/
 
 一個 ~1K 行的 Rust binary `wasmedge-cell-runner`，內嵌 WasmEdge（C API）：
 
-- Host module `rlm_host`：`host_request(ptr,len)→(ptr,len)`、`emit(kind,ptr,len)`、`log(ptr,len)`；guest `rlm` crate 的 bridge 後端從 socket 換 host function（**crate API 不變**，cell 程式零感知——這是 §2.6 全同步 API 設計的回報）。
+- Host module `rlm_host`：`host_request(ptr,len)→(ptr,len)`、`emit(kind,ptr,len)`、`log(ptr,len)`；guest `rlm` crate 的 bridge 後端從 stdio 換 host function（**crate API 不變**，cell 程式零感知——這是 §2.6 全同步 API 設計的回報）。
 - Runner ↔ TS host：stdio JSON-RPC（協議 v1 語意平移；框架欄位 `kind` 沿用）。
-- 新能力：gas metering（statistics cost limit，`cellGasLimit` 設定）、memory page limit、`WasmEdge_Async*` cancel（interrupt 不再 SIGKILL、可拿部分輸出）、**deny-by-default 網路成為運行時強制**（guest 無 socket 能力，一切 I/O 過 host module）。
+- 新能力：gas metering（statistics cost limit，`cellGasLimit` 設定）、memory page limit、`WasmEdge_Async*` cancel（interrupt 不再 SIGKILL、可拿部分輸出）、**host module 直接提供 guest bridge 能力**（網路 imports 的 admission policy 已於 CLI runner 落實，見 §2.7）。
 - 部署：runner 隨 npm 包分發 prebuilt binaries（對映上游 build-binaries.yml 機制）。
 
-**資源上限提前落實於 T1（2026-10-01）**：stock WasmEdge CLI 已提供 `--gas-limit` 與 `--memory-page-limit`，因此不用等待 T2。`rustCell.cellGasLimit`（1–4294967295）及 `cellMemoryPageLimit`（1–65536，每頁 64 KiB）現在由 session、獨立 SDK tool、runner 與 sandboxed skill tests 共用；每個 cell／test module 各有獨立上限。預設省略／null 保留 runtime 預設，無效值拒絕啟動 runtime，不靜默降級；gas 上限刻意限於 uint32 範圍，避免 WasmEdge 0.14.1 CLI 的窄化轉型。Gas 耗盡是 runtime error，memory.grow 超限回失敗值（guest 可處理），過小的 memory cap 也可能導致初始化或配置失敗。Memory cap 是每個 linear memory 的頁數，不是 RSS／compiler／host handler／所有 children 的總額；timeout 照常執行。T2 host functions、runtime 網路限制與 Async cancel 仍未完成。
+**資源上限提前落實於 T1（2026-10-01）**：stock WasmEdge CLI 已提供 `--gas-limit` 與 `--memory-page-limit`，因此不用等待 T2。`rustCell.cellGasLimit`（1–4294967295）及 `cellMemoryPageLimit`（1–65536，每頁 64 KiB）現在由 session、獨立 SDK tool、runner 與 sandboxed skill tests 共用；每個 cell／test module 各有獨立上限。預設省略／null 保留 runtime 預設，無效值拒絕啟動 runtime，不靜默降級；gas 上限刻意限於 uint32 範圍，避免 WasmEdge 0.14.1 CLI 的窄化轉型。Gas 耗盡是 runtime error，memory.grow 超限回失敗值（guest 可處理），過小的 memory cap 也可能導致初始化或配置失敗。Memory cap 是每個 linear memory 的頁數，不是 RSS／compiler／host handler／所有 children 的總額；timeout 照常執行。T2 host functions 與 Async cancel 仍未完成；guest 網路限制已於 2026-10-02 以 stdio bridge + import 白名單提前落實（§2.7）。
 
 ### 8.2 其他
 
@@ -688,7 +694,7 @@ wasmedge-agent/
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
-- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。`skills.package` scaffold 尚待實作，一般 cell 網路隔離仍屬 T2。
+- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。`skills.package` scaffold 尚待實作；一般 cell 已共用 import 白名單並改用 stdio bridge（§2.7）。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。
 
 ---
@@ -740,16 +746,16 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 |---|---|---|
 | D1 | Cell 語言僅 Rust（Phase 0–2） | 聚焦教義與 prelude 品質；`CompilePipeline` 保持 driver 介面（語言→toolchain 命令）以備擴充。替代案「任何 wasm 語言」推遲到 component model 時代 |
 | D2 | `/workspace` 預設可寫 | 與現制行為對齊、PoC 對照公平；ro+patch 模式為 Phase 2 選項（RL 場景再啟用） |
-| D3 | 傳輸 T1（socket）起步、T2（host functions）定型 | REPORT §3.3；guest API 同步化使切換零感知 |
-| D4 | Bridge 認證用 bearer token（非 HMAC 逐訊息簽章） | loopback + 每 session 隨機 64-hex token，威脅模型同 Jupyter token auth；簡化 framing |
+| D3 | T1 socket 起步 → CLI + stdio 過渡（2026-10-02）→ T2 host functions | 保留同步 guest API 與協議 v1；stdio 先移除 socket 需求，不新增 native binary 部署面（§2.7） |
+| D4 | Bridge 認證用 bearer token（非 HMAC 逐訊息簽章） | 每 session 隨機 64-hex token + active cell ID；現使用每 cell private pipes，token 同時區分 stdout protocol frames |
 | D5 | Workspace git 版本化 + agent_lib guard | 防磚、可審計、replay 基礎；成本僅每 cell 一次 commit（<10ms） |
 | D6 | 工具名 `rust`（不冒名 `ipython`） | 冒名會觸發上游 `hasIpython` 的全套 Python prompt（探索確認）；誠實命名 + fork 內改分支條件 |
 | D7 | Prompt 全新創作、面向通用 frontier models | 上游 base prompt 是「訓練過的前綴」，模仿無利；REPORT §3.6 |
 | D8 | 押 wasm32-wasip1 core module；CM/wasip2 列 Phase 3 | Rust tier-2 穩定 + WasmEdge 最成熟路徑；REPORT 附錄 B |
-| D9 | T1 期 guest 網路能力=僅 bridge（crate 層約束，非運行時強制） | 誠實記錄：safe Rust + 我方 crate 下有效，惡意 cell 可繞過（unsafe/自帶 socket 呼叫）→ 運行時強制是 T2 的明確動機，文件不得在 T1 期宣稱 deny-by-default 已達成 |
+| D9 | Guest 直接網路能力由 runner 禁止（2026-10-02，取代 T1 crate 約束） | stdio bridge 移除 socket 需求；全部 cell/test imports 只接受非網路 WASI functions，且強制 interpreter。Standalone WasmEdge、host build scripts、bash、host handlers 不受此政策限制（§2.7） |
 | D10 | 工作名 wasmedge-agent；正式命名延後到 M5 轉 org 時定案 | 上游協調議題依 D23 延後至設計成熟期；命名部分維持延後 |
 | D11 ✅ | 接受「無長命進程 → 大資料跨 cell 重讀」語意 | 緩解：state/blobs 序列化中間結果；resident data service 不預先設計，待實證瓶頸再議（§1.2） |
-| D12 ✅ | Guest 對外 I/O 一律 host-mediated——**產品原則，非過渡措施** | 一切 fetch/search 類能力以 host handler 擴充（websearch 模式）；guest 永不直連外網。決定性/replay/credential 隔離三重理由（§1.3 原則 4、§2.7）。D9 的 T1 強制力缺口仍如實記載 |
+| D12 ✅ | Guest 對外 I/O 一律 host-mediated——**產品原則，非過渡措施** | 一切 fetch/search 類能力以 host handler 擴充（websearch 模式）；guest 永不直連外網。決定性/replay/credential 隔離三重理由（§1.3 原則 4、§2.7）。D9 的 guest 強制力已由 runner import 政策補齊；host 權限邊界保留 |
 | D13 ✅ | `rust` + `bash` 雙內建工具 | 沙箱涵蓋 agent 自身計算、bash 為顯式越權通道的誠實敘事（§2.10）；與上游能力對齊、PoC 對照公平。approval 政策沿用現制 |
 | D14 ✅ | agent_lib 擴充走**宣告式 `lib` 參數**；`/agent/lib` 唯讀 preopen | 免 Rust-in-Rust 字串轉義、省 token；guard 併入編譯步驟（lib 編不過 → cell 不跑、原子回滾）→ workspace 恆處可編譯狀態；lib diff 免費渲染。代價：雙參數 schema、cell 內不能程式化生成 lib（經 state 中轉） |
 | D15 ✅ | Phase 1 prelude 鎖死；`deps.add` 延至 Phase 2 curated 白名單 | 供應鏈面最小、WP3 縮小、決定性最強；使用者以 settings `preludeExtra` 調整。Phase 2 白名單：host 抓取 → re-vendor → commit |

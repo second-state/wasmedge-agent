@@ -134,6 +134,6 @@ This keeps credentials, provider execution, transcript writes, worker routing, a
 
 ## Trust Model
 
-Rust cells run as WebAssembly inside WasmEdge with explicit preopened directories (the project at `/workspace`, the agent workspace at `/agent/*`): the agent's own computation is sandboxed by default. Two honest caveats: `/workspace` is read-write in the default configuration, and the no-direct-network property is enforced today by the crate surface (wasip1 sockets are not exposed through our prelude) rather than by a runtime deny policy. The `bash` tool is the deliberate, visible escape hatch that runs with the worker's operating-system permissions — treat its approval policy, not the cell sandbox, as the security boundary for untrusted repositories and instructions.
+Rust cells run as WebAssembly inside WasmEdge with explicit preopened directories (the project at `/workspace`, library at `/agent/lib`, and state at `/agent/state`). Before execution, the agent runner rejects socket/DNS, plugin, unknown, and non-function imports; accepted modules run in the interpreter. The bridge uses private stdin/stdout pipes, so host requests need no guest socket capability. `/workspace` remains read-write by default. The `bash` tool, Cargo build scripts/proc macros, and host handlers retain the worker's operating-system permissions; the cell policy does not sandbox compilation or the whole agent.
 
 For implementation details, see [RLM Runtime Architecture](rlm-runtime.md).

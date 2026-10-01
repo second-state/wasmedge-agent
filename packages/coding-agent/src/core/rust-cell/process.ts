@@ -1,4 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Duplex } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
+import { StdioBridge } from "./stdio-bridge.js";
 import { MAX_OUTPUT_CHARS } from "./types.js";
 
 export interface ProcOutcome {
@@ -17,6 +20,7 @@ export function runProcess(
 		timeoutMs: number;
 		signal?: AbortSignal;
 		env?: NodeJS.ProcessEnv;
+		bridge?: { token: string; attach: (connection: Duplex) => void };
 		onChunk?: (chunk: string, stream: "stdout" | "stderr") => void;
 	},
 ): Promise<ProcOutcome> {
@@ -35,7 +39,7 @@ export function runProcess(
 			child = spawn(bin, args, {
 				cwd: opts.cwd,
 				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: [opts.bridge ? "pipe" : "ignore", "pipe", "pipe"],
 				env: opts.env ?? process.env,
 			});
 		} catch (err) {
@@ -47,8 +51,14 @@ export function runProcess(
 		let stderr = "";
 		let timedOut = false;
 		let settledEarly = false;
+		let closed = false;
+		let bridgeError: Error | undefined;
+		let bridge: StdioBridge | undefined;
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 
 		const killGroup = () => {
+			if (closed) return;
 			if (child.pid) {
 				try {
 					process.kill(-child.pid, "SIGKILL");
@@ -66,30 +76,61 @@ export function runProcess(
 		const onAbort = () => killGroup();
 		opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+		const output = (text: string, stream: "stdout" | "stderr") => {
+			if (!text) return;
+			if (stream === "stdout") {
+				if (stdout.length < MAX_OUTPUT_CHARS * 2) stdout += text;
+			} else if (stderr.length < MAX_OUTPUT_CHARS * 2) stderr += text;
+			opts.onChunk?.(text, stream);
+		};
+		if (opts.bridge && child.stdin) {
+			bridge = new StdioBridge(
+				child.stdin,
+				opts.bridge.token,
+				(data) => output(stdoutDecoder.write(data), "stdout"),
+				(error) => {
+					bridgeError ??= error;
+					killGroup();
+				},
+			);
+			try {
+				opts.bridge.attach(bridge.connection);
+			} catch (error) {
+				bridge.finish();
+				clearTimeout(timer);
+				opts.signal?.removeEventListener("abort", onAbort);
+				killGroup();
+				settledEarly = true;
+				rejectPromise(error);
+			}
+		}
 		child.stdout?.on("data", (data: Buffer) => {
-			const text = data.toString("utf-8");
-			if (stdout.length < MAX_OUTPUT_CHARS * 2) stdout += text;
-			opts.onChunk?.(text, "stdout");
+			if (bridge) bridge.write(data);
+			else output(stdoutDecoder.write(data), "stdout");
 		});
 		child.stderr?.on("data", (data: Buffer) => {
-			const text = data.toString("utf-8");
-			if (stderr.length < MAX_OUTPUT_CHARS * 2) stderr += text;
-			opts.onChunk?.(text, "stderr");
+			output(stderrDecoder.write(data), "stderr");
 		});
 
 		child.on("error", (err) => {
 			clearTimeout(timer);
 			opts.signal?.removeEventListener("abort", onAbort);
 			settledEarly = true;
+			bridge?.finish();
 			rejectPromise(err);
 		});
 
 		child.on("close", (code) => {
+			closed = true;
 			if (settledEarly) return;
 			clearTimeout(timer);
 			opts.signal?.removeEventListener("abort", onAbort);
+			bridge?.finish();
+			output(stdoutDecoder.end(), "stdout");
+			output(stderrDecoder.end(), "stderr");
+			if (bridgeError) output(`\n${bridgeError.message}\n`, "stderr");
 			resolvePromise({
-				exitCode: code,
+				exitCode: bridgeError && code === 0 ? 1 : code,
 				stdout,
 				stderr,
 				timedOut,
