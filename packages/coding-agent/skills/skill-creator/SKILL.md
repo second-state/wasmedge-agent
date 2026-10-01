@@ -21,7 +21,7 @@ Before writing a Rust skill, read [references/rust-skills.md](references/rust-sk
    - Project skill, shared via the repo: `.wasmedge-agent/skills/<name>/`
    - Personal global skill: `~/.wasmedge-agent/skills/<name>/`
    - Shipped with an npm package: a `skills/` directory in the package, or `pi.skills` paths in its `package.json`
-3. **Scaffold and write** the directory using the layout and frontmatter rules below.
+3. **Scaffold and write** the directory using the layout and frontmatter rules below. For a new project-local Rust skill, `rlm::skills::package(name, description, instructions, source)?` creates the crate and SKILL.md without overwriting existing files; see [the Rust skill contract](references/rust-skills.md#scaffolding-from-a-cell).
 4. **Verify** the skill loads (see Verification).
 
 On a name collision the first skill found wins. Precedence: explicit `--skill` paths and `skills` settings entries, then project, then global, then package, then built-in skills.

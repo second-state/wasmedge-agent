@@ -19,6 +19,7 @@ pub mod msg;
 pub mod observe;
 pub mod prelude;
 pub mod refine;
+pub mod skills;
 mod spawn;
 pub mod state;
 

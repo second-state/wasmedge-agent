@@ -254,6 +254,7 @@ import {
 } from "./session-manager.js";
 import type { SessionStats } from "./session-stats.js";
 import type { SettingsManager } from "./settings-manager.js";
+import { createSkillPackageHostHandler } from "./skill-package.js";
 import { getRustSkillRuntimeInfo, type Skill } from "./skills.js";
 import {
 	parseRefineCommandOptions,
@@ -8541,6 +8542,10 @@ export class AgentSession {
 					if (!this._rustCellProvisioner) throw new Error("sandboxed skill tests are unavailable");
 					await this._rustCellProvisioner.testSkill(reference, signal);
 				},
+			}),
+			"skills.package": createSkillPackageHostHandler({
+				cwd: this._cwd,
+				existingNames: () => this._resourceLoader.getSkills().skills.map((skill) => skill.name),
 			}),
 			"harness.skill.test": async (payload, context) => {
 				const reference = payload.reference;
