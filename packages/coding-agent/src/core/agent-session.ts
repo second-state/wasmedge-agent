@@ -15,7 +15,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -228,6 +228,7 @@ import {
 	type SubagentRuntimeHost,
 } from "./rlm-runtime.js";
 import { listPersistentState, type PersistentStateListing, RustCellProvisioner } from "./rust-cell/index.js";
+import { snapshotWorkspace, WORKSPACE_SEED_DIR } from "./rust-cell/workspace-snapshot.js";
 import {
 	ActionStore,
 	type ActionTicket,
@@ -8421,6 +8422,7 @@ export class AgentSession {
 			this._rustCellProvisioner = new RustCellProvisioner({
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
+				initialWorkspaceDir: this._rustWorkspaceSeedDir(),
 				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
 				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
@@ -8710,6 +8712,11 @@ export class AgentSession {
 	private _createEphemeralRlmSessionDir(): string {
 		this._rlmSessionDir = mkdtempSync(join(tmpdir(), "wasmedge-agent-rlm-"));
 		return this._rlmSessionDir;
+	}
+
+	private _rustWorkspaceSeedDir(): string | undefined {
+		const seed = this._rlmSessionDir ? join(this._rlmSessionDir, WORKSPACE_SEED_DIR) : undefined;
+		return seed && existsSync(seed) ? seed : undefined;
 	}
 
 	/** Context size (tokens) of this session's latest assistant turn, for live subagent display. */
@@ -9450,6 +9457,19 @@ export class AgentSession {
 		const childNodeId = basename(childSessionDir);
 		const sessionName = requestedSessionName ?? createDefaultRlmSubagentSessionName(prompt, childNodeId);
 		if (!requestedSessionName) await this._assertRlmSubagentSessionNameAvailable(sessionName);
+		const parentWorkspace = [
+			this._rustCellProvisioner?.workspaceDir,
+			this._rustWorkspaceDir,
+			this._rustWorkspaceSeedDir(),
+		].find((dir) => dir && existsSync(join(dir, "Cargo.toml")));
+		if (parentWorkspace) {
+			try {
+				snapshotWorkspace(parentWorkspace, join(childSessionDir, WORKSPACE_SEED_DIR));
+			} catch (error) {
+				rmSync(childSessionDir, { recursive: true, force: true });
+				throw error;
+			}
+		}
 		const startedAt = Date.now();
 		const parentAssistantForUsage = this._findLastAssistantMessage();
 		const label = rlmChildLabel(prompt);

@@ -48,6 +48,8 @@ The guest workspace is cloned per session from a prebuilt template (`wasmedge-ag
 
 Discovered Rust skills are mounted into the clone as `skills/<crate>` symlinks and re-exported through `agent_lib::skills`; a skill that fails its probe build is unmounted with a diagnostic instead of breaking cells. See [Skills](skills.md).
 
+Persisted workspaces have their own local Git repository with an initial snapshot and a commit after each successful cell. Commits record the cell source, library and runtime sources, manifests, skill mounts, and `state/` (including blobs); messages contain a sequence number and tool-call ID. Build caches, vendored dependencies, and scratch files are excluded. External skill symlinks record the mount, not the external source contents. Project files and harness stores are outside this repository. Failed cells do not create commits, and snapshots do not roll back runtime side effects. A Git failure after successful execution is reported separately in the tool result without rerunning the cell. Non-persistent sessions do not initialize Git.
+
 Toolchain resolution:
 
 1. `WASMEDGE_AGENT_CARGO`, else `cargo` on PATH, else `~/.cargo/bin/cargo`;
@@ -91,6 +93,8 @@ sequenceDiagram
 |---|---|
 | `src/core/rust-cell/cell-runner.ts` | Compile pipeline, WasmEdge invocation, preopens, result composition, timeouts. |
 | `src/core/rust-cell/index.ts` | Lazy provisioning: toolchain checks, template readiness, workspace clone, skill sync. |
+| `src/core/rust-cell/workspace-history.ts` | Local Git snapshots after successful persisted cells. |
+| `src/core/rust-cell/workspace-snapshot.ts` | Spawn-time library and cache copies with independent skill sources. |
 | `src/core/rust-cell/bridge-server.ts` | Loopback bridge, bearer-token auth, framing, attachment thumbnailing, request dispatch. |
 | `src/core/tools/rust.ts` | Agent tool wrapper and output shaping. |
 | `src/core/agent-session.ts` | RLM policy, child creation, registry, usage attribution, cancellation, and goal handlers. |
@@ -137,14 +141,16 @@ Unknown options fail instead of being ignored. Model search is bounded to active
 
 1. Check `RLM_DEPTH < RLM_MAX_DEPTH`.
 2. Resolve the requested model or inherit the parent model.
-3. Create a `sub-xxxxxxxx` child directory under the parent artifact directory.
+3. Create a `sub-xxxxxxxx` child directory under the parent artifact directory and snapshot the parent's provisioned library, skills, and build cache before admission.
 4. Admit the task into the parent registry and return its `SpawnHandle`.
 5. In detached work, create a child `SessionManager`, `Agent`, and `AgentSession`.
 6. Reuse provider hooks, resource loader, model registry, tools, transport, retry settings, and thinking configuration.
 7. Run the child prompt, retain its session, and update lifecycle state independently of the admission call.
 8. Attribute child usage to the parent assistant turn and persist the attribution.
 
-Children receive incremented `RLM_DEPTH`, the inherited maximum depth, and their own `RLM_SESSION_DIR`. A child provisions its own cell workspace from the shared template — its `rlm::state` and `agent_lib` start fresh, so context isolation extends to workspace state. The default maximum depth is 1, so root sessions may create children and those children may not create grandchildren unless the limit is configured higher.
+Children receive incremented `RLM_DEPTH`, the inherited maximum depth, and their own `RLM_SESSION_DIR`. A child starts with the parent's `agent_lib` as it was at spawn, including helpers and copies of mounted skill sources. The snapshot also carries scaffold dependencies and the build cache; cache reuse still depends on Cargo's freshness checks. The child has a fresh cell source, empty `rlm::state`, and independent Git history. Parent and child library edits are independent. An unprovisioned parent uses its own inherited seed, if present, or the shared template. The default maximum depth is 1, so root sessions may create children and those children may not create grandchildren unless the limit is configured higher.
+
+The frozen seed is stored under the child session directory as `.rust-workspace-seed/`, so delayed startup and daemon restoration before the first cell use the same snapshot. Existing child workspaces survive reload without being overwritten. Root skill mounts remain editable symlinks; inherited child skills are local copies and stay local on reload.
 
 ## Independent Delegation
 

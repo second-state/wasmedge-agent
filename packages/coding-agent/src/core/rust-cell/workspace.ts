@@ -94,10 +94,10 @@ export function resolveTemplateDir(here: string = HERE, executablePath: string =
 
 /** Clone the template into `dir` unless it is already provisioned. clonefile
  * on macOS carries the warm target/ cache for ~free; plain copy elsewhere. */
-export function ensureWorkspaceAt(dir: string): string {
+export function ensureWorkspaceAt(dir: string, sourceDir?: string): string {
 	if (existsSync(join(dir, "Cargo.toml"))) return dir;
 	mkdirSync(dir, { recursive: true });
-	const template = resolveTemplateDir();
+	const template = sourceDir ?? resolveTemplateDir();
 	// Copy the template's contents (`src/.`), not the directory itself: `dir`
 	// may already exist — the provisioner's mkdtemp fallback pre-creates it,
 	// and skills may already be synced into it — and `cp src dst` onto an
@@ -282,6 +282,7 @@ function writeSkillSymlinks(workspaceDir: string, skills: RustSkillMount[]): voi
 		const link = join(mountDir, skill.crateName);
 		const current = lstatSync(link, { throwIfNoEntry: false });
 		if (current) {
+			if (current.isDirectory() && resolve(link) === resolve(skill.cratePath)) continue;
 			if (current.isSymbolicLink() && readlinkSync(link) === skill.cratePath) continue;
 			rmSync(link, { recursive: true, force: true });
 		}

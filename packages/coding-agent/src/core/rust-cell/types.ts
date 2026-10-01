@@ -2,6 +2,7 @@
 
 import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../host-bridge/types.js";
 import type { BridgeServer } from "./bridge-server.js";
+import type { WorkspaceHistory } from "./workspace-history.js";
 
 export interface LibFile {
 	/** Path inside agent_lib/, e.g. "src/helpers/log_parse.rs". */
@@ -23,6 +24,10 @@ export interface CellResult {
 	stderr: string;
 	compileDiagnostics?: string;
 	exitCode?: number;
+	/** Successful session snapshot, when persistence is enabled. */
+	workspaceCommit?: string;
+	/** The cell succeeded but its snapshot failed; execution must not be retried. */
+	workspaceCommitError?: string;
 	durationMs: number;
 	compileMs: number;
 	runMs: number;
@@ -57,6 +62,8 @@ export interface RunnerOptions {
 	harnessDir?: string;
 	/** Global harness state dir, preopened rw at /agent/harness-global. */
 	globalHarnessDir?: string;
+	/** Omitted for ephemeral sessions. */
+	history?: WorkspaceHistory;
 }
 
 export interface PerCallOptions {

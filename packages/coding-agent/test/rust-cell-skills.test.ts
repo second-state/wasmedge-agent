@@ -8,8 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, type RustSkillMount, syncRustSkills } from "../src/core/rust-cell/workspace.js";
+import { snapshotWorkspace } from "../src/core/rust-cell/workspace-snapshot.js";
 
 function writeFakeWorkspace(root: string): string {
 	const workspace = join(root, "workspace");
@@ -99,6 +101,33 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 	const tempDirs: string[] = [];
 	afterAll(() => {
 		for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("compiles a child skill snapshot even after its shared source breaks", { timeout: 300_000 }, async () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-child-"));
+		tempDirs.push(root);
+		const parent = ensureWorkspaceAt(join(root, "parent"));
+		const skill = writeSkillCrate(root, "shared", "pub fn value() -> u32 { 42 }\n");
+		syncRustSkills(parent, [skill], { cargoBin: toolchain?.cargoBin });
+		const seed = join(root, "seed");
+		snapshotWorkspace(parent, seed);
+		writeFileSync(join(skill.cratePath, "src/lib.rs"), "not Rust\n");
+		const child = new RustCellProvisioner({
+			cwd: root,
+			workspaceDir: join(root, "child"),
+			initialWorkspaceDir: seed,
+			rustSkills: [skill],
+		});
+		try {
+			const runner = await child.ensure();
+			const result = await runner.execute({
+				code: 'fn main() { println!("{}", agent_lib::skills::shared::value()); }',
+			});
+			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+			expect(result.stdout.trim()).toBe("42");
+		} finally {
+			await child.dispose();
+		}
 	});
 
 	it("mounts a healthy skill, unmounts a broken one, and cells call the survivor", { timeout: 300_000 }, async () => {
