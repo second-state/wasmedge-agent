@@ -18,6 +18,32 @@ skill (with a load warning):
 
 For a skill named `word-count`, cells call `agent_lib::skills::word_count`.
 
+## Scaffolding from a Cell
+
+For a new project-local skill, call:
+
+```rust
+let skill = rlm::skills::package(name, description, instructions, source)?;
+println!("{}: {}", skill.path, skill.rust_use);
+```
+
+Signature: `package(name: &str, description: &str, instructions: &str, source: &str)
+-> Result<rlm::skills::PackagedSkill>`. The reply contains `path` (an absolute guest
+path), `crate_name`, `rust_use`, and `requires_reload` (always true).
+
+The host creates `SKILL.md`, a manifest inheriting the fixed workspace dependencies,
+and `src/lib.rs` under the project's config directory. Pass complete library source
+including deterministic unit tests; put every public signature and usage instructions
+in `instructions`. Names must start with a lowercase letter and follow the frontmatter
+rules; reserved Rust/workspace crate names are rejected. Description, instructions
+and source are limited to 1024, 65536 and 262144 characters respectively.
+
+The operation rejects loaded-name collisions, existing destinations and symlinked
+parent directories. It only creates files: reload with `/reload` (or start a new
+session) to mount them, then use the Quality Gate below to register the skill.
+It does not add crates, create global skills, overwrite existing skills or certify
+the supplied source. Existing skills can still be edited through their project files.
+
 ## Minimal Template
 
 ```

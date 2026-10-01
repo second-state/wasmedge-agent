@@ -136,6 +136,7 @@ rlm::state::{set, get, keys, remove} · blob variants
 rlm::msg::{send_to_parent, send_to_child, send_to_sibling, broadcast, list_agents}
 rlm::goal::* · rlm::compact::* · rlm::heartbeat::* · rlm::refine::*
 rlm::harness::{local, global}
+rlm::skills::package(name, description, instructions, source)
 rlm::display::{diff, attach_image}
 rlm::host_request(request_type, payload)
 ```
@@ -203,6 +204,10 @@ On reload, the aggregate is reapplied to the parent message. Context-tree report
 ## Continual Harness State
 
 `rlm::harness` is a persisted state ledger for prompt notes, memories, reusable skill references, sub-agent specifications, and refinement events. It is not a second execution engine.
+
+`rlm::skills::package` sends `skills.package` to the host to create a project-local Rust skill under the project's config directory (`.wasmedge-agent/skills/<name>/`, with the existing config-directory fallback). The host generates `SKILL.md`, `Cargo.toml` with fixed workspace dependencies, and `src/lib.rs` from the supplied source. Names must start with a lowercase letter, use lowercase letters/digits/single hyphens, and fit 64 characters; reserved crate names and collisions with loaded skills are rejected. Existing destinations and symlinked parent directories are never overwritten or followed. The response contains the guest `path`, `crate_name`, `rust_use`, and `requires_reload: true`.
+
+Packaging only creates files; it does not compile, test, mount, or register a skill. Reload with `/reload` or start a new session for normal discovery and mounting, then register through the tested harness API below. Supply complete library source with deterministic unit tests and document public signatures in `instructions`. This API creates project-local skills only, cannot add dependencies or overwrite an existing skill, and does not change the trust boundary for host compilation. Concurrent host filesystem changes remain outside its path checks.
 
 Session-local state lives in the session artifact directory under `harness/harness_state.json`; explicitly global entries live under `~/.wasmedge-agent/harness/`. These stores are host-owned and are not preopened into cells. All `rlm::harness` calls, including reads and non-skill edits, require a live bridge and use `harness.request`. The host selects the store from the session and scope, reloads it for each request, and saves atomically (tmp + rename). Guest API signatures and the schema remain unchanged; standalone guests without a bridge can no longer use harness CRUD. There is no cross-process transaction lock.
 

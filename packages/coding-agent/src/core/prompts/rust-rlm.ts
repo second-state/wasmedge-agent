@@ -58,6 +58,10 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
   crate's tests in WasmEdge before saving. Write deterministic unit/integration tests
   using only /scratch; do not run generated skill tests as native host binaries.
   Use the harness APIs to edit entries.
+- \`rlm::skills::package(name, description, instructions, source)?\` creates a new
+  project-local Rust skill without overwriting files. Supply public signatures in
+  instructions and deterministic unit tests in source. Reload with /reload to mount
+  it before calling or registering it; packaging alone does not validate the skill.
 
 Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
 dependencies yourself. If a task genuinely needs another crate, tell the user (they
