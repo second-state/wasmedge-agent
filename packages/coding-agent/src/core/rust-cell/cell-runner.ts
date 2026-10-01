@@ -3,7 +3,8 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import {
@@ -17,6 +18,8 @@ import {
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g;
+// (module (func (export "_start"))) — no imports, memory, or side effects.
+const PREOPEN_PROBE = Buffer.from("0061736d0100000001040160000003020100070a01065f737461727400000a040102000b", "hex");
 
 interface ProcOutcome {
 	exitCode: number | null;
@@ -37,6 +40,15 @@ function runProcess(
 		onChunk?: (chunk: string, stream: "stdout" | "stderr") => void;
 	},
 ): Promise<ProcOutcome> {
+	if (opts.signal?.aborted || opts.timeoutMs <= 0) {
+		return Promise.resolve({
+			exitCode: null,
+			stdout: "",
+			stderr: "",
+			timedOut: opts.timeoutMs <= 0,
+			aborted: opts.signal?.aborted ?? false,
+		});
+	}
 	return new Promise((resolvePromise, rejectPromise) => {
 		let child: ChildProcess;
 		try {
@@ -145,45 +157,63 @@ export class CellRunner {
 
 	private async executeInner(input: CellInput, per: PerCallOptions): Promise<CellResult> {
 		const started = Date.now();
+		const deadline = AbortSignal.timeout(this.opts.cellTimeoutMs);
+		const signal = per.signal ? AbortSignal.any([per.signal, deadline]) : deadline;
+		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
+		const interruptedStatus = () => (per.signal?.aborted ? "aborted" : "timeout");
 		const ws = this.opts.workspaceDir;
 		ensureStateDir(ws);
 
 		let applied: AppliedLib | undefined;
 		let libApplied = false;
-		if (input.lib && input.lib.length > 0) {
-			applied = applyLib(ws, input.lib);
-			libApplied = true;
-		}
-		writeFileSync(join(ws, "cell", "src", "main.rs"), input.code);
-
-		const compileStarted = Date.now();
-		// Gate waiting counts against the cell budget: the caller sees honest
-		// wall time, and a saturated host cannot queue unbounded work. An abort
-		// while still queued surfaces as the same "aborted" result a mid-build
-		// abort produces.
-		const build = await withBuildPermit(
-			() =>
-				runProcess(
-					this.opts.cargoBin,
-					["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
-					{
-						cwd: ws,
-						timeoutMs: this.opts.cellTimeoutMs,
-						signal: per.signal,
-					},
-				),
-			per.signal,
-		).catch((error) => {
-			if (per.signal?.aborted) {
-				return { exitCode: null, stdout: "", stderr: "", aborted: true, timedOut: false } satisfies ProcOutcome;
+		const mainPath = join(ws, "cell", "src", "main.rs");
+		const previousMain = existsSync(mainPath) ? readFileSync(mainPath, "utf-8") : null;
+		let mainWritten = false;
+		let buildSucceeded = false;
+		let compileStarted = Date.now();
+		let build: ProcOutcome;
+		try {
+			if (input.lib && input.lib.length > 0) {
+				applied = applyLib(ws, input.lib);
+				libApplied = true;
 			}
-			throw error;
-		});
+			mainWritten = true;
+			writeFileSync(mainPath, input.code);
+			compileStarted = Date.now();
+			// The same deadline covers waiting for a permit, building, probing,
+			// and running. No phase may start after cancellation or budget expiry.
+			build = await withBuildPermit(
+				() =>
+					runProcess(
+						this.opts.cargoBin,
+						["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
+						{
+							cwd: ws,
+							timeoutMs: remainingMs(),
+							signal,
+						},
+					),
+				signal,
+			).catch((error) => {
+				if (signal.aborted) {
+					return { exitCode: null, stdout: "", stderr: "", aborted: true, timedOut: false } satisfies ProcOutcome;
+				}
+				throw error;
+			});
+			buildSucceeded = build.exitCode === 0 && !build.aborted && !build.timedOut;
+		} finally {
+			if (!buildSucceeded) {
+				if (applied) revertLib(applied);
+				if (mainWritten) {
+					if (previousMain === null) rmSync(mainPath, { force: true });
+					else writeFileSync(mainPath, previousMain);
+				}
+			}
+		}
 		const compileMs = Date.now() - compileStarted;
 
 		if (build.aborted || build.timedOut) {
-			if (applied) revertLib(ws, applied);
-			return this.result(build.aborted ? "aborted" : "timeout", {
+			return this.result(interruptedStatus(), {
 				started,
 				compileMs,
 				runMs: 0,
@@ -194,7 +224,6 @@ export class CellRunner {
 		}
 
 		if (build.exitCode !== 0) {
-			if (applied) revertLib(ws, applied);
 			return this.result("compile_error", {
 				started,
 				compileMs,
@@ -204,8 +233,6 @@ export class CellRunner {
 				compileDiagnostics: truncate(renderedDiagnostics(build.stdout, build.stderr)),
 			});
 		}
-
-		await this.probeLibReadonly();
 
 		// D14 rich output: synthesize a diff per applied lib file for the TUI.
 		const diffs: CellResult["diffs"] =
@@ -221,6 +248,18 @@ export class CellRunner {
 				: [];
 		const attachments: CellResult["attachments"] = [];
 		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
+		const probe = await this.probeLibReadonly(remainingMs(), signal);
+		if (probe && (probe.aborted || probe.timedOut || probe.exitCode !== 0)) {
+			return this.result(probe.aborted || probe.timedOut ? interruptedStatus() : "error", {
+				started,
+				compileMs,
+				runMs: 0,
+				libApplied,
+				libReverted: false,
+				diffs,
+				stderr: truncate(`readonly preopen probe failed; the cell did not run\n${probe.stderr}${probe.stdout}`),
+			});
+		}
 
 		const bridge = this.opts.bridge;
 		const cellEnv: Record<string, string> = { ...this.opts.cellEnv };
@@ -242,13 +281,12 @@ export class CellRunner {
 		}
 
 		const runStarted = Date.now();
-		const remaining = Math.max(1_000, this.opts.cellTimeoutMs - (runStarted - started));
 		let exec: ProcOutcome;
 		try {
 			exec = await runProcess(this.opts.wasmedgeBin, this.wasmedgeArgs(cellEnv), {
 				cwd: ws,
-				timeoutMs: remaining,
-				signal: per.signal,
+				timeoutMs: remainingMs(),
+				signal,
 				onChunk: per.onChunk,
 			});
 		} finally {
@@ -271,8 +309,7 @@ export class CellRunner {
 			stderr: truncate(exec.stderr),
 			exitCode: exec.exitCode ?? undefined,
 		};
-		if (exec.aborted) return this.result("aborted", base);
-		if (exec.timedOut) return this.result("timeout", base);
+		if (exec.aborted || exec.timedOut) return this.result(interruptedStatus(), base);
 		return this.result(exec.exitCode === 0 ? "ok" : "error", base);
 	}
 
@@ -307,22 +344,27 @@ export class CellRunner {
 	 * fall back to rw, which would let cells bypass the declarative lib flow
 	 * (D14). Verified working normally on 0.17.1; see
 	 * docs/wasmedge-readonly-preopen-investigation.md. */
-	private async probeLibReadonly(): Promise<void> {
+	private async probeLibReadonly(timeoutMs: number, signal: AbortSignal): Promise<ProcOutcome | undefined> {
 		if (this.probed) return;
-		this.probed = true;
 		const ws = this.opts.workspaceDir;
-		const probe = await runProcess(
-			this.opts.wasmedgeBin,
-			[
-				"run",
-				"--dir",
-				`/agent/lib:${join(ws, "agent_lib")}:readonly`,
-				join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"),
-			],
-			{ cwd: ws, timeoutMs: 10_000 },
-		);
-		if (probe.stderr.includes("Bind guest directory failed")) {
-			this.mountLibReadonly = false;
+		const dir = mkdtempSync(join(tmpdir(), "cell-preopen-probe-"));
+		try {
+			const wasm = join(dir, "probe.wasm");
+			writeFileSync(wasm, PREOPEN_PROBE);
+			const probe = await runProcess(
+				this.opts.wasmedgeBin,
+				["run", "--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`, wasm],
+				{ cwd: ws, timeoutMs: Math.min(10_000, timeoutMs), signal },
+			);
+			if (!probe.aborted && !probe.timedOut && probe.exitCode === 0) {
+				this.probed = true;
+				if (`${probe.stderr}${probe.stdout}`.includes("Bind guest directory failed")) {
+					this.mountLibReadonly = false;
+				}
+			}
+			return probe;
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	}
 
