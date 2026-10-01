@@ -2,6 +2,7 @@
 
 import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../host-bridge/types.js";
 import type { BridgeServer } from "./bridge-server.js";
+import type { CellResourceLimits } from "./resource-limits.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
 
 export interface LibFile {
@@ -43,7 +44,7 @@ export interface CellResult {
 	sentAgentMessages: CellSentAgentMessage[];
 }
 
-export interface RunnerOptions {
+export interface RunnerOptions extends CellResourceLimits {
 	/** Project directory mounted at /workspace. */
 	cwd: string;
 	/** Session workspace directory (the cargo workspace lives here). */

@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { type ProcOutcome, runProcess } from "./process.js";
+import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
 import { MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { syncRustSkills } from "./workspace.js";
 import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
 
-interface SkillTestOptions {
+interface SkillTestOptions extends CellResourceLimits {
 	workspaceDir: string;
 	cargoBin: string;
 	wasmedgeBin: string;
@@ -26,6 +27,7 @@ function requireSuccess(result: ProcOutcome, phase: string): void {
 /** Compile test binaries only on the host; execute their WASI artifacts in
  * WasmEdge without the session's project, state, harness, or bridge mounts. */
 export async function testRustSkill(reference: Record<string, unknown>, options: SkillTestOptions): Promise<void> {
+	const resourceArgs = wasmedgeResourceArgs(options);
 	const match =
 		typeof reference.use === "string"
 			? /^agent_lib::skills::([a-zA-Z_][a-zA-Z0-9_]*)(?:::[a-zA-Z_][a-zA-Z0-9_]*)*$/.exec(reference.use)
@@ -101,7 +103,7 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 		for (const artifact of artifacts) {
 			const result = await runProcess(
 				options.wasmedgeBin,
-				["run", "--dir", `/scratch:${scratch}`, artifact, "--test-threads=1", "--nocapture"],
+				["run", ...resourceArgs, "--dir", `/scratch:${scratch}`, artifact, "--test-threads=1", "--nocapture"],
 				{ cwd: workspace, timeoutMs: deadline - Date.now(), signal },
 			);
 			requireSuccess(result, "sandboxed skill tests");

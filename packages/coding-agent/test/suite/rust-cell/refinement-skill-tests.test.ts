@@ -30,11 +30,19 @@ describe.skipIf(!available)("refinement skill gate (real WasmEdge, faux provider
 		writeFileSync(join(crate, "SKILL.md"), "---\nname: example\ndescription: Test example\n---\nCall run().\n");
 		writeFileSync(join(crate, "Cargo.toml"), '[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n');
 		const source = join(crate, "src/lib.rs");
-		writeFileSync(source, "pub fn run() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
+		writeFileSync(
+			source,
+			`pub fn run() -> u32 { 42 }
+#[test] fn answer() {
+    assert_eq!(run(), 42);
+    assert_eq!(std::arch::wasm32::memory_grow::<0>(128), usize::MAX);
+}`,
+		);
 		const loaded = loadSkillsFromDir({ dir: root, source: "project" });
 		expect(loaded.skills).toHaveLength(1);
 		harness = await createHarness({
 			persistSession: true,
+			settings: { rustCell: { cellTimeoutMs: 240_000, cellGasLimit: 1_000_000, cellMemoryPageLimit: 128 } },
 			resourceLoader: createTestResourceLoader({ skills: loaded.skills }),
 		});
 		const h = harness;
@@ -69,6 +77,14 @@ describe.skipIf(!available)("refinement skill gate (real WasmEdge, faux provider
 		expect(updated.appliedEdits[0]).toMatchObject({
 			applied: false,
 			error: expect.stringContaining("sandboxed skill tests failed"),
+		});
+		expect(JSON.parse(readFileSync(created.harnessStatePath, "utf8")).entries.skill.example).toEqual(before);
+		writeFileSync(source, "pub fn run() -> u32 { 42 }\n#[test] fn hangs() { loop { std::hint::black_box(1); } }");
+		h.setResponses([propose("update")]);
+		const exhausted = await h.session.refine();
+		expect(exhausted.appliedEdits[0]).toMatchObject({
+			applied: false,
+			error: expect.stringMatching(/cost (?:exceeded limit|limit exceeded)/i),
 		});
 		expect(JSON.parse(readFileSync(created.harnessStatePath, "utf8")).entries.skill.example).toEqual(before);
 	});

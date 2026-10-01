@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { type ProcOutcome, runProcess } from "./process.js";
+import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
 
@@ -38,8 +39,10 @@ export class CellRunner {
 	private mountLibReadonly = true;
 	private probed = false;
 	private readonly opts: RunnerOptions;
+	private readonly resourceArgs: string[];
 
 	constructor(opts: RunnerOptions) {
+		this.resourceArgs = wasmedgeResourceArgs(opts);
 		this.opts = opts;
 	}
 
@@ -221,7 +224,7 @@ export class CellRunner {
 
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
-		const args: string[] = ["run"];
+		const args: string[] = ["run", ...this.resourceArgs];
 		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}`);
 		if (this.mountLibReadonly) {
 			args.push("--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`);

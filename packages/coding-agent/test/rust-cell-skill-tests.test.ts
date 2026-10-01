@@ -101,4 +101,19 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 			"require an agent_lib",
 		);
 	});
+
+	it("enforces gas and memory limits in skill test modules", { timeout: 180_000 }, async () => {
+		const f = fixture("#[test] fn hangs() { loop { std::hint::black_box(1); } }");
+		await expect(testRustSkill(reference, { ...f.options, cellGasLimit: 1_000_000 })).rejects.toThrow(
+			/cost (?:exceeded limit|limit exceeded)/i,
+		);
+		writeFileSync(
+			join(f.cratePath, "src/lib.rs"),
+			`#[test] fn memory_limit() {
+    assert_eq!(std::arch::wasm32::memory_grow::<0>(128), usize::MAX);
+}`,
+		);
+		await expect(testRustSkill(reference, { ...f.options, cellMemoryPageLimit: 128 })).resolves.toBeUndefined();
+		await expect(testRustSkill(reference, f.options)).rejects.toThrow(/sandboxed skill tests failed/);
+	});
 });

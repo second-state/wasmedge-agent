@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir, getProjectConfigDir } from "../config.js";
+import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
 
 const RECENT_MODELS_LIMIT = 20;
 export const DEFAULT_IDLE_EVICTION_MINUTES = 90;
@@ -68,7 +69,7 @@ export interface BundledSkillsSettings {
 	websearch?: boolean; // default: true
 }
 
-export interface RustCellSettings {
+export interface RustCellSettings extends CellResourceLimits {
 	cellTimeoutMs?: number; // per-cell budget (compile + run); default: 120000
 }
 
@@ -930,6 +931,15 @@ export class SettingsManager {
 		const raw = this.settings.rustCell?.cellTimeoutMs;
 		if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 1_000) return undefined;
 		return Math.floor(raw);
+	}
+
+	getRustCellResourceLimits(): CellResourceLimits {
+		const limits = {
+			cellGasLimit: this.settings.rustCell?.cellGasLimit,
+			cellMemoryPageLimit: this.settings.rustCell?.cellMemoryPageLimit,
+		};
+		validateCellResourceLimits(limits);
+		return limits;
 	}
 
 	getShellCommandPrefix(): string | undefined {

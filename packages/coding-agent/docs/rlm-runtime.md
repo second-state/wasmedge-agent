@@ -42,6 +42,8 @@ Each `rust` tool call runs one complete program:
 
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and functions promoted into `agent_lib`, are available to every later cell.
 
+Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example. Network egress restrictions remain unenforced by the runtime.
+
 ## Workspace Lifecycle
 
 The guest workspace is cloned per session from a prebuilt template (`wasmedge-agent-runtime/template`): a cargo workspace holding `agent_lib` (the model-extendable prelude), `cell` (the compilation target), and `rlm` (the host-bridge shim). The template is vendored (`vendor/` + a committed crates-io redirect) and warm-built once — at install time or on first use — so clones build cells offline in seconds; on macOS the clone uses clonefile and carries the compiled `target/` for free.

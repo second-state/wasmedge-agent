@@ -204,6 +204,8 @@ An installed Rust crate skill is real code on disk that adds executable function
 
 This gate validates the source snapshot at registration time. Later source edits, ordinary cell/library edits, and manual harness file writes are not automatically tested. Harness preopens remain writable, so raw file writes can bypass the API gate. Passing tests does not guarantee task correctness. See the [Rust skill authoring guide](../skills/skill-creator/references/rust-skills.md#quality-gate).
 
+Configured `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` also apply to each WasmEdge test module. Exceeding gas or failing a test due to memory exhaustion rejects registration. These optional limits do not constrain Cargo or total host memory; the existing wall-time budget still covers queueing, compilation, and execution.
+
 ## Skill Commands
 
 Skills register as `/skill:name` commands:
