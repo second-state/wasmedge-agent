@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
+import { validateSkillTestImports } from "./skill-test-imports.js";
 import { MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { syncRustSkills } from "./workspace.js";
 import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
@@ -97,13 +99,28 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 			artifacts.add(artifact);
 		}
 		if (artifacts.size === 0) throw new Error("skill test build produced no test modules");
+		// Inspect every artifact before any test can execute, including start
+		// functions. Missing bridge credentials alone do not disable WASI sockets.
+		for (const artifact of artifacts) {
+			await validateSkillTestImports(await readFile(artifact, { signal }), signal);
+		}
 		const scratch = join(root, "scratch");
 		mkdirSync(scratch);
 		let passed = 0;
 		for (const artifact of artifacts) {
 			const result = await runProcess(
 				options.wasmedgeBin,
-				["run", ...resourceArgs, "--dir", `/scratch:${scratch}`, artifact, "--test-threads=1", "--nocapture"],
+				// Execute the inspected Wasm code, never embedded AOT native code.
+				[
+					"run",
+					"--force-interpreter",
+					...resourceArgs,
+					"--dir",
+					`/scratch:${scratch}`,
+					artifact,
+					"--test-threads=1",
+					"--nocapture",
+				],
 				{ cwd: workspace, timeoutMs: deadline - Date.now(), signal },
 			);
 			requireSuccess(result, "sandboxed skill tests");

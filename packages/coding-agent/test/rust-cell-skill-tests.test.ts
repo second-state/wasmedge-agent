@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import * as cellProcess from "../src/core/rust-cell/process.js";
 import { testRustSkill } from "../src/core/rust-cell/skill-tests.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, syncRustSkills } from "../src/core/rust-cell/workspace.js";
@@ -20,14 +23,14 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 	afterAll(() => {
 		for (const path of tempDirs) rmSync(path, { recursive: true, force: true });
 	});
-	function fixture(source: string) {
+	function fixture(source: string, dependencies = "") {
 		const root = mkdtempSync(join(tmpdir(), "skill-test-fixture-"));
 		tempDirs.push(root);
 		const workspace = ensureWorkspaceAt(join(root, "workspace"));
 		const cratePath = join(root, "example");
 		mkdirSync(join(cratePath, "src"), { recursive: true });
 		const cargoTomlPath = join(cratePath, "Cargo.toml");
-		writeFileSync(cargoTomlPath, '[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n');
+		writeFileSync(cargoTomlPath, `[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n${dependencies}`);
 		writeFileSync(join(cratePath, "src/lib.rs"), source);
 		syncRustSkills(workspace, [{ name: "example", crateName: "example", cratePath, cargoTomlPath }]);
 		return {
@@ -59,7 +62,15 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		const integration = join(f.cratePath, "tests/integration.rs");
 		writeFileSync(integration, "#[test] fn integration() { assert_eq!(example::value(), 42); }");
 		writeFileSync(join(f.workspace, "cell/src/main.rs"), "not compilable cell source");
-		await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
+		const processes = vi.spyOn(cellProcess, "runProcess");
+		try {
+			await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
+			const executions = processes.mock.calls.filter(([bin]) => bin === toolchain!.wasmedgeBin);
+			expect(executions).toHaveLength(2);
+			for (const [, args] of executions) expect(args).toContain("--force-interpreter");
+		} finally {
+			processes.mockRestore();
+		}
 		expect(readFileSync(join(f.workspace, "cell/src/main.rs"), "utf8")).toBe("not compilable cell source");
 		expect(readFileSync(join(f.cratePath, "src/lib.rs"), "utf8")).toBe(source);
 		expect(existsSync(join(f.root, "result"))).toBe(false);
@@ -68,6 +79,58 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 			/sandboxed skill tests failed.*integration failure/s,
 		);
 	});
+
+	it(
+		"rejects socket-capable artifacts before running any test or opening a connection",
+		{ timeout: 300_000 },
+		async () => {
+			let connections = 0;
+			const server = createServer((socket) => {
+				connections++;
+				socket.destroy();
+			});
+			await new Promise<void>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(0, "127.0.0.1", resolve);
+			});
+			try {
+				const port = (server.address() as AddressInfo).port;
+				const f = fixture(
+					`pub fn connect() { wasmedge_wasi_socket::TcpStream::connect("127.0.0.1:${port}").unwrap(); }
+#[test] fn pure() { assert_eq!(2 + 2, 4); }`,
+					'\n[dependencies]\nwasmedge_wasi_socket = "0.5.5"\n',
+				);
+				mkdirSync(join(f.cratePath, "tests"));
+				writeFileSync(join(f.cratePath, "tests/network.rs"), "#[test] fn network() { example::connect(); }");
+				const project = join(f.root, "project");
+				mkdirSync(project);
+				// Positive control: this fixture really connects in an ordinary T1
+				// cell. The policy below is specific to the sandboxed test runner.
+				const runner = new CellRunner({
+					cwd: project,
+					workspaceDir: f.workspace,
+					cargoBin: toolchain!.cargoBin,
+					wasmedgeBin: toolchain!.wasmedgeBin,
+					cellTimeoutMs: 120_000,
+				});
+				const control = await runner.execute({ code: "fn main() { agent_lib::skills::example::connect(); }" });
+				expect(control, control.compileDiagnostics ?? control.stderr).toMatchObject({ status: "ok" });
+				await vi.waitFor(() => expect(connections).toBe(1));
+				const processes = vi.spyOn(cellProcess, "runProcess");
+				try {
+					await expect(testRustSkill(reference, f.options)).rejects.toThrow(
+						/skill test import not allowed.*sock_/,
+					);
+					expect(processes.mock.calls.filter(([bin]) => bin === toolchain!.wasmedgeBin)).toHaveLength(0);
+					expect(connections).toBe(1);
+				} finally {
+					processes.mockRestore();
+				}
+			} finally {
+				await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+			}
+		},
+	);
 
 	it("rejects failing assertions, compile errors, and crates without active tests", { timeout: 180_000 }, async () => {
 		const f = fixture("#[test] fn fails() { assert_eq!(1, 2); }");

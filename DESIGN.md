@@ -516,6 +516,8 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 **D19 登錄閘實作（2026-10-01）**：host `/refine`（含 auto-refine、global scope 與回滾重新登錄）對 skill create/update 強制測試當下掛載 crate：在 workspace 副本執行 `cargo test --release --offline --target wasm32-wasip1 --no-run --lib --tests`，再以 WasmEdge 執行產物。要求標準 Rust test harness、至少一個非 ignored 測試通過、所有測試 module 成功；無 runtime、未掛載、編譯／測試失敗、逾時均拒絕該 edit，取消則停止本次 apply。失敗 update 保留原 entry；非 skill edits 與 delete 不需此 gate。測試只有 disposable `/scratch` preopen，沒有 project、state、harness 或 bridge credentials；不跑 doctests，沒有測試覆蓋率／任務正確性保證。預算沿用 `rustCell.cellTimeoutMs`，計入排隊、編譯、執行；初次 runtime provisioning 仍沿原本 lifecycle。
 
+**測試 import 政策（2026-10-01）**：skill 測試不需 bridge，現在於執行任何 test module 之前檢查所有編譯產物，只允許明列的非網路 WASI Preview 1 function imports。WASI socket／DNS、plugin、未知 module/function 或非 function imports 均拒絕，未使用的 import 也不放行。Host 以 JavaScript engine validate/compile module 並檢查 imports，不 instantiate 或執行 guest code；無法驗證（含 host engine 不支援的 Wasm features）同樣拒絕。實際測試仍只由 WasmEdge 以 `--force-interpreter` 執行已檢查的 Wasm code，避免 embedded AOT native payload 取代它；只有 disposable scratch，不傳入任何對外連線的 socket。檢查納入既有時間預算，取消／逾時後不執行測試。這只收緊 skill 測試的 guest 能力；一般 T1 cells 的 socket bridge 與網路缺口、host Cargo build scripts/proc macros 的信任邊界不變。
+
 **Guest API 閘（2026-10-01）**：`rlm::harness::{local,global}` 的所有 CRUD、overview 與 refinement event 操作改走 `harness.request`；host 從 session/scope 決定 store，不接受 guest 指定路徑或整份 state。`create_skill`、`update_skill` 與 `update("skill", …)` 由 host 驗證 reference、共用 WasmEdge 測試器、再保存 entry；不接受 guest 自報的測試結果、version/source。一般 update 測試既有 reference，明確 update 測試新 reference。測試後 host 無條件重載 store；同一 entry 在等待期間被修改時拒絕更新，其他 entry 的修改會保留。Skill mutation request 使用 `RLM_CELL_TIMEOUT_MS`（runner 注入）的等待預算，仍受 parent cell 剩餘時間限制。Bridge 以獨立於 payload 的 context 傳遞 AbortSignal；cell deadline、abort、end 或連線關閉會取消此測試。Rust API signatures/schema 不變，但無 bridge 的 standalone guest 現在連非 skill CRUD 也會失敗。
 
 **Harness 檔案邊界（2026-10-01）**：移除 `/agent/harness`、`/agent/harness-global` preopens。Runner 在編譯前與執行前，檢查 `/workspace`、`/agent/state`、`/scratch` 的實際路徑不得涵蓋或落在 local/global harness store 內；解析已存在的 symlink 與尚未建立 store 的祖先，也檢查既存 state-file symlink 目標。專案與 session/agent storage 必須分離；以 home 或包含 session storage 的專案為 cwd 可能被拒絕。此檢查不掃描 host 建立的 hard links，也不提供跨進程交易鎖或抵禦 host 同時更動檔案系統。
@@ -686,7 +688,7 @@ wasmedge-agent/
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
-- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD API 已共用測試器；原始檔案寫入限制與 `skills.package` scaffold 尚待實作。
+- **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。`skills.package` scaffold 尚待實作，一般 cell 網路隔離仍屬 T2。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。
 
 ---
