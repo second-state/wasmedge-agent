@@ -206,6 +206,7 @@ import {
 	type RefinementResult,
 	reviewAutoRefine,
 	saveHarnessState,
+	testRefinementSkills,
 } from "./refinement/index.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
@@ -7642,9 +7643,29 @@ export class AgentSession {
 		}
 		// The caller has already set _refineInFlight and waited for agent idle.
 		// Disconnect only for the brief apply + save + reconnect critical section.
-		this._disconnectFromAgent();
 
 		try {
+			const proposal = {
+				...plan.proposal,
+				edits: plan.proposal.edits.map((edit) => {
+					const localPrefix = "local:";
+					const globalPrefix = "global:";
+					return {
+						...edit,
+						id: edit.id?.startsWith(localPrefix)
+							? edit.id.slice(localPrefix.length)
+							: edit.id?.startsWith(globalPrefix)
+								? edit.id.slice(globalPrefix.length)
+								: edit.id,
+					};
+				}),
+			};
+			const skillTestResults = await testRefinementSkills(
+				proposal,
+				this._rustCellProvisioner?.testSkill.bind(this._rustCellProvisioner),
+				refineAbort.signal,
+			);
+			this._disconnectFromAgent();
 			const globalHarnessStateDir = getGlobalHarnessStateDir();
 			const localHarnessStateDir = this._localHarnessStateDir();
 			const requestedScope = options.global ? "global" : "local";
@@ -7671,21 +7692,7 @@ export class AgentSession {
 			// Re-read the target state immediately before applying so concurrent cell
 			// (`rlm.harness`) writes during the LLM pass are not clobbered.
 			const state = loadHarnessState(targetHarnessStateDir, targetScope);
-			const proposal = {
-				...plan.proposal,
-				edits: plan.proposal.edits.map((edit) => {
-					const localPrefix = "local:";
-					const globalPrefix = "global:";
-					return {
-						...edit,
-						id: edit.id?.startsWith(localPrefix)
-							? edit.id.slice(localPrefix.length)
-							: edit.id?.startsWith(globalPrefix)
-								? edit.id.slice(globalPrefix.length)
-								: edit.id,
-					};
-				}),
-			};
+
 			if (this._disposed || refineAbort.signal.aborted) {
 				throw new Error("Refinement cancelled because the session was disposed.");
 			}
@@ -7694,6 +7701,7 @@ export class AgentSession {
 				rollbackOf: plan.rollbackOf,
 				scope: targetScope,
 				baselineState: plan.baselineState,
+				skillTestResults,
 			});
 			result.harnessStatePath = saveHarnessState(targetHarnessStateDir, state);
 			if (targetScope === "global") {

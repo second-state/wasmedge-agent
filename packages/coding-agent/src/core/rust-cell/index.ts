@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
+import { testRustSkill } from "./skill-tests.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
 import {
 	listPersistentState,
@@ -112,6 +113,18 @@ export class RustCellProvisioner {
 
 	get bridge(): BridgeServer | undefined {
 		return this.bridgeServer;
+	}
+
+	async testSkill(reference: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
+		await this.ensure();
+		await testRustSkill(reference, {
+			workspaceDir: this.workspace!,
+			cargoBin: this.toolchainInfo!.cargoBin,
+			wasmedgeBin: this.toolchainInfo!.wasmedgeBin,
+			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+			signal,
+		});
 	}
 
 	ensure(onProgress?: (message: string) => void): Promise<CellRunner> {

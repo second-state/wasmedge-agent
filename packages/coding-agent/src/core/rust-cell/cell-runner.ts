@@ -1,123 +1,18 @@
 /** The cell execution pipeline: apply lib files -> cargo build -> wasmedge run
  * -> structured result. DESIGN.md §2.3–§2.5. */
 
-import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
-import {
-	type CellInput,
-	type CellResult,
-	MAX_OUTPUT_CHARS,
-	type PerCallOptions,
-	type RunnerOptions,
-	truncate,
-} from "./types.js";
+import { type ProcOutcome, runProcess } from "./process.js";
+import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 // (module (func (export "_start"))) — no imports, memory, or side effects.
 const PREOPEN_PROBE = Buffer.from("0061736d0100000001040160000003020100070a01065f737461727400000a040102000b", "hex");
-
-interface ProcOutcome {
-	exitCode: number | null;
-	stdout: string;
-	stderr: string;
-	timedOut: boolean;
-	aborted: boolean;
-}
-
-function runProcess(
-	bin: string,
-	args: string[],
-	opts: {
-		cwd: string;
-		timeoutMs: number;
-		signal?: AbortSignal;
-		env?: NodeJS.ProcessEnv;
-		onChunk?: (chunk: string, stream: "stdout" | "stderr") => void;
-	},
-): Promise<ProcOutcome> {
-	if (opts.signal?.aborted || opts.timeoutMs <= 0) {
-		return Promise.resolve({
-			exitCode: null,
-			stdout: "",
-			stderr: "",
-			timedOut: opts.timeoutMs <= 0,
-			aborted: opts.signal?.aborted ?? false,
-		});
-	}
-	return new Promise((resolvePromise, rejectPromise) => {
-		let child: ChildProcess;
-		try {
-			child = spawn(bin, args, {
-				cwd: opts.cwd,
-				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
-				env: opts.env ?? process.env,
-			});
-		} catch (err) {
-			rejectPromise(err);
-			return;
-		}
-
-		let stdout = "";
-		let stderr = "";
-		let timedOut = false;
-		let settledEarly = false;
-
-		const killGroup = () => {
-			if (child.pid) {
-				try {
-					process.kill(-child.pid, "SIGKILL");
-				} catch {
-					child.kill("SIGKILL");
-				}
-			}
-		};
-
-		const timer = setTimeout(() => {
-			timedOut = true;
-			killGroup();
-		}, opts.timeoutMs);
-
-		const onAbort = () => killGroup();
-		opts.signal?.addEventListener("abort", onAbort, { once: true });
-
-		child.stdout?.on("data", (data: Buffer) => {
-			const text = data.toString("utf-8");
-			if (stdout.length < MAX_OUTPUT_CHARS * 2) stdout += text;
-			opts.onChunk?.(text, "stdout");
-		});
-		child.stderr?.on("data", (data: Buffer) => {
-			const text = data.toString("utf-8");
-			if (stderr.length < MAX_OUTPUT_CHARS * 2) stderr += text;
-			opts.onChunk?.(text, "stderr");
-		});
-
-		child.on("error", (err) => {
-			clearTimeout(timer);
-			opts.signal?.removeEventListener("abort", onAbort);
-			settledEarly = true;
-			rejectPromise(err);
-		});
-
-		child.on("close", (code) => {
-			if (settledEarly) return;
-			clearTimeout(timer);
-			opts.signal?.removeEventListener("abort", onAbort);
-			resolvePromise({
-				exitCode: code,
-				stdout,
-				stderr,
-				timedOut,
-				aborted: opts.signal?.aborted ?? false,
-			});
-		});
-	});
-}
 
 /** Extract human-readable diagnostics from `--message-format=json` output. */
 function renderedDiagnostics(cargoStdout: string, cargoStderr: string): string {

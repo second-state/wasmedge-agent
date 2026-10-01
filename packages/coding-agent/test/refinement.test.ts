@@ -113,6 +113,18 @@ function assistantText(text: string): AssistantMessage {
 	};
 }
 
+// These tests exercise state transitions; the sandbox gate has dedicated tests.
+function applyWithPassingSkillTests(
+	state: HarnessState,
+	proposal: RefinementProposal,
+	options: Parameters<typeof applyRefinementProposal>[2],
+): RefinementResult {
+	return applyRefinementProposal(state, proposal, {
+		...options,
+		skillTestResults: new Map(proposal.edits.map((edit) => [edit, undefined])),
+	});
+}
+
 function seedEntry(state: HarnessState, kind: RefinementKind, id = `${kind}_entry`): void {
 	const skillArguments =
 		kind === "skill"
@@ -121,7 +133,7 @@ function seedEntry(state: HarnessState, kind: RefinementKind, id = `${kind}_entr
 					arguments: { input: { type: "string", required: true, description: "Task input" } },
 				}
 			: {};
-	applyRefinementProposal(
+	applyWithPassingSkillTests(
 		state,
 		proposal(`seed ${kind}`, [
 			{
@@ -149,7 +161,7 @@ describe("harness refinement", () => {
 		currentState.entries.memory.memory_entry.content = "concurrent kernel content";
 		currentState.entries.memory.memory_entry.version++;
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			currentState,
 			proposal("Update memory", [
 				{
@@ -174,7 +186,7 @@ describe("harness refinement", () => {
 		seedEntry(state, "memory");
 		const baselineState = structuredClone(state);
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal("Update memory twice", [
 				{ action: "update", kind: "memory", id: "memory_entry", title: "First", content: "first" },
@@ -227,7 +239,7 @@ describe("harness refinement", () => {
 	it("applies create, update, and delete for every editable harness kind", () => {
 		const state = loadHarnessState(makeTempDir());
 
-		const created = applyRefinementProposal(
+		const created = applyWithPassingSkillTests(
 			state,
 			proposal(
 				"Create all kinds",
@@ -269,7 +281,7 @@ describe("harness refinement", () => {
 		}
 		expect(state.refinements.at(-1)?.changes).toEqual(kinds.map((kind) => `create ${kind}:${kind}_entry`));
 
-		const updated = applyRefinementProposal(
+		const updated = applyWithPassingSkillTests(
 			state,
 			proposal(
 				"Update all kinds",
@@ -310,7 +322,7 @@ describe("harness refinement", () => {
 		}
 		expect(state.refinements.at(-1)?.changes).toEqual(kinds.map((kind) => `update ${kind}:${kind}_entry`));
 
-		const deleted = applyRefinementProposal(
+		const deleted = applyWithPassingSkillTests(
 			state,
 			proposal(
 				"Delete all kinds",
@@ -336,7 +348,7 @@ describe("harness refinement", () => {
 
 	it("applies create, update, and delete edits to editable continual harness state", () => {
 		const state = loadHarnessState(makeTempDir());
-		const first = applyRefinementProposal(
+		const first = applyWithPassingSkillTests(
 			state,
 			{
 				summary: "Create reusable validation memory and skill",
@@ -371,7 +383,7 @@ describe("harness refinement", () => {
 			},
 			{ id: "refine_1" },
 		);
-		const second = applyRefinementProposal(
+		const second = applyWithPassingSkillTests(
 			state,
 			{
 				summary: "Tighten validation skill",
@@ -415,7 +427,7 @@ describe("harness refinement", () => {
 	it("creates ids from titles and uses default path and metadata when omitted", () => {
 		const state = loadHarnessState(makeTempDir());
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal("Create with generated id", [
 				{
@@ -462,7 +474,7 @@ describe("harness refinement", () => {
 	it("requires argument contracts for harness-created skills", () => {
 		const state = loadHarnessState(makeTempDir());
 
-		const missingArguments = applyRefinementProposal(
+		const missingArguments = applyWithPassingSkillTests(
 			state,
 			proposal("Create skill without arguments", [
 				{
@@ -475,7 +487,7 @@ describe("harness refinement", () => {
 			]),
 			{ id: "refine_missing_skill_arguments" },
 		);
-		const explicitNoArguments = applyRefinementProposal(
+		const explicitNoArguments = applyWithPassingSkillTests(
 			state,
 			proposal("Create skill with explicit empty arguments", [
 				{
@@ -505,7 +517,7 @@ describe("harness refinement", () => {
 	it("requires Python references for harness-created skills", () => {
 		const state = loadHarnessState(makeTempDir());
 
-		const missingReference = applyRefinementProposal(
+		const missingReference = applyWithPassingSkillTests(
 			state,
 			proposal("Create skill without reference", [
 				{
@@ -519,7 +531,7 @@ describe("harness refinement", () => {
 			]),
 			{ id: "refine_missing_skill_reference" },
 		);
-		const nonPythonReference = applyRefinementProposal(
+		const nonPythonReference = applyWithPassingSkillTests(
 			state,
 			proposal("Create skill with non-python reference", [
 				{
@@ -566,7 +578,7 @@ describe("harness refinement", () => {
 		const root = makeTempDir();
 		const globalState = loadHarnessState(join(root, "global"), "global");
 		const localState = loadHarnessState(join(root, "local"), "local");
-		applyRefinementProposal(
+		applyWithPassingSkillTests(
 			globalState,
 			proposal("Global note", [
 				{
@@ -579,7 +591,7 @@ describe("harness refinement", () => {
 			]),
 			{ id: "refine_global", scope: "global" },
 		);
-		applyRefinementProposal(
+		applyWithPassingSkillTests(
 			localState,
 			proposal("Local note", [
 				{
@@ -614,7 +626,7 @@ describe("harness refinement", () => {
 	it("preserves entry scope stored inside the global harness file", () => {
 		const root = makeTempDir();
 		const globalState = loadHarnessState(join(root, "global"), "global");
-		applyRefinementProposal(
+		applyWithPassingSkillTests(
 			globalState,
 			proposal("Session-local note in shared file", [
 				{
@@ -636,7 +648,7 @@ describe("harness refinement", () => {
 	it("persists harness state in the selected harness directory", () => {
 		const dir = makeTempDir();
 		const state = loadHarnessState(dir, "local");
-		applyRefinementProposal(
+		applyWithPassingSkillTests(
 			state,
 			{
 				summary: "Add prompt note",
@@ -679,7 +691,7 @@ describe("harness refinement", () => {
 			expect(state.entries).toEqual({ prompt: {}, memory: {}, skill: {}, subagent: {} });
 			expect(state.refinements).toEqual([]);
 			// Still usable: a refinement applies and persists cleanly over the bad file.
-			applyRefinementProposal(
+			applyWithPassingSkillTests(
 				state,
 				proposal("Recover", [
 					{ action: "create", kind: "memory", id: "recovered", title: "Recovered", content: "ok" },
@@ -762,7 +774,7 @@ describe("harness refinement", () => {
 		const state = loadHarnessState(makeTempDir());
 		seedEntry(state, kind);
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal(`Duplicate ${kind}`, [
 				{
@@ -800,7 +812,7 @@ describe("harness refinement", () => {
 	it.each(kinds)("rejects update of missing %s entries", (kind) => {
 		const state = loadHarnessState(makeTempDir());
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal(`Missing ${kind} update`, [
 				{
@@ -834,7 +846,7 @@ describe("harness refinement", () => {
 	it.each(kinds)("rejects delete of missing %s entries", (kind) => {
 		const state = loadHarnessState(makeTempDir());
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal(`Missing ${kind} delete`, [
 				{
@@ -864,7 +876,7 @@ describe("harness refinement", () => {
 				seedEntry(state, "memory", "missing_fields");
 			}
 
-			const result = applyRefinementProposal(
+			const result = applyWithPassingSkillTests(
 				state,
 				proposal(`Invalid ${action}`, [
 					{
@@ -893,7 +905,7 @@ describe("harness refinement", () => {
 		(action) => {
 			const state = loadHarnessState(makeTempDir());
 
-			const result = applyRefinementProposal(
+			const result = applyWithPassingSkillTests(
 				state,
 				proposal(`Missing id ${action}`, [
 					{
@@ -920,7 +932,7 @@ describe("harness refinement", () => {
 	it("rejects unsupported actions and kinds without mutating state", () => {
 		const state = loadHarnessState(makeTempDir());
 
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			proposal("Unsupported edits", [
 				{
@@ -959,7 +971,7 @@ describe("harness refinement", () => {
 
 	it("rejects attempts to edit the base system prompt", () => {
 		const state = loadHarnessState(makeTempDir());
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			{
 				summary: "Bad edit",
@@ -985,7 +997,7 @@ describe("harness refinement", () => {
 
 	it("rejects base system prompt edits when the id is derived from title", () => {
 		const state = loadHarnessState(makeTempDir());
-		const result = applyRefinementProposal(
+		const result = applyWithPassingSkillTests(
 			state,
 			{
 				summary: "Bad create",
@@ -1153,7 +1165,7 @@ describe("harness refinement", () => {
 		seedEntry(state, "memory", "kept_memory");
 		seedEntry(state, "skill", "deleted_skill");
 
-		const target = applyRefinementProposal(
+		const target = applyWithPassingSkillTests(
 			state,
 			proposal("Target refinement", [
 				{
@@ -1185,9 +1197,20 @@ describe("harness refinement", () => {
 		expect(state.entries.memory.kept_memory.content).toBe("Updated memory content");
 		expect(state.entries.skill.deleted_skill).toBeUndefined();
 
-		const rollback = await refineHarness([], state, [target], {} as never, "api-key", {
-			rollbackId: "refine_target",
-		});
+		const rollback = await refineHarness(
+			[],
+			state,
+			[target],
+			{} as never,
+			"api-key",
+			{
+				rollbackId: "refine_target",
+			},
+			undefined,
+			undefined,
+			undefined,
+			async () => {},
+		);
 
 		expect(rollback.rollbackOf).toBe("refine_target");
 		expect(rollback.scope).toBe("local");
@@ -1390,7 +1413,7 @@ describe("global refinement history", () => {
 		expect(state.entries.memory.planned_memory).toBeUndefined();
 		expect(state.refinements).toHaveLength(0);
 
-		const result = applyRefinementProposal(state, plan.proposal, { id: plan.id });
+		const result = applyWithPassingSkillTests(state, plan.proposal, { id: plan.id });
 		expect(result.appliedEdits[0]).toMatchObject({ id: "planned_memory", applied: true });
 		expect(state.entries.memory.planned_memory).toBeDefined();
 	});
@@ -1425,7 +1448,7 @@ describe("global refinement history", () => {
 	it("plans a rollback without mutating harness state", async () => {
 		const dir = makeTempDir();
 		const state = loadHarnessState(dir);
-		const target = applyRefinementProposal(
+		const target = applyWithPassingSkillTests(
 			state,
 			proposal("Target", [
 				{ action: "create", kind: "memory", id: "rollback_me", title: "Rollback me", content: "content" },
@@ -1441,14 +1464,14 @@ describe("global refinement history", () => {
 		expect(plan.rollbackScope).toBe("local");
 		// The entry still exists until the proposal is applied.
 		expect(state.entries.memory.rollback_me).toBeDefined();
-		applyRefinementProposal(state, plan.proposal, { id: plan.id, rollbackOf: plan.rollbackOf });
+		applyWithPassingSkillTests(state, plan.proposal, { id: plan.id, rollbackOf: plan.rollbackOf });
 		expect(state.entries.memory.rollback_me).toBeUndefined();
 	});
 
 	it("rolls back a refinement recorded in a different session via global history", async () => {
 		const dir = makeTempDir();
 		const sessionAState = loadHarnessState(dir);
-		const applied = applyRefinementProposal(
+		const applied = applyWithPassingSkillTests(
 			sessionAState,
 			proposal("Session A refinement", [
 				{
@@ -1482,7 +1505,7 @@ describe("global refinement history", () => {
 	it("plans rollback against the recorded global scope when --global is omitted", async () => {
 		const dir = makeTempDir();
 		const state = loadHarnessState(dir, "global");
-		const target = applyRefinementProposal(
+		const target = applyWithPassingSkillTests(
 			state,
 			proposal("Global refinement", [
 				{
@@ -1503,7 +1526,7 @@ describe("global refinement history", () => {
 
 		expect(plan.rollbackOf).toBe("refine_global_target");
 		expect(plan.rollbackScope).toBe("global");
-		const rollback = applyRefinementProposal(state, plan.proposal, {
+		const rollback = applyWithPassingSkillTests(state, plan.proposal, {
 			id: plan.id,
 			rollbackOf: plan.rollbackOf,
 			scope: plan.rollbackScope,
@@ -1515,7 +1538,7 @@ describe("global refinement history", () => {
 	it("infers rollback scope from legacy global edits without top-level scope", async () => {
 		const dir = makeTempDir();
 		const state = loadHarnessState(dir, "global");
-		const target = applyRefinementProposal(
+		const target = applyWithPassingSkillTests(
 			state,
 			proposal("Legacy global refinement", [
 				{
