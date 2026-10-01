@@ -36,7 +36,7 @@ Each `rust` tool call runs one complete program:
 
 1. Optional `lib` files are applied to `agent_lib/` (declarative extension, with backups).
 2. The cell source is written to `cell/src/main.rs` and compiled with `cargo build --release --offline -p cell`. Compiles across sessions share a concurrency gate (`WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`).
-3. A compile error reverts the lib changes and returns the rendered rustc diagnostics — the workspace is always left in a compilable state.
+3. A failed or interrupted build restores the previous cell source and lib files, including the generated helper module index. Compile errors return the rendered rustc diagnostics. Successful builds retain their source changes even if the cell later panics or times out; runtime side effects are not rolled back.
 4. On success the wasm binary runs under WasmEdge with explicit preopens: the project at `/workspace`, persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and the harness stores at `/agent/harness` and `/agent/harness-global`. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
 5. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Compile and run share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s).
 

@@ -116,7 +116,6 @@ export function removeWorkspace(dir: string): void {
 export interface AppliedLib {
 	/** Previous content per absolute path (null = file did not exist). */
 	backups: Map<string, string | null>;
-	modRsRegenerated: boolean;
 }
 
 function assertLibPath(workspaceDir: string, path: string): string {
@@ -132,19 +131,32 @@ function assertLibPath(workspaceDir: string, path: string): string {
 
 /** Write declared lib files, remembering previous contents for revert. */
 export function applyLib(workspaceDir: string, files: LibFile[]): AppliedLib {
+	// Validate and snapshot the whole batch before making its first write.
+	const targets = files.map((file) => assertLibPath(workspaceDir, file.path));
 	const backups = new Map<string, string | null>();
-	for (const file of files) {
-		const target = assertLibPath(workspaceDir, file.path);
-		backups.set(target, existsSync(target) ? readFileSync(target, "utf-8") : null);
-		mkdirSync(dirname(target), { recursive: true });
-		writeFileSync(target, file.content);
+	const helpersMod = join(workspaceDir, "agent_lib", "src", "helpers", "mod.rs");
+	for (const target of [...targets, helpersMod]) {
+		if (!backups.has(target)) {
+			backups.set(target, existsSync(target) ? readFileSync(target, "utf-8") : null);
+		}
 	}
-	const modRsRegenerated = regenerateHelpersModRs(workspaceDir, files);
-	return { backups, modRsRegenerated };
+	const applied = { backups };
+	try {
+		for (const [index, file] of files.entries()) {
+			const target = targets[index];
+			mkdirSync(dirname(target), { recursive: true });
+			writeFileSync(target, file.content);
+		}
+		regenerateHelpersModRs(workspaceDir, files);
+	} catch (error) {
+		revertLib(applied);
+		throw error;
+	}
+	return applied;
 }
 
 /** Restore all files touched by applyLib (delete files that did not exist). */
-export function revertLib(workspaceDir: string, applied: AppliedLib): void {
+export function revertLib(applied: AppliedLib): void {
 	for (const [target, previous] of applied.backups) {
 		if (previous === null) {
 			rmSync(target, { force: true });
@@ -152,18 +164,14 @@ export function revertLib(workspaceDir: string, applied: AppliedLib): void {
 			writeFileSync(target, previous);
 		}
 	}
-	if (applied.modRsRegenerated) {
-		regenerateHelpersModRs(workspaceDir, []);
-	}
 }
 
 /** Keep src/helpers/mod.rs in sync with the .rs files present, unless the call
- * provided its own mod.rs (model-managed wins). Returns whether the host
- * (re)generated the file. */
-function regenerateHelpersModRs(workspaceDir: string, declared: LibFile[]): boolean {
-	if (declared.some((f) => normalize(f.path) === "src/helpers/mod.rs")) return false;
+ * provided its own mod.rs (model-managed wins). */
+function regenerateHelpersModRs(workspaceDir: string, declared: LibFile[]): void {
+	if (declared.some((f) => normalize(f.path) === "src/helpers/mod.rs")) return;
 	const helpersDir = join(workspaceDir, "agent_lib", "src", "helpers");
-	if (!existsSync(helpersDir)) return false;
+	if (!existsSync(helpersDir)) return;
 	const modules = readdirSync(helpersDir)
 		.filter((name) => name.endsWith(".rs") && name !== "mod.rs")
 		.map((name) => name.slice(0, -3))
@@ -174,7 +182,6 @@ function regenerateHelpersModRs(workspaceDir: string, declared: LibFile[]): bool
 		"//! declarations below (unless the call provides its own mod.rs).\n";
 	const body = modules.map((name) => `pub mod ${name};`).join("\n");
 	writeFileSync(join(helpersDir, "mod.rs"), body ? `${header}\n${body}\n` : header);
-	return true;
 }
 
 export interface PersistentStateListing {

@@ -2,7 +2,8 @@
  * integration row): compile errors with lib rollback, panics, timeouts, and
  * mid-run aborts. Skipped without the Rust/WasmEdge toolchain + warm template. */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -45,9 +46,22 @@ describe.skipIf(!available)("rust cell failure paths", () => {
 	it("reports failures with honest statuses and reverts a broken lib", { timeout: 300_000 }, async () => {
 		const { cwd, workspace } = makeWorkspace();
 		const runner = makeRunner(cwd, workspace, 240_000);
+		const mainPath = join(workspace, "cell", "src", "main.rs");
+		const modPath = join(workspace, "agent_lib", "src", "helpers", "mod.rs");
+		const customMod = 'pub fn healthy() -> &\'static str { "healthy" }\n';
+		writeFileSync(modPath, customMod);
+		const code = 'fn main() { println!("{}", agent_lib::helpers::healthy()); }';
+		const assertRebuilds = () => {
+			expect(readFileSync(mainPath, "utf-8")).toBe(code);
+			expect(readFileSync(modPath, "utf-8")).toBe(customMod);
+			execFileSync(toolchain!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
+				cwd: workspace,
+				stdio: "pipe",
+			});
+		};
 
 		// Baseline: the clone compiles and runs.
-		const ok = await runner.execute({ code: 'fn main() { println!("healthy"); }' });
+		const ok = await runner.execute({ code });
 		expect(ok.status).toBe("ok");
 		expect(ok.stdout).toContain("healthy");
 
@@ -55,6 +69,7 @@ describe.skipIf(!available)("rust cell failure paths", () => {
 		const compileError = await runner.execute({ code: 'fn main() { let x: i32 = "not a number"; }' });
 		expect(compileError.status).toBe("compile_error");
 		expect(compileError.compileDiagnostics).toContain("mismatched types");
+		assertRebuilds();
 
 		// A lib file that breaks the build is rolled back atomically: the
 		// workspace stays compilable and the old source is restored.
@@ -67,8 +82,13 @@ describe.skipIf(!available)("rust cell failure paths", () => {
 		expect(libBroken.status).toBe("compile_error");
 		expect(libBroken.libReverted).toBe(true);
 		expect(readFileSync(libPath, "utf-8")).toBe(libBefore);
-		const afterRollback = await runner.execute({ code: 'fn main() { println!("still compiles"); }' });
-		expect(afterRollback.status).toBe("ok");
+		assertRebuilds();
+		const helperBroken = await runner.execute({
+			code: "fn main() {}",
+			lib: [{ path: "src/helpers/broken.rs", content: "pub fn broken( {" }],
+		});
+		expect(helperBroken.status).toBe("compile_error");
+		assertRebuilds();
 
 		// Panic: a nonzero wasm exit with the panic message on stderr.
 		const panicked = await runner.execute({ code: 'fn main() { panic!("boom-marker"); }' });

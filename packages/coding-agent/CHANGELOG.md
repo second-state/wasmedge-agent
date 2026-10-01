@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Failed or interrupted Rust cell builds now restore the previous cell source and all library changes, including the helper module index. Invalid lib batches and compiler startup failures no longer leave partially applied source changes.
+
 ## [0.0.2] - 2026-09-29
 
 - The first run no longer starts the Prime Inference sign-in on its own. When
