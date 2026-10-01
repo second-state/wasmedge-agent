@@ -157,6 +157,7 @@ When a provider requests a retry delay longer than `retry.provider.maxRetryDelay
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
 | `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
+| `rustCell.preludeExtra` | array | `[]` | User-selected crates.io dependencies available under `agent_lib::prelude::extra` |
 
 Gas and memory limits apply to cells and each sandboxed skill test module. For example,
 `"rustCell": { "cellGasLimit": 100000000, "cellMemoryPageLimit": 4096 }`
@@ -172,6 +173,35 @@ allocation failure. The wall-time budget remains active, including time
 spent waiting for host calls. The gas range also avoids truncation in WasmEdge 0.14.1.
 
 Toolchain locations are environment variables, not settings: `WASMEDGE_AGENT_CARGO`, `WASMEDGE_AGENT_WASMEDGE`, `WASMEDGE_AGENT_TEMPLATE_DIR`, `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`.
+
+To add a crate, configure an exact release version and reload:
+
+```json
+{
+  "rustCell": {
+    "preludeExtra": [{ "name": "itoa", "version": "1.0.18" }]
+  }
+}
+```
+
+Cells can then use `extra::itoa::Buffer::new()` after `use agent_lib::prelude::*;`.
+Crate names use lowercase ASCII letters, digits, hyphens or underscores; hyphens
+become underscores in Rust paths. Each entry accepts `name`, an exact `x.y.z`
+`version`, optional `features` (crate-local feature names), and `defaultFeatures`
+(default `true`). Version ranges, prereleases, Git/path sources, duplicate Rust
+names, built-in dependencies and mounted skill name collisions are rejected.
+The project list replaces the global list; set `[]` to remove configured crates.
+
+The host vendors dependencies and release-builds the retained cell for
+`wasm32-wasip1` in a staged workspace before publishing changes. This preparation
+may access crates.io and takes place outside the per-cell execution budget.
+Failure preserves the previous workspace. Removing a crate still used by the
+retained cell, library or skills therefore fails; remove those references first.
+Matching workspaces and child snapshots reuse their lockfile and vendor directory,
+so subsequent cells compile offline. The shared template is unchanged.
+Configured dependencies are trusted host build inputs: build scripts and proc
+macros run on the host during compilation. Guest execution still uses the existing
+import restrictions. Model-driven `rlm::deps::add` remains unsupported.
 
 ### Shell
 

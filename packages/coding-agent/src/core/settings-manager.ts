@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir, getProjectConfigDir } from "../config.js";
+import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
 
 const RECENT_MODELS_LIMIT = 20;
@@ -71,6 +72,7 @@ export interface BundledSkillsSettings {
 
 export interface RustCellSettings extends CellResourceLimits {
 	cellTimeoutMs?: number; // per-cell budget (compile + run); default: 120000
+	preludeExtra?: PreludeExtra[];
 }
 
 export interface WarningSettings {
@@ -940,6 +942,10 @@ export class SettingsManager {
 		};
 		validateCellResourceLimits(limits);
 		return limits;
+	}
+
+	getRustCellPreludeExtra(): PreludeExtra[] {
+		return normalizePreludeExtra(this.settings.rustCell?.preludeExtra);
 	}
 
 	getShellCommandPrefix(): string | undefined {

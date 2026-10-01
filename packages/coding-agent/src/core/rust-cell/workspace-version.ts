@@ -22,6 +22,7 @@ interface WorkspaceVersion {
 	schema: 1;
 	templateHash: string;
 	dependencyHash: string;
+	configurationHash?: string;
 	rustcVersion: string;
 	wasmedgeVersion: string;
 	/** Template defaults, not user-edited source, for the next upgrade. */
@@ -33,7 +34,9 @@ interface WorkspaceVersionOptions {
 	initialWorkspaceDir?: string;
 	rustcVersion: string;
 	wasmedgeVersion: string;
-	/** Regenerate skill mounts/manifests in the staged workspace, without unmounting failures. */
+	/** Identity of user-selected scaffold dependencies. */
+	configurationHash?: string;
+	/** Regenerate dependencies and skill mounts in the staged workspace. */
 	configure: (workspace: string) => void;
 	/** Compile only; never execute the retained cell during an upgrade. */
 	validate: (workspace: string) => void;
@@ -75,6 +78,7 @@ function versionFor(options: WorkspaceVersionOptions): WorkspaceVersion {
 		),
 		rustcVersion: options.rustcVersion,
 		wasmedgeVersion: options.wasmedgeVersion,
+		configurationHash: options.configurationHash,
 		sourceHashes: Object.fromEntries(Object.entries(files).filter(([path]) => path.startsWith(SOURCE_DIR))),
 	};
 }
@@ -92,6 +96,7 @@ function readVersion(workspace: string): WorkspaceVersion | undefined {
 				(field) => typeof field === "string",
 			) ||
 			!value.sourceHashes ||
+			(value.configurationHash !== undefined && typeof value.configurationHash !== "string") ||
 			typeof value.sourceHashes !== "object" ||
 			Array.isArray(value.sourceHashes) ||
 			!Object.entries(value.sourceHashes).every(
@@ -185,11 +190,12 @@ export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersion
 	if (
 		previous &&
 		previous.templateHash === next.templateHash &&
+		previous.configurationHash === next.configurationHash &&
 		previous.rustcVersion === next.rustcVersion &&
 		previous.wasmedgeVersion === next.wasmedgeVersion
 	)
 		return;
-	if (fresh) {
+	if (fresh && !options.configurationHash) {
 		writeVersion(workspace, next);
 		return;
 	}
@@ -200,6 +206,12 @@ export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersion
 	const staged = join(transaction, "next");
 	const backup = join(transaction, "previous");
 	try {
+		const retainedLock =
+			next.configurationHash &&
+			previous?.configurationHash === next.configurationHash &&
+			existsSync(join(workspace, "Cargo.lock"))
+				? readFileSync(join(workspace, "Cargo.lock"))
+				: undefined;
 		cpSync(workspace, staged, {
 			recursive: true,
 			preserveTimestamps: true,
@@ -213,6 +225,9 @@ export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersion
 			"agent_lib/src",
 			"agent_lib/src/skills",
 			"agent_lib/src/skills/mod.rs",
+			"agent_lib/src/prelude_extra.rs",
+			"agent_lib/src/lib.rs",
+			"agent_lib/src/prelude.rs",
 			"cell",
 			"skills",
 		]) {
@@ -225,6 +240,7 @@ export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersion
 			if (existsSync(join(options.templateDir, path))) copy(join(options.templateDir, path), join(staged, path));
 		}
 		updateSources(staged, options.templateDir, previous, next);
+		if (retainedLock) writeFileSync(join(staged, "Cargo.lock"), retainedLock);
 		rmSync(join(staged, ".skills-hash"), { force: true });
 		options.configure(staged);
 		options.validate(staged);

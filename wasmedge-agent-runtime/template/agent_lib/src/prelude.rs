@@ -11,6 +11,7 @@ pub use serde_json::{self, json, Value};
 pub use std::collections::{BTreeMap, BTreeSet};
 
 pub use crate::helpers;
+pub use crate::prelude_extra as extra;
 pub use crate::skills;
 
 /// Read a whole file as UTF-8 (lossy for invalid sequences).

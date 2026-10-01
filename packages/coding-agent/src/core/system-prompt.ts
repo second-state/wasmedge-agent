@@ -11,6 +11,8 @@ export interface BuildSystemPromptOptions {
 	customPrompt?: string;
 	/** Active tools. Tool schemas carry tool descriptions outside the prompt body. */
 	selectedTools?: string[];
+	/** User-configured crate names under agent_lib::prelude::extra. */
+	preludeExtra?: string[];
 	/** Optional one-line tool snippets keyed by tool name. Used only for custom prompts. */
 	toolSnippets?: Record<string, string>;
 	/** Additional guideline bullets appended to the system prompt. */
@@ -131,6 +133,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		activeTools: tools.filter((name) => name === "rust" || name === "bash" || name === "edit"),
 		allowRecursion,
 		depth: options.rlmDepth,
+		preludeExtra: options.preludeExtra,
 		parentAgent: options.rlmParentAgent,
 	});
 

@@ -199,6 +199,8 @@ cargo build --release --target wasm32-wasip1 \
 
 - **offline + vendored**：安裝時 `cargo vendor` 把 prelude 依賴鎖進 `~/.wasmedge-agent/vendor/`（全域共享、唯讀）；workspace 的 `.cargo/config.toml` 指向它。cell 編譯**永不碰網路**（供應鏈與決定性雙重理由）。
 - **依賴政策（D15 定案）**：Phase 1 prelude 集**鎖死**；使用者可經 settings `preludeExtra` 追加（session 啟動時 host 重新 vendor）。`rlm::deps::add` 在 Phase 1 回明確的 not-supported 錯誤（指示改請使用者調 settings）；動態新增延至 Phase 2 以 curated 白名單實作（host 抓取 → re-vendor → 改 Cargo.toml → commit）。
+
+**使用者追加依賴已落實（2026-10-02）**：`rustCell.preludeExtra` 接受 `{ name, version, features?, defaultFeatures? }`；version 限精確 `x.y.z` crates.io release，拒絕 Git/path、保留名稱、重複名稱及 skill crate 衝突。Host 在 workspace upgrade 的暫存樹中加入 workspace／agent_lib dependencies、生成 `agent_lib::prelude::extra` re-exports、vendor，再以 release/offline build 驗證保留的 cell 與 library，成功才發布。設定納入 workspace identity；相同設定的 resume／child seed 重用既有 vendor／lock，設定變動或 scaffold 更新走 staging，失敗保留原 workspace。共享模板不修改；`prelude_extra.rs` 由 host 管理。這是使用者設定的可信 host build inputs（包含 build scripts／proc macros），不是沙箱內動態安裝；curated `rlm::deps::add` 仍待 Phase 2。
 - **診斷處理**：解析 message-format JSON 流，取 `rendered` 欄位串接（strip ANSI 後截斷 65,536）。編譯失敗 → `status: "compile_error"`、`isError: true`、**不執行**；診斷全文就是 tool result（REPORT §2.2 的一等回饋原則）。
 - **profile**：release（REPORT 的 0.28s 是特定小程式、暖快取下的 release 量測，不是固定 build 延遲）。`[profile.release] debug = false, incremental = true`；`codegen-units` 預設。不做 wasm-opt/strip。
 - 快取：per-session `target/`（模板預熱）。不跨 session 共享 target（鎖競爭與污染風險 > 收益；模板複製已解決冷啟動）。

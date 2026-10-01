@@ -9,6 +9,7 @@ export interface RlmPromptOptions {
 	depth?: number;
 	parentAgent?: string;
 	activeTools?: string[];
+	preludeExtra?: string[];
 }
 
 export interface ChildAgentDoctrineOptions {
@@ -112,7 +113,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	}
 
 	if (hasRust) {
-		parts.push("", rustControlPromptSection());
+		parts.push("", rustControlPromptSection({ preludeExtra: options.preludeExtra }));
 		if (installedSkills.includes("refine")) {
 			parts.push(
 				"",
