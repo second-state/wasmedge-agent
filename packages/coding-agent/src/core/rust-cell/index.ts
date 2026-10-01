@@ -17,6 +17,7 @@ import {
 	syncRustSkills,
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
+import { withInheritedSkills } from "./workspace-snapshot.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -60,6 +61,8 @@ export interface RustCellProvisionerOptions {
 	cwd: string;
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
 	workspaceDir?: string;
+	/** Frozen parent workspace, captured when a child was spawned. */
+	initialWorkspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
 	/** Host request registry; when set, cells run with a live bridge. */
@@ -132,8 +135,8 @@ export class RustCellProvisioner {
 		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress);
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
-		ensureWorkspaceAt(this.workspace);
-		const rustSkills = this.options.rustSkills ?? [];
+		ensureWorkspaceAt(this.workspace, this.options.initialWorkspaceDir);
+		const rustSkills = withInheritedSkills(this.workspace, this.options.rustSkills ?? []);
 		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
 			onProgress?.("Mounting rust skills...");
 			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });

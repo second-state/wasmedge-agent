@@ -63,6 +63,8 @@ println!("{} {} {} {}", handle.rlm_child_id, handle.name, handle.session_dir, ha
 
 The call returns immediately after task admission with a child handle; it never waits for or returns the child's answer. The TypeScript host creates a normal child `AgentSession` with an independent context and session directory. The child inherits the parent model, provider configuration, skills, tools, retry policy, and resource loader unless `rlm::spawn_with` requests another configured model.
 
+Before admission, the host snapshots the parent's provisioned `agent_lib`, mounted skill sources, and build cache. The child starts from that snapshot even if its first cell runs later. Library edits then evolve independently, while `rlm::state` starts empty for the child.
+
 Spawn independent children in one cell and end the turn instead of awaiting completion:
 
 ```rust

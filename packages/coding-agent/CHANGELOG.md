@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Child agents now inherit a spawn-time snapshot of the parent's Rust library, mounted skill sources, and build cache. State and Git history start fresh; later library edits and reloads remain independent.
 - Persisted Rust workspaces now record an initial Git snapshot and a commit after each successful cell, including source and persistent state. Snapshot errors are reported without retrying the executed cell.
 - The readonly preopen probe now runs an inert Wasm module instead of executing the submitted cell a second time. Cancellation and the cell deadline cover the build queue, compilation, probe, and execution.
 - Failed or interrupted Rust cell builds now restore the previous cell source and all library changes, including the helper module index. Invalid lib batches and compiler startup failures no longer leave partially applied source changes.

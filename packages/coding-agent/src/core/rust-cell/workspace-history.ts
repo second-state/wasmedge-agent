@@ -6,6 +6,7 @@ const TRACKED_PATHS = [
 	".gitignore",
 	".cargo/config.toml",
 	".skills-hash",
+	".inherited-workspace",
 	"Cargo.toml",
 	"Cargo.lock",
 	"agent_lib/Cargo.toml",
