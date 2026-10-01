@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const repoRoot = resolve(__dirname, "../../..");
 const installerSource = readFileSync(join(repoRoot, "install.sh"), "utf-8");
@@ -30,6 +30,17 @@ function workspace(): string {
 	const dir = mkdtempSync(join(tmpdir(), "installer-runtime-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+function processIsRunning(pid: number): boolean {
+	try {
+		const state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf-8" }).trim();
+		// An orphaned zombie has stopped, but kill(pid, 0) succeeds until init reaps it.
+		return state !== "" && !state.startsWith("Z");
+	} catch (error) {
+		if ((error as { status?: number }).status === 1) return false; // No matching PID.
+		throw error;
+	}
 }
 
 /** A bin dir holding only what the code under test shells out to. --check
@@ -671,7 +682,7 @@ wasmedge_agent_run_quiet_with_animation "Installing" "Installing" "detail" \\
 		const grandchild = Number(readFileSync(pidFile, "utf-8"));
 		expect(grandchild).toBeGreaterThan(0);
 		expect(readdirSync(root)).toEqual([]);
-		expect(() => process.kill(grandchild, 0)).toThrow();
+		await vi.waitFor(() => expect(processIsRunning(grandchild)).toBe(false), { timeout: 5_000 });
 	});
 
 	/** An AUR helper on PATH, answering with `status`. */

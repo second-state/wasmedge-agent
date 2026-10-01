@@ -59,6 +59,12 @@ Toolchain resolution:
 
 `doctor` reports these checks plus template vendor/build state, and `doctor --fix` repairs what does not require installing software.
 
+On provisioning, `.workspace-version` records the installed template's content and dependency hashes, Rust compiler identity, WasmEdge version, and the template defaults for `agent_lib/src`. A version mismatch stages a scaffold upgrade beside the workspace: host manifests/configuration, `rlm`, vendored dependencies, and the template build cache are refreshed; skill mounts are regenerated; then the retained cell and library are built with `cargo build --release --offline -p cell`. The template sets Cargo's intermediate build directory to its own `target` so a global Cargo configuration cannot mix staged and other workspace artifacts. The retained cell is never executed during migration. The host publishes the staged workspace only after the build passes.
+
+Upgrades retain helpers, skill sources, state/blobs, the last cell source, unrelated files, and Git history. Unmodified library defaults follow the template; locally changed or deleted library files remain local overrides. Workspaces predating the marker retain their existing library sources conservatively because their original defaults are unknown. An incompatible library or retained cell blocks the upgrade with compiler diagnostics and leaves the original workspace intact. The next provisioning attempt can retry; an abandoned upgrade journal recovers an interrupted directory switch. Provisioning rejects a live upgrade owner and malformed version metadata. This assumes one active runtime owns a session workspace.
+
+The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest changes still use the separate `.skills-hash` synchronization mechanism. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
+
 ## Delegation Flow
 
 ```mermaid

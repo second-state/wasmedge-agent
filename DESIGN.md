@@ -130,7 +130,9 @@
 - `lib` 路徑驗證：僅接受 `src/**`（相對 `agent_lib/`）、拒絕 `..` 與絕對路徑；`Cargo.toml` 不可經此改動（依賴政策走 D15）。
 - 非 persisted session（`--no-session`）：workspace 放 OS temp、不 git；lib 回滾改用編譯前記憶體備份。
 
-**D5 實作註記（2026-10-01）**：persisted workspace 已有獨立 Git repo、初始快照與成功 cell 的 commit（含序號及 tool call id）。僅納入 scaffold source/manifests、`agent_lib`、skill 掛載與 `state/`；排除 `target/`、`vendor/`、scratch，外部 skill symlink 只版本化連結。專案目錄與 harness stores 不在此 repo。Git 失敗獨立回報，不重跑已成功的 cell；失敗 cell 不 commit、不回滾 runtime 副作用。上面的 `.workspace-version` scaffold 升級仍未實作。
+**D5 實作註記（2026-10-01）**：persisted workspace 已有獨立 Git repo、初始快照與成功 cell 的 commit（含序號及 tool call id）。僅納入 scaffold source/manifests、`agent_lib`、skill 掛載與 `state/`；排除 `target/`、`vendor/`、scratch，外部 skill symlink 只版本化連結。專案目錄與 harness stores 不在此 repo。Git 失敗獨立回報，不重跑已成功的 cell；失敗 cell 不 commit、不回滾 runtime 副作用。
+
+**Scaffold 升級實作註記（2026-10-01）**：`.workspace-version` 已記錄 template content hash、dependency hash、rustc/WasmEdge 版本與 library 預設檔案 hash。Provision 時版本不符，先在旁邊的 workspace 更新 host scaffold，保留 helpers、skills、state、cell source、Git history 與 library overrides；重新掛載 skills 並以 release/offline 編譯既有 cell，通過才切換。失敗保留原 workspace，切換中斷可由 upgrade journal 復原；前提是一個 session workspace 由一個 active runtime 擁有。沒有舊 marker 的 workspace 保守保留全部既有 library source。Marker 隨 child seed 複製並納入 Git；skill manifest 偵測繼續使用 `.skills-hash`。此 gate 只驗證 scaffold 升級的編譯相容性，D19 的強制測試仍屬 Phase 2。
 
 ### 2.2 RustCellManager（TS API）
 

@@ -49,6 +49,7 @@ describe("child workspace snapshots", () => {
 		write(join(skill.cratePath, ".git/config"), "private skill repo");
 		write(join(parent, "target/release/cached"), "cache");
 		write(join(parent, "vendor/dependency/lib.rs"), "vendored");
+		write(join(parent, ".workspace-version"), "parent template version");
 		snapshotWorkspace(parent, seed);
 		write(join(parent, "agent_lib/src/helpers/tool.rs"), "later parent helper");
 		write(join(skill.cratePath, "src/lib.rs"), "later parent skill");
@@ -61,6 +62,7 @@ describe("child workspace snapshots", () => {
 			expect(existsSync(join(child, path))).toBe(false);
 		expect(readFileSync(join(child, "target/release/cached"), "utf-8")).toBe("cache");
 		expect(readFileSync(join(child, "vendor/dependency/lib.rs"), "utf-8")).toBe("vendored");
+		expect(readFileSync(join(child, ".workspace-version"), "utf-8")).toBe("parent template version");
 		const mounts = withInheritedSkills(child, [skill]);
 		expect(mounts[0].cratePath).toBe(join(child, "skills/tool"));
 		syncRustSkills(child, mounts);

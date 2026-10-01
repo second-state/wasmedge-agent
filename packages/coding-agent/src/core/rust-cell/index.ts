@@ -2,22 +2,24 @@
  * IPython kernel (DESIGN.md §2). The provisioner mirrors the lifecycle shape
  * the kernel provisioner had so AgentSession wiring stays small. */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
-import { ensureTemplateReady, resolveToolchain, type ToolchainInfo } from "./toolchain.js";
+import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
 import {
-	ensureWorkspaceAt,
 	listPersistentState,
 	type PersistentStateListing,
 	type RustSkillMount,
+	resolveTemplateDir,
 	syncRustSkills,
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
 import { withInheritedSkills } from "./workspace-snapshot.js";
+import { prepareVersionedWorkspace } from "./workspace-version.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -135,7 +137,27 @@ export class RustCellProvisioner {
 		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress);
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
-		ensureWorkspaceAt(this.workspace, this.options.initialWorkspaceDir);
+		const templateDir = resolveTemplateDir();
+		prepareVersionedWorkspace(this.workspace, {
+			templateDir,
+			initialWorkspaceDir: this.options.initialWorkspaceDir,
+			rustcVersion: rustcVersion(
+				this.toolchainInfo.cargoBin,
+				existsSync(this.workspace) ? this.workspace : templateDir,
+			),
+			wasmedgeVersion: this.toolchainInfo.wasmedgeVersion,
+			configure: (workspace) => {
+				syncRustSkills(workspace, withInheritedSkills(workspace, this.options.rustSkills ?? []));
+			},
+			validate: (workspace) => {
+				execFileSync(this.toolchainInfo!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
+					cwd: workspace,
+					stdio: "pipe",
+					timeout: 300_000,
+				});
+			},
+			onProgress,
+		});
 		const rustSkills = withInheritedSkills(this.workspace, this.options.rustSkills ?? []);
 		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
 			onProgress?.("Mounting rust skills...");

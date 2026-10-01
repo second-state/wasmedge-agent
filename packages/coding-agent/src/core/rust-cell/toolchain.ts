@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -29,6 +29,13 @@ export function findCargoBin(): string {
 
 export function findRustupBin(): string {
 	return findOnPath("rustup") ?? join(homedir(), ".cargo", "bin", "rustup");
+}
+
+/** Probe beside the selected Cargo first, respecting an explicit RUSTC. */
+export function rustcVersion(cargoBin: string, cwd: string): string {
+	const sibling = join(dirname(cargoBin), "rustc");
+	const rustc = process.env.RUSTC ?? (existsSync(sibling) ? sibling : (findOnPath("rustc") ?? "rustc"));
+	return execFileSync(rustc, ["--version", "--verbose"], { cwd, encoding: "utf-8", timeout: 30_000 }).trim();
 }
 
 /** Where wasmedge might be, in precedence order. An explicit override is the
