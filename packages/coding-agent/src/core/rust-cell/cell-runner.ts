@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
+import { cargoEnvironment } from "./cargo-environment.js";
 import { assertHarnessMountsIsolated } from "./harness-mounts.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
@@ -92,6 +93,7 @@ export class CellRunner {
 						["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
 						{
 							cwd: ws,
+							env: cargoEnvironment(),
 							timeoutMs: remainingMs(),
 							signal,
 						},

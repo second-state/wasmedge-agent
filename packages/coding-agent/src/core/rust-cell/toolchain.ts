@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { cargoEnvironment } from "./cargo-environment.js";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -35,7 +36,12 @@ export function findRustupBin(): string {
 export function rustcVersion(cargoBin: string, cwd: string): string {
 	const sibling = join(dirname(cargoBin), "rustc");
 	const rustc = process.env.RUSTC ?? (existsSync(sibling) ? sibling : (findOnPath("rustc") ?? "rustc"));
-	return execFileSync(rustc, ["--version", "--verbose"], { cwd, encoding: "utf-8", timeout: 30_000 }).trim();
+	return execFileSync(rustc, ["--version", "--verbose"], {
+		cwd,
+		env: cargoEnvironment(),
+		encoding: "utf-8",
+		timeout: 30_000,
+	}).trim();
 }
 
 /** Where wasmedge might be, in precedence order. An explicit override is the
@@ -84,7 +90,10 @@ export function findWasmedgeBin(): string {
 export function wasmTargetMissing(): boolean {
 	const rustupBin = findRustupBin();
 	if (!existsSync(rustupBin)) return false;
-	const targets = execFileSync(rustupBin, ["target", "list", "--installed"], { encoding: "utf-8" });
+	const targets = execFileSync(rustupBin, ["target", "list", "--installed"], {
+		env: cargoEnvironment(),
+		encoding: "utf-8",
+	});
 	return !targets.includes("wasm32-wasip1");
 }
 
@@ -114,6 +123,7 @@ export function resolveToolchain(): ToolchainInfo {
 export function warmTemplate(cargoBin: string): void {
 	execFileSync(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
+		env: cargoEnvironment(),
 		stdio: "pipe",
 	});
 }
@@ -140,6 +150,7 @@ export function vendorTemplate(cargoBin: string): void {
 	rmSync(tmp, { recursive: true, force: true });
 	execFileSync(cargoBin, ["vendor", "--locked", tmp], {
 		cwd: template,
+		env: cargoEnvironment(),
 		stdio: "pipe",
 	});
 	rmSync(join(template, "vendor"), { recursive: true, force: true });

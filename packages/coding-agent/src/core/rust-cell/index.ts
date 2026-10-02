@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
+import { cargoEnvironment } from "./cargo-environment.js";
 import { CellRunner } from "./cell-runner.js";
 import { createDependencyHandler } from "./dependencies.js";
 import { readCellDependencies, workspaceDependencies } from "./dependency-catalog.js";
@@ -196,6 +197,7 @@ export class RustCellProvisioner {
 			validate: (workspace) => {
 				execFileSync(this.toolchainInfo!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
 					cwd: workspace,
+					env: cargoEnvironment(),
 					stdio: "pipe",
 					timeout: 300_000,
 				});

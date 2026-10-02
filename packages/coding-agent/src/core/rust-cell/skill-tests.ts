@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
+import { cargoEnvironment } from "./cargo-environment.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
 import { MAX_OUTPUT_CHARS, truncate } from "./types.js";
@@ -72,7 +73,7 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 						timeoutMs: deadline - Date.now(),
 						signal,
 						env: {
-							...process.env,
+							...cargoEnvironment(),
 							CARGO_TARGET_DIR: target,
 							CARGO_BUILD_TARGET_DIR: target,
 							CARGO_BUILD_BUILD_DIR: target,

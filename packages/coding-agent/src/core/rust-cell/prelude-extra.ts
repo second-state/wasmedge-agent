@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { cargoEnvironment } from "./cargo-environment.js";
 
 export interface PreludeExtra {
 	name: string;
@@ -116,5 +117,10 @@ export function configurePreludeExtra(workspace: string, extras: PreludeExtra[],
 	if (!extras.length) return;
 	// cargo vendor ignores source replacement by default, resolving new crates
 	// from crates.io while leaving the template's offline redirect intact.
-	execFileSync(cargoBin, ["vendor", "vendor"], { cwd: workspace, stdio: "pipe", timeout: 300_000 });
+	execFileSync(cargoBin, ["vendor", "vendor"], {
+		cwd: workspace,
+		env: cargoEnvironment(),
+		stdio: "pipe",
+		timeout: 300_000,
+	});
 }

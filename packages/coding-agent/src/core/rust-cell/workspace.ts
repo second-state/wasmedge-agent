@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cargoEnvironment } from "./cargo-environment.js";
 import type { LibFile } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -337,6 +338,7 @@ function applySkillMounts(workspaceDir: string, skills: RustSkillMount[]): void 
 function probeBuild(workspaceDir: string, cargoBin: string, crate: string): { ok: boolean; message: string } {
 	const result = spawnSync(cargoBin, ["build", "--release", "-p", crate], {
 		cwd: workspaceDir,
+		env: cargoEnvironment(),
 		encoding: "utf-8",
 	});
 	if (result.status === 0) return { ok: true, message: "" };
