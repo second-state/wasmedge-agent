@@ -14,9 +14,9 @@
  * so both are set and each binary ignores the other's.
  */
 
-import { execSync, spawn } from "node:child_process";
-import { tmpdir } from "node:os";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,8 @@ interface RunMeta {
 	wallMs: number | null;
 	driverStatus: "running" | "completed" | "error";
 	driverError: string | null;
+	daemonSocket: string | null;
+	daemonPid: number | null;
 	turnExitCodes: number[];
 	timedOut: boolean;
 	sessionFile: string | null;
@@ -160,6 +162,176 @@ function findSessionFile(agentDir: string): string | null {
 	return files.at(-1) ?? null;
 }
 
+interface BenchDaemon {
+	child: ChildProcess;
+	closed: Promise<void>;
+	exited: boolean;
+	ready: boolean;
+	error?: Error;
+}
+
+function launchDaemon(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, logFile: string): BenchDaemon {
+	const fd = openSync(logFile, "a");
+	let child: ChildProcess;
+	try {
+		child = spawn(bin, ["--mode", "daemon", ...args], { cwd, env, detached: true, stdio: ["ignore", fd, fd] });
+	} finally {
+		closeSync(fd);
+	}
+	const daemon: BenchDaemon = { child, exited: false, ready: false, closed: Promise.resolve() };
+	child.once("error", (error) => {
+		daemon.error = error;
+		try {
+			appendFileSync(logFile, `${error.message}\n`);
+		} catch {
+			// The launch error is also retained in run metadata.
+		}
+	});
+	daemon.closed = new Promise((resolveClosed) => child.once("close", () => {
+		daemon.exited = true;
+		resolveClosed();
+	}));
+	return daemon;
+}
+
+function waitForDaemonHello(socketPath: string, timeoutMs: number): Promise<boolean> {
+	return new Promise((resolveConnected, rejectConnected) => {
+		const socket = createConnection(socketPath);
+		let pending = "";
+		let settled = false;
+		const finish = (connected: boolean, error?: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			socket.destroy();
+			if (error) rejectConnected(error);
+			else resolveConnected(connected);
+		};
+		const timer = setTimeout(() => finish(false), timeoutMs);
+		socket.setEncoding("utf-8");
+		socket.on("data", (chunk: string) => {
+			pending += chunk;
+			if (pending.length > 128 * 1024) return finish(false, new Error("daemon handshake exceeds limit"));
+			const newline = pending.indexOf("\n");
+			if (newline === -1) return;
+			try {
+				const hello = JSON.parse(pending.slice(0, newline));
+				if (hello?.type !== "daemon_hello" || hello.protocol?.name !== "prime-agent.daemon" || hello.protocol.version !== 7) {
+					return finish(false, new Error("unsupported benchmark daemon protocol (requires version 7)"));
+				}
+				finish(true);
+			} catch {
+				finish(false, new Error("invalid benchmark daemon handshake"));
+			}
+		});
+		socket.once("error", () => finish(false));
+		socket.once("close", () => finish(false));
+	});
+}
+
+async function waitForDaemon(daemon: BenchDaemon, socketPath: string, timeoutMs: number): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!daemon.exited && Date.now() < deadline) {
+		// A listening socket can precede catalog initialization; only the hello confirms readiness.
+		if (await waitForDaemonHello(socketPath, deadline - Date.now())) {
+			daemon.ready = true;
+			return;
+		}
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+	}
+	throw daemon.error ?? new Error(daemon.exited ? "benchmark daemon exited before readiness" : "benchmark daemon startup timed out");
+}
+
+function waitForDaemonExit(daemon: BenchDaemon, timeoutMs: number): Promise<boolean> {
+	return new Promise((resolveExited) => {
+		const timer = setTimeout(() => resolveExited(false), timeoutMs);
+		void daemon.closed.then(() => {
+			clearTimeout(timer);
+			resolveExited(true);
+		});
+	});
+}
+
+function requestDaemonShutdown(socketPath: string): Promise<void> {
+	return new Promise((resolveShutdown, rejectShutdown) => {
+		const socket = createConnection(socketPath);
+		let pending = "";
+		let settled = false;
+		let requested = false;
+		const finish = (error?: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			socket.destroy();
+			if (error) rejectShutdown(error);
+			else resolveShutdown();
+		};
+		const timer = setTimeout(() => finish(new Error("daemon shutdown request timed out")), 2_000);
+		socket.setEncoding("utf-8");
+		socket.on("data", (chunk: string) => {
+			pending += chunk;
+			if (pending.length > 128 * 1024) return finish(new Error("daemon shutdown response exceeds limit"));
+			let newline: number;
+			while ((newline = pending.indexOf("\n")) !== -1) {
+				const line = pending.slice(0, newline);
+				pending = pending.slice(newline + 1);
+				try {
+					const message = JSON.parse(line);
+					const response = message?.type === "event" ? message.event : message;
+					if (response?.type === "daemon_hello" && !requested) {
+						if (response.protocol?.name !== "prime-agent.daemon" || response.protocol.version !== 7) {
+							return finish(new Error("unsupported benchmark daemon protocol (requires version 7)"));
+						}
+						requested = true;
+						socket.write(`${JSON.stringify({
+							type: "command", id: "bench-shutdown", protocol: response.protocol,
+							command: { type: "shutdown", force: true },
+						})}\n`);
+					}
+					if (response?.type === "response" && response.id === "bench-shutdown") {
+						finish(response.success === true ? undefined : new Error(`daemon rejected shutdown: ${String(response.error ?? "unknown error")}`));
+						return;
+					}
+				} catch {
+					return finish(new Error("invalid daemon shutdown response"));
+				}
+			}
+		});
+		socket.once("error", finish);
+		socket.once("close", () => finish(new Error("daemon closed before acknowledging shutdown")));
+	});
+}
+
+async function stopDaemon(daemon: BenchDaemon, socketPath: string): Promise<void> {
+	if (daemon.exited || daemon.child.exitCode !== null || daemon.child.signalCode !== null) {
+		if (daemon.ready) throw new Error("benchmark daemon exited unexpectedly; socket directory retained for inspection");
+		return;
+	}
+	let shutdownError: Error | undefined;
+	if (daemon.ready) {
+		try {
+			// The protocol shutdown stops detached workers too; SIGTERM alone preserves them for recovery.
+			await requestDaemonShutdown(socketPath);
+			if (await waitForDaemonExit(daemon, 10_000)) {
+				if (daemon.child.exitCode !== 0) throw new Error("benchmark daemon failed during shutdown");
+				return;
+			}
+			shutdownError = new Error("benchmark daemon did not exit after shutdown");
+		} catch (error) {
+			shutdownError = error instanceof Error ? error : new Error(String(error));
+		}
+	}
+	// These groups were created by launchDaemon. No host process discovery is used.
+	if (!daemon.exited && daemon.child.pid) process.kill(-daemon.child.pid, "SIGTERM");
+	if (await waitForDaemonExit(daemon, 1_000)) {
+		if (shutdownError) throw shutdownError;
+		return;
+	}
+	if (!daemon.exited && daemon.child.pid) process.kill(-daemon.child.pid, "SIGKILL");
+	if (!(await waitForDaemonExit(daemon, 1_000))) daemon.child.unref();
+	throw new Error("benchmark daemon did not stop gracefully; inspect daemon.log and the recorded socket directory");
+}
+
 async function runOne(
 	task: TaskSpec,
 	group: "A" | "B" | "F",
@@ -185,6 +357,8 @@ async function runOne(
 		wallMs: null,
 		driverStatus: "running",
 		driverError: null,
+		daemonSocket: null,
+		daemonPid: null,
 		turnExitCodes: [],
 		timedOut: false,
 		sessionFile: null,
@@ -195,8 +369,14 @@ async function runOne(
 	persistMeta(meta);
 	let turnStartedAt: number | null = null;
 	let turnsFinished = false;
+	let daemon: BenchDaemon | undefined;
+	let socketDir: string | undefined;
+	let cleanupPromise: Promise<void> | undefined;
+	const cleanupDaemon = () => cleanupPromise ??= (async () => {
+		if (daemon && meta.daemonSocket) await stopDaemon(daemon, meta.daemonSocket);
+		if (socketDir) rmSync(socketDir, { recursive: true, force: true });
+	})();
 	try {
-		await settleDaemonSocket();
 		mkdirSync(projectDir, { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 
@@ -219,7 +399,11 @@ async function runOne(
 			env.WASMEDGE_POC_WORKSPACE_ROOT = join(runDir, "workspaces");
 		}
 
-		const baseArgs = ["--model", model];
+		// POSIX socket and worker-socket paths must stay short, even when the results directory is deeply nested.
+		socketDir = mkdtempSync("/tmp/wasmedge-bench-");
+		meta.daemonSocket = join(socketDir, "daemon.sock");
+		persistMeta(meta);
+		const baseArgs = ["--model", model, "--daemon-socket", meta.daemonSocket];
 		if (group === "B") baseArgs.push("--no-builtin-tools", "-e", EXTENSION_DIR);
 		// F: the fork's own CLI with its built-in rust runtime — no extension,
 		// prompt variant is whatever the fork ships (D17: example is the default).
@@ -227,8 +411,13 @@ async function runOne(
 
 		const timeoutMs = task.timeoutMs ?? 600_000;
 		turnStartedAt = Date.now();
+		daemon = launchDaemon(bin, baseArgs, projectDir, env, join(runDir, "daemon.log"));
+		meta.daemonPid = daemon.child.pid ?? null;
+		persistMeta(meta);
+		await waitForDaemon(daemon, meta.daemonSocket, Math.min(timeoutMs, 30_000));
 
 		for (let turn = 0; turn < task.turns.length; turn++) {
+			if (daemon.exited) throw new Error("benchmark daemon exited before the next turn");
 			const args = [...baseArgs];
 			if (turn > 0) {
 				// Bare --resume is interactive-only; headless requires the explicit path.
@@ -255,6 +444,7 @@ async function runOne(
 		meta.wallMs = Date.now() - turnStartedAt;
 		turnsFinished = true;
 		persistMeta(meta);
+		await cleanupDaemon();
 
 		const checkScript = join(TASKS_DIR, task.id, "check.sh");
 		if (existsSync(checkScript)) {
@@ -285,6 +475,15 @@ async function runOne(
 		} catch {
 			// Preserve the last checkpoint if session discovery also fails.
 		}
+	} finally {
+		try {
+			await cleanupDaemon();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			meta.driverStatus = "error";
+			if (!meta.driverError?.includes(message)) meta.driverError = [meta.driverError, message].filter(Boolean).join("; ");
+			meta.checkPass = null;
+		}
 	}
 	persistMeta(meta);
 	return meta;
@@ -297,35 +496,6 @@ function persistMeta(meta: RunMeta): void {
 	renameSync(`${path}.tmp`, path);
 }
 
-
-// Serial runs share the per-uid daemon socket; a run starting while the
-// previous one-shot's supervisor is still tearing down attaches to a dying
-// daemon (create timeouts / socket-closed crashes). Wait for the socket to
-// clear, and break a wedged leftover by killing its owners.
-const DAEMON_SOCK_DIRS = [
-	join(tmpdir(), `prime-agent-${process.getuid?.() ?? "0"}`), // upstream: groups A and B
-	join(tmpdir(), `wasmedge-agent-${process.getuid?.() ?? "0"}`), // this fork: group F
-];
-async function settleDaemonSocket(): Promise<void> {
-	for (const dir of DAEMON_SOCK_DIRS) {
-		const sock = join(dir, "daemon.sock");
-		const deadline = Date.now() + 15_000;
-		while (existsSync(sock)) {
-			if (Date.now() > deadline) {
-				try {
-					execSync(`lsof -t ${JSON.stringify(sock)} | xargs kill -9`, { stdio: "ignore" });
-				} catch {
-					// no live owner: just a stale file
-				}
-				try {
-					execSync(`rm -rf ${JSON.stringify(dir)}`, { stdio: "ignore" });
-				} catch {}
-				break;
-			}
-			await new Promise((res) => setTimeout(res, 500));
-		}
-	}
-}
 
 const opts = parseArgs(process.argv.slice(2));
 console.log(
