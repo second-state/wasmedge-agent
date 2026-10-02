@@ -73,6 +73,23 @@ treatment pass-rate ≥ A − 15pp and median output tokens ≤ 2.0 × A. A zero
 baseline median permits only a zero treatment median; it does not waive the
 token threshold.
 
+Unavailable metrics are blank in the per-run CSV and `n/a` in the summary.
+The appended `sessionStatus` CSV column distinguishes `ok` (parsed, with at
+least one assistant message), `missing`, `unreadable`, `invalid` (malformed
+JSONL or message structure), and `empty` (no assistant messages). Unusable
+sessions have no transcript-derived metrics; a valid session can still have
+unknown usage. Each token total requires explicit, nonnegative safe-integer
+counts on every assistant turn. Input totals include optional cache-read and
+cache-write counts, which default to zero only when absent.
+
+A condition's aggregate is unavailable if any run lacks the corresponding
+evidence; the analyzer does not silently drop that run or substitute zero.
+The D20 verdict requires boolean task-check results and complete output-token
+totals for every run in both conditions. Missing input usage alone does not
+block the output-token gate. Explicit zero counts remain valid measurements.
+These checks cover discovered runs; they do not verify that all planned tasks
+or repetitions were recorded.
+
 Cell-duration p50/p95 retain the historical percentile convention: sort
 values, select zero-based index `floor(n × p / 100)`, capped at the last index
 (0 when no cell durations were recorded). Thus cell p50 selects the higher
@@ -84,6 +101,8 @@ convention for values labeled `med`, and omitted D20 verdicts for F. Historical
 reports preserve those outputs separately from corrected sample medians.
 
 Known caveat: some gateways do not report input tokens in streaming
-responses, so `tokensIn` reads 0 through this provider. Both groups measure
-through the same path, so the A/B comparison is unaffected; the D20 token gate
-uses output tokens.
+responses, and providers may already have normalized absent usage to zero
+before saving the session. The analyzer cannot distinguish such stored zeros
+from measured zeros. Historical CSVs are unchanged, and their input totals
+do not establish a complete input-cost comparison. The D20 token gate uses
+output tokens.
