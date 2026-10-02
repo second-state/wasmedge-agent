@@ -61,6 +61,20 @@ Isolation per run: fresh fixture copy as the project dir, fresh
 `PRIME_AGENT_CODING_AGENT_DIR` (so sessions/artifacts stay inside the run dir),
 fresh group-B workspace root. Multi-turn tasks use `--resume` between turns.
 
+The driver writes `meta.json` with `driverStatus: "running"` before run setup,
+checkpoints completed turns, then records `completed` after task checking or
+`error` with `driverError` for a caught driver failure. Updates use a temporary
+file and rename so an interrupted rewrite leaves the previous JSON record.
+An interrupted driver can therefore leave a `running` record. Setup failures
+have no measured `wallMs`; otherwise wall time covers the attempted agent
+turns, excluding setup and task checking. Completed turn exit codes, logs,
+and the last discovered session are retained when later work fails.
+
+Driver failures still allow later runs to proceed, but make the driver exit
+nonzero. A completed task's failed check or timeout remains a benchmark
+outcome, distinct from a driver error. Recording requires a writable results
+directory; this does not create records for attempts that have not started.
+
 ## Metrics (analyze.ts)
 
 Per run: pass (check.sh), wall time, tokens in/out (incl. cache), assistant
@@ -100,6 +114,15 @@ totals for every run in both conditions. Missing input usage alone does not
 block the output-token gate. Explicit zero counts remain valid measurements.
 These checks cover discovered runs; they do not verify that all planned tasks
 or repetitions were recorded.
+
+The appended `driverStatus` CSV field distinguishes `running`, `completed`,
+`error`, `invalid` (unrecognized status), and `legacy` (field absent). Per-run
+CSV observations from incomplete runs remain visible and may be partial.
+The summary counts these runs under `driverIncomplete`; their condition's
+performance and success aggregates are unavailable, and either condition
+having one withholds the D20 verdict even if usage and checks appear complete.
+Legacy records retain the existing evidence checks for compatibility; absent
+historical runs cannot be recovered from the available metadata.
 
 Cell-duration p50/p95 retain the historical percentile convention: sort
 values, select zero-based index `floor(n × p / 100)`, capped at the last index

@@ -137,6 +137,50 @@ function summary(stdout: string, condition: string) {
 }
 
 describe("offline benchmark analyzer", () => {
+	it.each(
+		["A", "F"].flatMap((group) =>
+			["running", "error", "unknown", null, 0].map((driverStatus) => ({ group, driverStatus })),
+		),
+	)(
+		"withholds aggregate metrics and verdicts for $group with driver status $driverStatus",
+		({ group, driverStatus }) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			f.add({ group: "F", tokensOut: 100 });
+			const { metaPath } = f.add({ group, tokensOut: 100, durations: [10] });
+			const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+			writeFileSync(metaPath, JSON.stringify({ ...meta, driverStatus }));
+			const { stdout, csv } = f.run();
+			// Recorded observations stay visible, but may be only part of the run.
+			expect(csvRows(csv).at(-1)).toMatchObject({
+				driverStatus: driverStatus === "running" || driverStatus === "error" ? driverStatus : "invalid",
+				tokensOut: "100",
+			});
+			expect(summary(stdout, `fixture-model | ${group}`)).toMatchObject({
+				runs: 2,
+				tasks: 1,
+				pass: "n/a",
+				tokensOut: Number.NaN,
+				tokensIn: Number.NaN,
+				cells: Number.NaN,
+				compileErrors: "n/a",
+				cellP50: "n/a",
+			});
+			expect(recoverySummary(stdout, `fixture-model | ${group}`).recoveredErrors).toBeNaN();
+			expect(stdout).toContain("fixture-model | F: driver runs incomplete — no verdict");
+			expect(stdout).not.toContain("→ GO");
+		},
+	);
+	it.each([undefined, "completed"])("accepts complete evidence with driver status %s", (driverStatus) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		const { metaPath } = f.add({ group: "F", tokensOut: 100 });
+		const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		writeFileSync(metaPath, JSON.stringify({ ...meta, driverStatus }));
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)?.driverStatus).toBe(driverStatus ?? "legacy");
+		expect(stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
 	it.each([
 		{ statuses: [], recovered: 0, unrecovered: 0, mean: null },
 		{ statuses: ["ok"], recovered: 0, unrecovered: 0, mean: null },
