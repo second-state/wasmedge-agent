@@ -16,7 +16,7 @@
 
 import { execSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,9 @@ interface RunMeta {
 	variant: string;
 	rep: number;
 	startedAt: string;
-	wallMs: number;
+	wallMs: number | null;
+	driverStatus: "running" | "completed" | "error";
+	driverError: string | null;
 	turnExitCodes: number[];
 	timedOut: boolean;
 	sessionFile: string | null;
@@ -113,6 +115,7 @@ function runProcess(
 		});
 		let log = "";
 		let timedOut = false;
+		let spawnError: Error | undefined;
 		const timer = setTimeout(() => {
 			timedOut = true;
 			if (child.pid) {
@@ -130,12 +133,19 @@ function runProcess(
 		child.stderr?.on("data", collect);
 		child.on("error", (err) => {
 			clearTimeout(timer);
-			rejectPromise(err);
+			spawnError = err;
+			log += `\n${err.message}\n`;
 		});
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			writeFileSync(opts.logFile, log);
-			resolvePromise({ exitCode: code, timedOut });
+			try {
+				writeFileSync(opts.logFile, log);
+			} catch (err) {
+				rejectPromise(err);
+				return;
+			}
+			if (spawnError) rejectPromise(spawnError);
+			else resolvePromise({ exitCode: code, timedOut });
 		});
 	});
 }
@@ -162,82 +172,7 @@ async function runOne(
 	const runDir = join(RESULTS_DIR, "runs", runId);
 	const projectDir = join(runDir, "project");
 	const agentDir = join(runDir, "agent-dir");
-	mkdirSync(projectDir, { recursive: true });
-	mkdirSync(agentDir, { recursive: true });
-
-	const fixtureDir = join(TASKS_DIR, task.id, "fixture");
-	if (existsSync(fixtureDir)) cpSync(fixtureDir, projectDir, { recursive: true });
-	if (!existsSync(MODELS_JSON)) throw new Error(`missing ${MODELS_JSON} (provider config)`);
-	cpSync(MODELS_JSON, join(agentDir, "models.json"));
-
-	const env: NodeJS.ProcessEnv = {
-		...process.env,
-		// Upstream (groups A and B) reads these...
-		PRIME_AGENT_CODING_AGENT_DIR: agentDir,
-		PRIME_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
-		// ...and this fork (group F) reads these. Each ignores the other's.
-		WASMEDGE_AGENT_CODING_AGENT_DIR: agentDir,
-		WASMEDGE_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
-	};
-	if (group === "B") {
-		env.WASMEDGE_POC_PROMPT = variant;
-		env.WASMEDGE_POC_WORKSPACE_ROOT = join(runDir, "workspaces");
-	}
-
-	const baseArgs = ["--model", model];
-	if (group === "B") baseArgs.push("--no-builtin-tools", "-e", EXTENSION_DIR);
-	// F: the fork's own CLI with its built-in rust runtime — no extension,
-	// prompt variant is whatever the fork ships (D17: example is the default).
-	const bin = group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH;
-
-	const timeoutMs = task.timeoutMs ?? 600_000;
-	const startedAt = new Date();
-	const turnExitCodes: number[] = [];
-	let timedOut = false;
-
-	for (let turn = 0; turn < task.turns.length; turn++) {
-		const args = [...baseArgs];
-		if (turn > 0) {
-			// Bare --resume is interactive-only; headless requires the explicit path.
-			const sessionFile = findSessionFile(agentDir);
-			if (!sessionFile) throw new Error(`turn ${turn}: no session file to resume in ${agentDir}`);
-			args.push("--resume", sessionFile);
-		}
-		args.push("--print", task.turns[turn]);
-		const result = await runProcess(bin, args, {
-			cwd: projectDir,
-			env,
-			timeoutMs,
-			logFile: join(runDir, `turn-${turn}.log`),
-		});
-		turnExitCodes.push(result.exitCode ?? -1);
-		if (result.timedOut) {
-			timedOut = true;
-			break;
-		}
-	}
-	const wallMs = Date.now() - startedAt.getTime();
-
-	let checkPass: boolean | null = null;
-	let checkOutput = "";
-	const checkScript = join(TASKS_DIR, task.id, "check.sh");
-	if (existsSync(checkScript)) {
-		const check = await new Promise<{ code: number | null; out: string }>((res) => {
-			const child = spawn("bash", [checkScript], {
-				cwd: join(TASKS_DIR, task.id),
-				env: { ...process.env, PROJECT_DIR: projectDir },
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let out = "";
-			child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
-			child.stderr?.on("data", (d: Buffer) => (out += d.toString()));
-			child.on("close", (code) => res({ code, out }));
-			child.on("error", (err) => res({ code: -1, out: String(err) }));
-		});
-		checkPass = check.code === 0;
-		checkOutput = check.out.slice(0, 4000);
-	}
-
+	mkdirSync(runDir, { recursive: true });
 	const meta: RunMeta = {
 		runId,
 		task: task.id,
@@ -246,17 +181,120 @@ async function runOne(
 		model,
 		variant,
 		rep,
-		startedAt: startedAt.toISOString(),
-		wallMs,
-		turnExitCodes,
-		timedOut,
-		sessionFile: findSessionFile(agentDir),
-		checkPass,
-		checkOutput,
+		startedAt: new Date().toISOString(),
+		wallMs: null,
+		driverStatus: "running",
+		driverError: null,
+		turnExitCodes: [],
+		timedOut: false,
+		sessionFile: null,
+		checkPass: null,
+		checkOutput: "",
 		runDir,
 	};
-	writeFileSync(join(runDir, "meta.json"), JSON.stringify(meta, null, 2));
+	persistMeta(meta);
+	let turnStartedAt: number | null = null;
+	let turnsFinished = false;
+	try {
+		await settleDaemonSocket();
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+
+		const fixtureDir = join(TASKS_DIR, task.id, "fixture");
+		if (existsSync(fixtureDir)) cpSync(fixtureDir, projectDir, { recursive: true });
+		if (!existsSync(MODELS_JSON)) throw new Error(`missing ${MODELS_JSON} (provider config)`);
+		cpSync(MODELS_JSON, join(agentDir, "models.json"));
+
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			// Upstream (groups A and B) reads these...
+			PRIME_AGENT_CODING_AGENT_DIR: agentDir,
+			PRIME_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
+			// ...and this fork (group F) reads these. Each ignores the other's.
+			WASMEDGE_AGENT_CODING_AGENT_DIR: agentDir,
+			WASMEDGE_AGENT_KERNEL_VENV: SHARED_KERNEL_VENV,
+		};
+		if (group === "B") {
+			env.WASMEDGE_POC_PROMPT = variant;
+			env.WASMEDGE_POC_WORKSPACE_ROOT = join(runDir, "workspaces");
+		}
+
+		const baseArgs = ["--model", model];
+		if (group === "B") baseArgs.push("--no-builtin-tools", "-e", EXTENSION_DIR);
+		// F: the fork's own CLI with its built-in rust runtime — no extension,
+		// prompt variant is whatever the fork ships (D17: example is the default).
+		const bin = group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH;
+
+		const timeoutMs = task.timeoutMs ?? 600_000;
+		turnStartedAt = Date.now();
+
+		for (let turn = 0; turn < task.turns.length; turn++) {
+			const args = [...baseArgs];
+			if (turn > 0) {
+				// Bare --resume is interactive-only; headless requires the explicit path.
+				const sessionFile = findSessionFile(agentDir);
+				if (!sessionFile) throw new Error(`turn ${turn}: no session file to resume in ${agentDir}`);
+				args.push("--resume", sessionFile);
+			}
+			args.push("--print", task.turns[turn]);
+			const result = await runProcess(bin, args, {
+				cwd: projectDir,
+				env,
+				timeoutMs,
+				logFile: join(runDir, `turn-${turn}.log`),
+			});
+			meta.turnExitCodes.push(result.exitCode ?? -1);
+			meta.timedOut = result.timedOut;
+			meta.wallMs = Date.now() - turnStartedAt;
+			meta.sessionFile = findSessionFile(agentDir);
+			persistMeta(meta);
+			if (result.timedOut) {
+				break;
+			}
+		}
+		meta.wallMs = Date.now() - turnStartedAt;
+		turnsFinished = true;
+		persistMeta(meta);
+
+		const checkScript = join(TASKS_DIR, task.id, "check.sh");
+		if (existsSync(checkScript)) {
+			const check = await new Promise<{ code: number | null; out: string }>((res, reject) => {
+				const child = spawn("bash", [checkScript], {
+					cwd: join(TASKS_DIR, task.id),
+					env: { ...process.env, PROJECT_DIR: projectDir },
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+				let out = "";
+				child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+				child.stderr?.on("data", (d: Buffer) => (out += d.toString()));
+				child.on("close", (code) => res({ code, out }));
+				child.on("error", reject);
+			});
+			meta.checkPass = check.code === 0;
+			meta.checkOutput = check.out.slice(0, 4000);
+		}
+		meta.sessionFile = findSessionFile(agentDir);
+		meta.driverStatus = "completed";
+	} catch (err) {
+		meta.driverStatus = "error";
+		meta.driverError = err instanceof Error ? err.message : String(err);
+		meta.checkPass = null;
+		if (turnStartedAt !== null && !turnsFinished) meta.wallMs = Date.now() - turnStartedAt;
+		try {
+			meta.sessionFile = findSessionFile(agentDir);
+		} catch {
+			// Preserve the last checkpoint if session discovery also fails.
+		}
+	}
+	persistMeta(meta);
 	return meta;
+}
+
+function persistMeta(meta: RunMeta): void {
+	const path = join(meta.runDir, "meta.json");
+	// An interrupted rewrite must leave the previous complete JSON document.
+	writeFileSync(`${path}.tmp`, JSON.stringify(meta, null, 2));
+	renameSync(`${path}.tmp`, path);
 }
 
 
@@ -316,8 +354,13 @@ for (const taskId of opts.tasks) {
 				const label = `${taskId} ${group} ${shortModel(model)} ${variant} r${rep}`;
 				process.stdout.write(`→ ${label} ... `);
 				try {
-					await settleDaemonSocket();
 					const meta = await runOne(task, group, model, variant, rep);
+					if (meta.driverStatus === "error") {
+						console.log(`DRIVER-ERROR: ${meta.driverError}`);
+						failures.push(label);
+						process.exitCode = 1;
+						continue;
+					}
 					done += 1;
 					const status = meta.timedOut
 						? "TIMEOUT"
@@ -326,11 +369,12 @@ for (const taskId of opts.tasks) {
 							: meta.checkPass
 								? "PASS"
 								: "FAIL";
-					console.log(`${status} (${Math.round(meta.wallMs / 1000)}s)`);
+					console.log(`${status} (${Math.round((meta.wallMs ?? 0) / 1000)}s)`);
 					if (status === "FAIL" || status === "TIMEOUT") failures.push(label);
 				} catch (err) {
 					console.log(`DRIVER-ERROR: ${err instanceof Error ? err.message : err}`);
 					failures.push(label);
+					process.exitCode = 1;
 				}
 			}
 		}

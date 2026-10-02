@@ -14,6 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
 
 type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
+type DriverStatus = "legacy" | "running" | "completed" | "error" | "invalid";
 
 interface CompileRecovery {
 	recoveredErrors: number;
@@ -31,7 +32,8 @@ interface RunMetrics {
 	rep: number;
 	pass: boolean | null;
 	timedOut: boolean;
-	wallMs: number;
+	wallMs: number | null;
+	driverStatus: DriverStatus;
 	sessionStatus: SessionStatus;
 	tokensIn: number | null;
 	tokensOut: number | null;
@@ -47,6 +49,16 @@ interface RunMetrics {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function driverStatus(value: unknown): DriverStatus {
+	if (value === undefined) return "legacy";
+	if (value === "running" || value === "completed" || value === "error") return value;
+	return "invalid";
+}
+
+function driverComplete(metrics: RunMetrics): boolean {
+	return metrics.driverStatus === "legacy" || metrics.driverStatus === "completed";
 }
 
 function addTokens(total: number | null, ...counts: unknown[]): number | null {
@@ -198,6 +210,7 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 		pass: typeof meta.checkPass === "boolean" ? meta.checkPass : null,
 		timedOut: meta.timedOut,
 		wallMs: meta.wallMs,
+		driverStatus: driverStatus(meta.driverStatus),
 		sessionStatus: "missing",
 		tokensIn: null,
 		tokensOut: null,
@@ -224,7 +237,7 @@ const csvPath =
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -250,6 +263,7 @@ const rows = runs.map((m) => {
 		m.compileRecovery?.recoveredErrors,
 		m.compileRecovery?.unrecoveredErrors,
 		compileRecoveryMean(m.compileRecovery),
+		m.driverStatus,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -267,6 +281,7 @@ interface Agg {
 	cellP50: number | null;
 	compileRecovery: CompileRecovery | null;
 	unrecoveredRuns: number | null;
+	driverIncompleteRuns: number;
 }
 
 function countTasks(metrics: RunMetrics[]): Map<string, number> | null {
@@ -286,13 +301,15 @@ for (const m of runs) {
 const aggs = new Map<string, Agg>();
 for (const [key, ms] of byCondition) {
 	const scored = ms.filter((m) => m.pass !== null);
-	const hasSessions = ms.every((m) => m.sessionStatus === "ok");
+	const driverIncompleteRuns = ms.filter((m) => !driverComplete(m)).length;
+	const complete = driverIncompleteRuns === 0;
+	const hasSessions = complete && ms.every((m) => m.sessionStatus === "ok");
 	const allCells = ms.flatMap((m) => m.cellDurationsMs);
 	const totalCells = ms.reduce((sum, m) => sum + m.cellCount, 0);
 	const recoveries = ms.map((m) => m.compileRecovery);
 	let compileRecovery: CompileRecovery | null = null;
 	let unrecoveredRuns: number | null = null;
-	if (recoveries.every((r): r is CompileRecovery => r !== null)) {
+	if (complete && recoveries.every((r): r is CompileRecovery => r !== null)) {
 		compileRecovery = { recoveredErrors: 0, unrecoveredErrors: 0, distanceTotal: 0 };
 		unrecoveredRuns = 0;
 		for (const recovery of recoveries) {
@@ -305,21 +322,22 @@ for (const [key, ms] of byCondition) {
 	aggs.set(key, {
 		runs: ms.length,
 		taskCounts: countTasks(ms),
-		passRate: scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
-		tokensOutMedian: median(ms.map((m) => m.tokensOut)),
-		tokensInMedian: median(ms.map((m) => m.tokensIn)),
+		passRate: complete && scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
+		tokensOutMedian: complete ? median(ms.map((m) => m.tokensOut)) : null,
+		tokensInMedian: complete ? median(ms.map((m) => m.tokensIn)) : null,
 		cellsMedian: hasSessions ? median(ms.map((m) => m.cellCount)) : null,
 		compileErrorShare: hasSessions ? (totalCells ? ms.reduce((s, m) => s + m.compileErrorCells, 0) / totalCells : 0) : null,
 		cellP50: hasSessions ? percentile(allCells, 50) : null,
 		compileRecovery,
 		unrecoveredRuns,
+		driverIncompleteRuns,
 	});
 }
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
 console.log("tasks = distinct task IDs; runs = recorded repetitions.");
 console.log("n/a = unavailable: at least one run has missing or invalid evidence for that metric (blank in CSV).");
-console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50");
+console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50  driverIncomplete");
 for (const [key, a] of [...aggs.entries()].sort()) {
 	const pass = a.passRate === null ? "n/a" : `${Math.round(a.passRate * 100)}%`;
 	const compileErrors = a.compileErrorShare === null ? "n/a" : `${Math.round(a.compileErrorShare * 100)}%`;
@@ -334,6 +352,7 @@ for (const [key, a] of [...aggs.entries()].sort()) {
 			String(a.cellsMedian ?? "n/a").padStart(10),
 			compileErrors.padStart(5),
 			a.cellP50 === null ? "n/a" : `${a.cellP50}ms`,
+			String(a.driverIncompleteRuns),
 		].join("  "),
 	);
 }
@@ -361,6 +380,10 @@ for (const [key, b] of aggs) {
 	const a = aggs.get(`${model} | A`);
 	if (!a) {
 		console.log(`  ${key}: baseline incomplete — no verdict`);
+		continue;
+	}
+	if (a.driverIncompleteRuns || b.driverIncompleteRuns) {
+		console.log(`  ${key}: driver runs incomplete — no verdict`);
 		continue;
 	}
 	const baselineTasks = a.taskCounts;
