@@ -3,8 +3,7 @@
 //! Persistence: `state` (key-value + blobs on /agent/state). Host bridge:
 //! `spawn`/`msg`/`goal`/`compact`/`refine`/`heartbeat`/`observe`/`mcp` plus the
 //! generic `host_request` gate, all synchronous over the per-cell bridge
-//! connection (§2.7). Rich output: `display`. `deps::add` is locked in
-//! Phase 1 (D15).
+//! connection (§2.7). Rich output: `display`. `deps::add` enables curated crates for subsequent cells.
 
 mod bridge;
 pub mod compact;

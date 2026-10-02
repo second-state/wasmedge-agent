@@ -3,6 +3,8 @@
  * IPYTHON_CONTROL_PROMPT inside buildRlmPrompt; the few-shot example ships by
  * default per D17 (M1: inconclusive but cheaper on the primary tier). */
 
+import { CURATED_DEPENDENCIES } from "../rust-cell/dependency-catalog.js";
+
 export const RUST_PRELUDE_LABELS = "serde, serde_json, anyhow, regex, walkdir";
 
 const RUST_CONTROL_PROMPT = `The rust tool is your control environment: each call submits one complete Rust program
@@ -63,9 +65,13 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
   instructions and deterministic unit tests in source. Reload with /reload to mount
   it before calling or registering it; packaging alone does not validate the skill.
 
-Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
-dependencies yourself. If a task genuinely needs another crate, tell the user (they
-can configure rustCell.preludeExtra and reload). Do not work around this by making the sandbox
+Prelude crates available: {PRELUDE_LABELS}.
+For a curated addition, call \`rlm::deps::add("crate-name")?\` first, then use
+\`extra::crate_name::...\` in a SUBSEQUENT cell after importing the prelude.
+Curated crates: ${Object.keys(CURATED_DEPENDENCIES).join(", ")}. Versions and features
+are host-selected. Additions persist across resume and child snapshots; repeated
+calls are harmless. For other crates, ask the user to configure
+rustCell.preludeExtra and reload. Do not work around this by making the sandbox
 impersonate the project environment — the project's own tooling runs via bash.
 
 Editing project files: for targeted edits prefer

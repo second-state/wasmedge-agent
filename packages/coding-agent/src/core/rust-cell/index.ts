@@ -3,14 +3,21 @@
  * the kernel provisioner had so AgentSession wiring stays small. */
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
-import { configurePreludeExtra, normalizePreludeExtra, type PreludeExtra } from "./prelude-extra.js";
+import { createDependencyHandler } from "./dependencies.js";
+import { readCellDependencies, workspaceDependencies } from "./dependency-catalog.js";
+import { recoverDependencyUpdate } from "./dependency-transaction.js";
+import {
+	configurePreludeExtra,
+	normalizePreludeExtra,
+	type PreludeExtra,
+	preludeConfigurationHash,
+} from "./prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
 import { testRustSkill } from "./skill-tests.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
@@ -23,7 +30,7 @@ import {
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
 import { withInheritedSkills } from "./workspace-snapshot.js";
-import { prepareVersionedWorkspace } from "./workspace-version.js";
+import { prepareVersionedWorkspace, recoverWorkspaceUpgrade } from "./workspace-version.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -74,7 +81,7 @@ export interface RustCellProvisionerOptions extends CellResourceLimits {
 	cellTimeoutMs?: number;
 	/** User-selected crates.io dependencies, fixed for the provisioner's lifetime. */
 	preludeExtra?: PreludeExtra[];
-	/** Host request registry; when set, cells run with a live bridge. */
+	/** Additional host requests; deps.add is always provided by the runtime. */
 	hostHandlers?: HostRequestHandlers;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
 	cellEnv?: Record<string, string>;
@@ -160,7 +167,12 @@ export class RustCellProvisioner {
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
-		const extras = this.options.preludeExtra!;
+		recoverWorkspaceUpgrade(this.workspace);
+		recoverDependencyUpdate(this.workspace);
+		const recordSource = existsSync(join(this.workspace, "Cargo.toml"))
+			? this.workspace
+			: (this.options.initialWorkspaceDir ?? this.workspace);
+		const extras = workspaceDependencies(this.options.preludeExtra!, readCellDependencies(recordSource));
 		prepareVersionedWorkspace(this.workspace, {
 			templateDir,
 			initialWorkspaceDir: this.options.initialWorkspaceDir,
@@ -169,9 +181,7 @@ export class RustCellProvisioner {
 				existsSync(this.workspace) ? this.workspace : templateDir,
 			),
 			wasmedgeVersion: this.toolchainInfo.wasmedgeVersion,
-			configurationHash: extras.length
-				? createHash("sha256").update(JSON.stringify(extras)).digest("hex")
-				: undefined,
+			configurationHash: preludeConfigurationHash(extras),
 			configure: (workspace) => {
 				const skills = withInheritedSkills(workspace, this.options.rustSkills ?? []);
 				for (const extra of extras) {
@@ -207,14 +217,24 @@ export class RustCellProvisioner {
 				);
 			}
 		}
-		if (this.options.hostHandlers && !this.bridgeServer) {
+		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
+		history?.ensure();
+		if (!this.bridgeServer) {
 			this.bridgeServer = new BridgeServer({
-				handlers: this.options.hostHandlers,
+				handlers: {
+					...this.options.hostHandlers,
+					"deps.add": createDependencyHandler({
+						workspace: this.workspace,
+						template: templateDir,
+						cargoBin: this.toolchainInfo.cargoBin,
+						configured: this.options.preludeExtra!,
+						timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+						history,
+					}),
+				},
 				onDiagnostic: this.options.onDiagnostic,
 			});
 		}
-		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
-		history?.ensure();
 		return new CellRunner({
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,

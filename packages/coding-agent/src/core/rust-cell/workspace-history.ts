@@ -8,6 +8,7 @@ const TRACKED_PATHS = [
 	".skills-hash",
 	".inherited-workspace",
 	".workspace-version",
+	".cell-dependencies.json",
 	"Cargo.toml",
 	"Cargo.lock",
 	"agent_lib/Cargo.toml",
@@ -76,6 +77,10 @@ export class WorkspaceHistory {
 	snapshot(cellId: string): string {
 		const sequence = this.git(["rev-list", "--count", "HEAD"]);
 		return this.commit(`chore(cell): snapshot cell ${sequence}`, `Tool-Call-ID: ${JSON.stringify(cellId)}`);
+	}
+
+	snapshotDependency(name: string): string {
+		return this.commit(`chore(deps): add ${name}`);
 	}
 
 	private commit(subject: string, body?: string): string {

@@ -126,7 +126,7 @@ function transactionDir(workspace: string): string {
 }
 
 /** Recover the two-rename publication if its owner exited between steps. */
-function recoverUpgrade(workspace: string): void {
+export function recoverWorkspaceUpgrade(workspace: string): void {
 	const transaction = transactionDir(workspace);
 	if (!existsSync(transaction)) return;
 	const owner = JSON.parse(readFileSync(join(transaction, "owner.json"), "utf-8")) as { pid?: number };
@@ -182,7 +182,7 @@ function updateSources(
  * until its retained cell and library compile against the new runtime. */
 export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersionOptions): void {
 	const workspace = resolve(dir);
-	recoverUpgrade(workspace);
+	recoverWorkspaceUpgrade(workspace);
 	const fresh = !existsSync(join(workspace, "Cargo.toml")) && !options.initialWorkspaceDir;
 	ensureWorkspaceAt(workspace, options.initialWorkspaceDir ?? options.templateDir);
 	const next = versionFor(options);
