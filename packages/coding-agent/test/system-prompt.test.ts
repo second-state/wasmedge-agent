@@ -43,7 +43,8 @@ describe("buildRlmPrompt (rust doctrine, DESIGN §3)", () => {
 		expect(prompt).toContain("Variables do NOT persist between cells");
 		expect(prompt).toContain('rlm::state::set("key", &value)?');
 		expect(prompt).toContain("Prelude crates available in cells: serde, serde_json, anyhow, regex, walkdir.");
-		expect(prompt).toContain("This set is fixed: you cannot add");
+		expect(prompt).toContain('rlm::deps::add("crate-name")');
+		expect(prompt).toContain("SUBSEQUENT cell");
 		expect(prompt).toContain("Working directory (mounted at /workspace): /tmp/proj");
 	});
 

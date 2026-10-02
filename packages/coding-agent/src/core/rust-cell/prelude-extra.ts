@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -68,11 +69,11 @@ export function normalizePreludeExtra(value: unknown): PreludeExtra[] {
 
 /** Called only on the staged scaffold, before mounting skills. The shared
  * template and the active workspace never receive partial dependency edits. */
-export function configurePreludeExtra(workspace: string, extras: PreludeExtra[], cargoBin: string): void {
+export function writePreludeExtra(workspace: string, extras: PreludeExtra[]): void {
 	const exports = extras.map(({ name }) => `pub use ::${name.replaceAll("-", "_")};`).join("\n");
 	writeFileSync(
 		join(workspace, "agent_lib/src/prelude_extra.rs"),
-		`//! User-configured crates. Managed by the host.\n${exports}\n`,
+		`//! Additional crates. Managed by the host.\n${exports}\n`,
 	);
 	if (extras.length === 0) return;
 	// Scaffold upgrades preserve user-edited library roots and preludes. Add the
@@ -104,6 +105,15 @@ export function configurePreludeExtra(workspace: string, extras: PreludeExtra[],
 		if (!manifest.includes(`${table}\n`)) throw new Error(`Missing ${table} in ${path}`);
 		writeFileSync(destination, manifest.replace(`${table}\n`, `${table}\n${lines}\n`));
 	}
+}
+
+export function preludeConfigurationHash(extras: PreludeExtra[]): string | undefined {
+	return extras.length ? createHash("sha256").update(JSON.stringify(extras)).digest("hex") : undefined;
+}
+
+export function configurePreludeExtra(workspace: string, extras: PreludeExtra[], cargoBin: string): void {
+	writePreludeExtra(workspace, extras);
+	if (!extras.length) return;
 	// cargo vendor ignores source replacement by default, resolving new crates
 	// from crates.io while leaving the template's offline redirect intact.
 	execFileSync(cargoBin, ["vendor", "vendor"], { cwd: workspace, stdio: "pipe", timeout: 300_000 });

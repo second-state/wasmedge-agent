@@ -197,14 +197,6 @@ fn agent_message_payloads_match_the_host_contract() {
 }
 
 #[test]
-fn deps_add_is_locked() {
-    let err = rlm::deps::add("tokio").unwrap_err();
-    let typed = err.downcast_ref::<rlm::Error>().unwrap();
-    assert_eq!(typed.kind, rlm::ErrorKind::Host);
-    assert!(typed.message.contains("locked"), "{}", typed.message);
-}
-
-#[test]
 fn ack_errors_surface_as_host_errors_and_keep_the_connection() {
     let mut host = mock_host(|frame| match frame["kind"].as_str().unwrap() {
         "emit" if frame["id"] == 1 => Some(json!({
@@ -308,6 +300,39 @@ fn harness_skill_mutations_use_the_cell_request_timeout() {
         let err = harness.create_skill("Example", "first", skill_reference(), json!({})).unwrap_err();
         assert!(err.to_string().contains("timed out"), "{err:#}");
         std::env::remove_var("RLM_CELL_TIMEOUT_MS");
+    });
+    host.handle.take().unwrap().join().unwrap();
+}
+
+#[test]
+fn dependency_add_sends_only_the_name_and_reports_host_errors() {
+    let mut host = mock_host(|frame| {
+        assert_eq!(frame["type"], "deps.add");
+        assert_eq!(frame["payload"], json!({"crate_name":"itoa"}));
+        Some(json!({"v":1,"kind":"res","id":frame["id"],"status":"error","error":"dependency build failed"}))
+    });
+    with_bridge_env(host.port, "tok-ok", || {
+        let err = rlm::deps::add("itoa").unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<rlm::Error>().unwrap().kind,
+            rlm::ErrorKind::Host
+        );
+        assert!(err.to_string().contains("dependency build failed"));
+    });
+    host.handle.take().unwrap().join().unwrap();
+}
+
+#[test]
+fn dependency_add_uses_the_cell_request_timeout() {
+    let mut host = mock_host(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        None
+    });
+    with_bridge_env(host.port, "tok-ok", || {
+        std::env::set_var("RLM_CELL_TIMEOUT_MS", "1");
+        let err = rlm::deps::add("itoa").unwrap_err();
+        std::env::remove_var("RLM_CELL_TIMEOUT_MS");
+        assert!(err.to_string().contains("timed out"), "{err:#}");
     });
     host.handle.take().unwrap().join().unwrap();
 }

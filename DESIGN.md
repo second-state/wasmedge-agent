@@ -200,10 +200,12 @@ cargo build --release --target wasm32-wasip1 \
 - **offline + vendored**：安裝時 `cargo vendor` 把 prelude 依賴鎖進 `~/.wasmedge-agent/vendor/`（全域共享、唯讀）；workspace 的 `.cargo/config.toml` 指向它。cell 編譯**永不碰網路**（供應鏈與決定性雙重理由）。
 - **依賴政策（D15 定案）**：Phase 1 prelude 集**鎖死**；使用者可經 settings `preludeExtra` 追加（session 啟動時 host 重新 vendor）。`rlm::deps::add` 在 Phase 1 回明確的 not-supported 錯誤（指示改請使用者調 settings）；動態新增延至 Phase 2 以 curated 白名單實作（host 抓取 → re-vendor → 改 Cargo.toml → commit）。
 
-**使用者追加依賴已落實（2026-10-02）**：`rustCell.preludeExtra` 接受 `{ name, version, features?, defaultFeatures? }`；version 限精確 `x.y.z` crates.io release，拒絕 Git/path、保留名稱、重複名稱及 skill crate 衝突。Host 在 workspace upgrade 的暫存樹中加入 workspace／agent_lib dependencies、生成 `agent_lib::prelude::extra` re-exports、vendor，再以 release/offline build 驗證保留的 cell 與 library，成功才發布。設定納入 workspace identity；相同設定的 resume／child seed 重用既有 vendor／lock，設定變動或 scaffold 更新走 staging，失敗保留原 workspace。共享模板不修改；`prelude_extra.rs` 由 host 管理。這是使用者設定的可信 host build inputs（包含 build scripts／proc macros），不是沙箱內動態安裝；curated `rlm::deps::add` 仍待 Phase 2。
+**使用者追加依賴已落實（2026-10-02）**：`rustCell.preludeExtra` 接受 `{ name, version, features?, defaultFeatures? }`；version 限精確 `x.y.z` crates.io release，拒絕 Git/path、保留名稱、重複名稱及 skill crate 衝突。Host 在 workspace upgrade 的暫存樹中加入 workspace／agent_lib dependencies、生成 `agent_lib::prelude::extra` re-exports、vendor，再以 release/offline build 驗證保留的 cell 與 library，成功才發布。設定納入 workspace identity；相同設定的 resume／child seed 重用既有 vendor／lock，設定變動或 scaffold 更新走 staging，失敗保留原 workspace。共享模板不修改；`prelude_extra.rs` 由 host 管理。這是使用者設定的可信 host build inputs（包含 build scripts／proc macros），不是沙箱內動態安裝；curated `rlm::deps::add` 初版見下方實作註記。
 - **診斷處理**：解析 message-format JSON 流，取 `rendered` 欄位串接（strip ANSI 後截斷 65,536）。編譯失敗 → `status: "compile_error"`、`isError: true`、**不執行**；診斷全文就是 tool result（REPORT §2.2 的一等回饋原則）。
 - **profile**：release（REPORT 的 0.28s 是特定小程式、暖快取下的 release 量測，不是固定 build 延遲）。`[profile.release] debug = false, incremental = true`；`codegen-units` 預設。不做 wasm-opt/strip。
 - 快取：per-session `target/`（模板預熱）。不跨 session 共享 target（鎖競爭與污染風險 > 收益；模板複製已解決冷啟動）。
+
+**Curated deps.add 初版（2026-10-02）**：`rlm::deps::add(name)` 已接上 host handler，先提供模板已 vendor 的六個精確版本 crate：aho-corasick 1.1.5、base64 0.22.1、itoa 1.0.18、memchr 2.8.3、regex-automata 0.4.18、regex-syntax 0.8.11。模型不能指定版本、features 或來源；新增在獨立暫存 workspace 離線 release-build，成功後原地發布依賴檔並記錄 `chore(deps)` snapshot，不替換執行中 cell 的 state directory／preopen。更新有中斷 recovery journal；build 失敗或取消不發布。新增記錄隨 resume／child seed 保留，下一個 cell 以 `extra::<crate>` 使用；使用者 `preludeExtra` 同名設定優先，重複新增是 no-op。已成功新增的依賴不因後續 cell panic 回滾；Git 失敗回報「已新增但 snapshot 失敗」。本次不擴充到原估 30–80 crates、不開放 guest removal，也不允許任意抓取。
 
 ### 2.4 執行管線
 
@@ -334,9 +336,9 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 {"v":1, "kind":"ack", "id": 4}
 ```
 
-**分派**：`BridgeServer` 收到 `req` → 查 `HostRequestHandlers[type]`（**現有 registry 原封重用**，含 `rlm.run`/`goal.*`/`agent_message.*`/`mcp.*`/`model.info` 全部 handler）→ handler 回傳 JSON → 回 `res`。`cellSourceCode` 注入：BridgeServer 持有當前 cell 的 code（對映 `handleHostRequest` 注入 `activeExecution.code`），供 subagent spawn 顯示歸因。新增 handler：`websearch.run`（§4.1）與 `display.*`（emit 專用，不進 req 路徑）；`deps.add` 延至 Phase 2（D15）。
+**分派**：`BridgeServer` 收到 `req` → 查 `HostRequestHandlers[type]`（**現有 registry 原封重用**，含 `rlm.run`/`goal.*`/`agent_message.*`/`mcp.*`/`model.info` 全部 handler）→ handler 回傳 JSON → 回 `res`。`cellSourceCode` 注入：BridgeServer 持有當前 cell 的 code（對映 `handleHostRequest` 注入 `activeExecution.code`），供 subagent spawn 顯示歸因。新增 handler：`websearch.run`（§4.1）與 `display.*`（emit 專用，不進 req 路徑）；`deps.add` 已由 runtime 提供上述初版 curated catalog（D15 後續）。
 
-**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報；skill tests 改用 cell budget，見 §4.2）。WASI `poll_oneoff` 檢查 stdin readiness，無回覆時每 5ms 重試至 deadline，host cell budget 為硬後盾。傳輸逾時後，下次呼叫重新握手；host 先 abort 舊 generation 的合作式工作並禁止晚到回覆，再回 hello_ok，guest 排除舊回覆後繼續。Request 絕不自動重送；host error 不重建連線。Cell 結束時取消合作式 handler，再等待其他 in-flight handler 收尾（`HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。Host 持續讀 stdout、獨立處理 handler 並寫 stdin；已完成副作用不回滾。
+**時序語意**：guest 端 `req` 為同步阻塞（預設 30s 逾時，`rlm::Error::Bridge` 回報；skill tests 與 deps.add 改用 cell budget，見 §4.2／§2.3）。WASI `poll_oneoff` 檢查 stdin readiness，無回覆時每 5ms 重試至 deadline，host cell budget 為硬後盾。傳輸逾時後，下次呼叫重新握手；host 先 abort 舊 generation 的合作式工作並禁止晚到回覆，再回 hello_ok，guest 排除舊回覆後繼續。Request 絕不自動重送；host error 不重建連線。Cell 結束時取消合作式 handler，再等待其他 in-flight handler 收尾（`HOST_REQUEST_DISPOSE_TIMEOUT_MS = 5000`）。Host 持續讀 stdout、獨立處理 handler 並寫 stdin；已完成副作用不回滾。
 
 **對映現制的差異聲明**：現制 comm 允許 cell 結束後的 detached asyncio task 繼續發訊（`onLateSentAgentMessage` LRU 機制）；新制 cell 進程結束即斷線，**無 late message**——這是簡化（一個 cell 的 side effect 隨 cell 終結），`agent_message` 要在 cell 存活期間送出。此語意差異需寫進 prompt（§3）。
 
@@ -463,9 +465,9 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
   specs). Keep refinements small and evidence-backed; call `rlm::refine::run(None)?`
   when a repeated failure or reusable tactic emerges.
 
-Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
-dependencies yourself. If a task genuinely needs another crate, tell the user (they can
-extend the prelude in settings). Do not work around this by making the sandbox
+Prelude crates available: {PRELUDE_LABELS}. Use rlm::deps::add("name") for the
+curated catalog, then extra::<crate> in a subsequent cell. For other crates, the user can
+extend the prelude in settings. Do not work around this by making the sandbox
 impersonate the project environment — the project's own tooling runs via bash.
 
 Editing project files: for targeted edits prefer
@@ -696,7 +698,7 @@ wasmedge-agent/
 
 ### 8.2 其他
 
-- **Curated deps.add（D15 後續）**：已驗證 wasm32-wasip1 相容的白名單（估 30–80 個常用 crate）；`rlm::deps::add` 限白名單內，host 抓取 → re-vendor → 改 Cargo.toml → commit。
+- **Curated deps.add（D15 後續，初版已落實）**：六個模板已 vendor 的 crate 可離線新增、驗證、commit，細節見 §2.3 實作註記。原估 30–80 個常用 crate 的 catalog 擴充與新增抓取／re-vendor 流程仍待後續驗證。
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
