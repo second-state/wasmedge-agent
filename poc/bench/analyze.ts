@@ -14,7 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
 
 type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
-type DriverStatus = "legacy" | "running" | "completed" | "error" | "invalid";
+type DriverStatus = "legacy" | "planned" | "running" | "completed" | "error" | "invalid";
 
 interface CompileRecovery {
 	recoveredErrors: number;
@@ -53,7 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function driverStatus(value: unknown): DriverStatus {
 	if (value === undefined) return "legacy";
-	if (value === "running" || value === "completed" || value === "error") return value;
+	if (value === "planned" || value === "running" || value === "completed" || value === "error") return value;
 	return "invalid";
 }
 
@@ -335,7 +335,7 @@ for (const [key, ms] of byCondition) {
 }
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
-console.log("tasks = distinct task IDs; runs = recorded repetitions.");
+console.log("tasks = distinct task IDs; runs = registered repetitions, including planned runs that have not started.");
 console.log("n/a = unavailable: at least one run has missing or invalid evidence for that metric (blank in CSV).");
 console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50  driverIncomplete");
 for (const [key, a] of [...aggs.entries()].sort()) {

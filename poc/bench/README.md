@@ -80,11 +80,19 @@ the launched process and endpoint. Terminating the driver can
 leave that daemon behind; a recorded PID alone is not proof of current process
 ownership. This is benchmark process separation, not a host security sandbox.
 
-The driver writes `meta.json` with `driverStatus: "running"` before run setup,
-checkpoints completed turns, then records `completed` after task checking or
+Before launching any agent, the driver validates the full task selection and
+writes one `meta.json` with `driverStatus: "planned"` for every selected
+task/model/group/repetition, including the resolved B prompt variant. Run IDs
+are unique even when different providers use the same model name. All plan
+records must be written before execution begins. `plannedAt` records when a
+slot was registered; `startedAt` stays null until that run starts.
+
+The driver changes the record to `running` before run setup, checkpoints
+completed turns, then records `completed` after task checking or
 `error` with `driverError` for a caught driver failure. Updates use a temporary
 file and rename so an interrupted rewrite leaves the previous JSON record.
-An interrupted driver can therefore leave a `running` record. Setup failures
+An interrupted driver leaves `planned` records for unstarted runs and may
+leave a `running` record for the active run. Setup failures
 have no measured `wallMs`; otherwise wall time covers daemon startup and the
 attempted agent turns, excluding fixture setup and task checking. Completed
 turn exit codes, logs, and the last discovered session are retained when
@@ -93,7 +101,9 @@ later work fails.
 Driver failures still allow later runs to proceed, but make the driver exit
 nonzero. A completed task's failed check or timeout remains a benchmark
 outcome, distinct from a driver error. Recording requires a writable results
-directory; this does not create records for attempts that have not started.
+directory. A failed or interrupted registration may leave only part of the
+plan, but no agent has run yet. This does not implement resuming a plan or
+detect records deleted after registration.
 
 ## Metrics (analyze.ts)
 
@@ -107,9 +117,9 @@ treatment pass-rate ≥ A − 15pp and median output tokens ≤ 2.0 × A. A zero
 baseline median permits only a zero treatment median; it does not waive the
 token threshold.
 
-The summary lists distinct `tasks` separately from `runs` (repeated
-measurements). Before applying the D20 thresholds, each treatment condition
-must have the same task IDs and the same share of runs per task as its
+The summary lists distinct `tasks` separately from `runs` (registered
+repetitions, including unstarted ones). Before applying the D20 thresholds,
+each treatment condition must have the same task IDs and the same share of runs per task as its
 baseline. For example, three repetitions per task in A and two per task in a
 B prompt split are comparable; omitting a task or changing its relative
 weight withholds the verdict. All recorded runs remain in the CSV and
@@ -132,15 +142,17 @@ evidence; the analyzer does not silently drop that run or substitute zero.
 The D20 verdict requires boolean task-check results and complete output-token
 totals for every run in both conditions. Missing input usage alone does not
 block the output-token gate. Explicit zero counts remain valid measurements.
-These checks cover discovered runs; they do not verify that all planned tasks
-or repetitions were recorded.
+These checks cover discovered records, including the driver's preregistered
+slots; they cannot reconstruct unrecorded historical runs or deleted records.
 
-The appended `driverStatus` CSV field distinguishes `running`, `completed`,
-`error`, `invalid` (unrecognized status), and `legacy` (field absent). Per-run
+The appended `driverStatus` CSV field distinguishes `planned`, `running`,
+`completed`, `error`, `invalid` (unrecognized status), and `legacy` (field absent). Per-run
 CSV observations from incomplete runs remain visible and may be partial.
 The summary counts these runs under `driverIncomplete`; their condition's
 performance and success aggregates are unavailable, and either condition
 having one withholds the D20 verdict even if usage and checks appear complete.
+Planned runs have no check, timing, or transcript measurements; they are
+incomplete observations, not failed tasks or zero-token runs.
 Legacy records retain the existing evidence checks for compatibility; absent
 historical runs cannot be recovered from the available metadata.
 
