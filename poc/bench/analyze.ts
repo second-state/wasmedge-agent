@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
 
+type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
+
 interface RunMetrics {
 	runId: string;
 	task: string;
@@ -24,8 +26,9 @@ interface RunMetrics {
 	pass: boolean | null;
 	timedOut: boolean;
 	wallMs: number;
-	tokensIn: number;
-	tokensOut: number;
+	sessionStatus: SessionStatus;
+	tokensIn: number | null;
+	tokensOut: number | null;
 	assistantTurns: number;
 	toolCalls: Record<string, number>;
 	errorToolResults: number;
@@ -35,29 +38,58 @@ interface RunMetrics {
 	compileMsTotal: number;
 }
 
-function analyzeSession(sessionFile: string, metrics: RunMetrics): void {
-	const lines = readFileSync(sessionFile, "utf-8").split("\n");
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function addTokens(total: number | null, ...counts: unknown[]): number | null {
+	if (total === null) return null;
+	for (const count of counts) {
+		if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) return null;
+		total += count;
+		if (!Number.isSafeInteger(total)) return null;
+	}
+	return total;
+}
+
+function analyzeSession(sessionFile: string, metrics: RunMetrics): SessionStatus {
+	let source: string;
+	try {
+		source = readFileSync(sessionFile, "utf-8");
+	} catch (error) {
+		return isRecord(error) && error.code === "ENOENT" ? "missing" : "unreadable";
+	}
+	metrics.tokensIn = 0;
+	metrics.tokensOut = 0;
+	const lines = source.split("\n");
 	for (const line of lines) {
 		if (!line.trim()) continue;
-		let entry: any;
+		let entry: unknown;
 		try {
 			entry = JSON.parse(line);
 		} catch {
-			continue;
+			return "invalid";
 		}
-		const message = entry?.message;
-		if (entry?.type !== "message" || !message) continue;
+		if (!isRecord(entry) || typeof entry.type !== "string") return "invalid";
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (!isRecord(message) || typeof message.role !== "string") return "invalid";
 
 		if (message.role === "assistant") {
 			metrics.assistantTurns += 1;
-			const usage = message.usage;
-			if (usage) {
-				metrics.tokensIn += (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-				metrics.tokensOut += usage.output ?? 0;
-			}
+			const usage = isRecord(message.usage) ? message.usage : {};
+			metrics.tokensIn = addTokens(
+				metrics.tokensIn,
+				usage.input,
+				usage.cacheRead === undefined ? 0 : usage.cacheRead,
+				usage.cacheWrite === undefined ? 0 : usage.cacheWrite,
+			);
+			metrics.tokensOut = addTokens(metrics.tokensOut, usage.output);
+			if (message.content !== undefined && !Array.isArray(message.content)) return "invalid";
 			for (const block of message.content ?? []) {
-				if (block?.type === "toolCall") {
-					const name = block.name ?? "unknown";
+				if (!isRecord(block) || typeof block.type !== "string") return "invalid";
+				if (block.type === "toolCall") {
+					const name = typeof block.name === "string" ? block.name : "unknown";
 					metrics.toolCalls[name] = (metrics.toolCalls[name] ?? 0) + 1;
 				}
 			}
@@ -65,7 +97,7 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): void {
 
 		if (message.role === "toolResult") {
 			if (message.isError) metrics.errorToolResults += 1;
-			const details = message.details;
+			const details = isRecord(message.details) ? message.details : {};
 			const toolName = message.toolName;
 			if (toolName === "rust" || toolName === "ipython") {
 				metrics.cellCount += 1;
@@ -77,6 +109,7 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): void {
 			}
 		}
 	}
+	return metrics.assistantTurns ? "ok" : "empty";
 }
 
 function percentile(values: number[], p: number): number {
@@ -86,8 +119,8 @@ function percentile(values: number[], p: number): number {
 	return sorted[idx];
 }
 
-function median(values: number[]): number {
-	if (values.length === 0) return 0;
+function median(values: (number | null)[]): number | null {
+	if (values.length === 0 || !values.every((value): value is number => value !== null)) return null;
 	const sorted = [...values].sort((a, b) => a - b);
 	const middle = Math.floor(sorted.length / 2);
 	return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
@@ -127,11 +160,12 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 		model: meta.model,
 		variant: meta.variant,
 		rep: meta.rep,
-		pass: meta.checkPass,
+		pass: typeof meta.checkPass === "boolean" ? meta.checkPass : null,
 		timedOut: meta.timedOut,
 		wallMs: meta.wallMs,
-		tokensIn: 0,
-		tokensOut: 0,
+		sessionStatus: "missing",
+		tokensIn: null,
+		tokensOut: null,
 		assistantTurns: 0,
 		toolCalls: {},
 		errorToolResults: 0,
@@ -140,7 +174,11 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 		cellDurationsMs: [],
 		compileMsTotal: 0,
 	};
-	if (meta.sessionFile && existsSync(meta.sessionFile)) analyzeSession(meta.sessionFile, m);
+	if (typeof meta.sessionFile === "string" && meta.sessionFile) m.sessionStatus = analyzeSession(meta.sessionFile, m);
+	if (m.sessionStatus !== "ok") {
+		m.tokensIn = null;
+		m.tokensOut = null;
+	}
 	runs.push(m);
 }
 
@@ -150,9 +188,10 @@ const csvPath =
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults";
-const rows = runs.map((m) =>
-	[
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus";
+const rows = runs.map((m) => {
+	const hasSession = m.sessionStatus === "ok";
+	return [
 		m.runId,
 		m.task,
 		m.category,
@@ -165,26 +204,27 @@ const rows = runs.map((m) =>
 		m.wallMs,
 		m.tokensIn,
 		m.tokensOut,
-		m.assistantTurns,
-		m.cellCount,
-		m.compileErrorCells,
-		percentile(m.cellDurationsMs, 50),
-		percentile(m.cellDurationsMs, 95),
-		m.errorToolResults,
-	].join(","),
-);
+		hasSession ? m.assistantTurns : null,
+		hasSession ? m.cellCount : null,
+		hasSession ? m.compileErrorCells : null,
+		hasSession ? percentile(m.cellDurationsMs, 50) : null,
+		hasSession ? percentile(m.cellDurationsMs, 95) : null,
+		hasSession ? m.errorToolResults : null,
+		m.sessionStatus,
+	].join(",");
+});
 writeFileSync(csvPath, [header, ...rows].join("\n"));
 console.log(`wrote ${runs.length} run(s) → ${csvPath}\n`);
 
 // Aggregates per (model, group)
 interface Agg {
 	runs: number;
-	passRate: number;
-	tokensOutMedian: number;
-	tokensInMedian: number;
-	cellsMedian: number;
-	compileErrorShare: number;
-	cellP50: number;
+	passRate: number | null;
+	tokensOutMedian: number | null;
+	tokensInMedian: number | null;
+	cellsMedian: number | null;
+	compileErrorShare: number | null;
+	cellP50: number | null;
 }
 const byCondition = new Map<string, RunMetrics[]>();
 for (const m of runs) {
@@ -194,24 +234,37 @@ for (const m of runs) {
 const aggs = new Map<string, Agg>();
 for (const [key, ms] of byCondition) {
 	const scored = ms.filter((m) => m.pass !== null);
+	const hasSessions = ms.every((m) => m.sessionStatus === "ok");
 	const allCells = ms.flatMap((m) => m.cellDurationsMs);
 	const totalCells = ms.reduce((sum, m) => sum + m.cellCount, 0);
 	aggs.set(key, {
 		runs: ms.length,
-		passRate: scored.length ? scored.filter((m) => m.pass).length / scored.length : Number.NaN,
+		passRate: scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: median(ms.map((m) => m.tokensOut)),
 		tokensInMedian: median(ms.map((m) => m.tokensIn)),
-		cellsMedian: median(ms.map((m) => m.cellCount)),
-		compileErrorShare: totalCells ? ms.reduce((s, m) => s + m.compileErrorCells, 0) / totalCells : 0,
-		cellP50: percentile(allCells, 50),
+		cellsMedian: hasSessions ? median(ms.map((m) => m.cellCount)) : null,
+		compileErrorShare: hasSessions ? (totalCells ? ms.reduce((s, m) => s + m.compileErrorCells, 0) / totalCells : 0) : null,
+		cellP50: hasSessions ? percentile(allCells, 50) : null,
 	});
 }
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
+console.log("n/a = unavailable: at least one run has missing or invalid evidence for that metric (blank in CSV).");
 console.log("condition                                                    runs  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50");
 for (const [key, a] of [...aggs.entries()].sort()) {
+	const pass = a.passRate === null ? "n/a" : `${Math.round(a.passRate * 100)}%`;
+	const compileErrors = a.compileErrorShare === null ? "n/a" : `${Math.round(a.compileErrorShare * 100)}%`;
 	console.log(
-		`${key.padEnd(60)} ${String(a.runs).padStart(4)}  ${Number.isNaN(a.passRate) ? "  n/a" : `${Math.round(a.passRate * 100)}%`.padStart(5)}  ${String(a.tokensOutMedian).padStart(11)}  ${String(a.tokensInMedian).padStart(10)}  ${String(a.cellsMedian).padStart(10)}  ${`${Math.round(a.compileErrorShare * 100)}%`.padStart(5)}  ${a.cellP50}ms`,
+		[
+			key.padEnd(60),
+			String(a.runs).padStart(4),
+			pass.padStart(5),
+			String(a.tokensOutMedian ?? "n/a").padStart(11),
+			String(a.tokensInMedian ?? "n/a").padStart(10),
+			String(a.cellsMedian ?? "n/a").padStart(10),
+			compileErrors.padStart(5),
+			a.cellP50 === null ? "n/a" : `${a.cellP50}ms`,
+		].join("  "),
 	);
 }
 
@@ -221,8 +274,16 @@ for (const [key, b] of aggs) {
 	const [model, condition] = key.split(" | ");
 	if (condition !== "F" && !condition.startsWith("B/")) continue;
 	const a = aggs.get(`${model} | A`);
-	if (!a || Number.isNaN(a.passRate) || Number.isNaN(b.passRate)) {
+	if (!a) {
 		console.log(`  ${key}: baseline incomplete — no verdict`);
+		continue;
+	}
+	if (a.passRate === null || b.passRate === null) {
+		console.log(`  ${key}: checks incomplete — no verdict`);
+		continue;
+	}
+	if (a.tokensOutMedian === null || b.tokensOutMedian === null) {
+		console.log(`  ${key}: output usage incomplete — no verdict`);
 		continue;
 	}
 	const passOk = b.passRate >= a.passRate - 0.15;

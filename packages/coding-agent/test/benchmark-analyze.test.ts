@@ -51,8 +51,9 @@ function fixture() {
 				})),
 			];
 			writeFileSync(sessionFile, messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"));
+			const metaPath = join(dir, "meta.json");
 			writeFileSync(
-				join(dir, "meta.json"),
+				metaPath,
 				JSON.stringify({
 					runId,
 					task: "fixture",
@@ -67,6 +68,7 @@ function fixture() {
 					sessionFile,
 				}),
 			);
+			return { sessionFile, metaPath };
 		},
 		run() {
 			const csv = join(root, "metrics.csv");
@@ -77,6 +79,16 @@ function fixture() {
 			return { stdout, csv: readFileSync(csv, "utf-8") };
 		},
 	};
+}
+
+function csvRows(csv: string) {
+	const [header, ...lines] = csv.split("\n");
+	const columns = header.split(",");
+	return lines.map((line) => Object.fromEntries(line.split(",").map((value, index) => [columns[index], value])));
+}
+
+function writeMessages(path: string, messages: unknown[]) {
+	writeFileSync(path, messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"));
 }
 
 function summary(stdout: string, condition: string) {
@@ -98,6 +110,122 @@ function summary(stdout: string, condition: string) {
 }
 
 describe("offline benchmark analyzer", () => {
+	it.each(
+		["A", "F"].flatMap((group) =>
+			["missing", "unreadable", "empty", "header-only", "malformed", "invalid message"].map((problem) => ({
+				group,
+				problem,
+			})),
+		),
+	)("withholds transcript metrics and verdicts for $group with a $problem session", ({ group, problem }) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group: "F", tokensOut: 100 });
+		const { sessionFile } = f.add({ group, tokensOut: 100, durations: [10] });
+		if (problem === "missing" || problem === "unreadable") {
+			rmSync(sessionFile);
+			if (problem === "unreadable") mkdirSync(sessionFile);
+		} else if (problem === "empty") {
+			writeFileSync(sessionFile, "\n");
+		} else if (problem === "header-only") {
+			writeFileSync(sessionFile, '{"type":"session","version":3}\n');
+		} else {
+			const badLine = problem === "malformed" ? '{"type":' : '{"type":"message","message":null}';
+			writeFileSync(sessionFile, `${readFileSync(sessionFile, "utf-8")}\n${badLine}`);
+		}
+		const { stdout, csv } = f.run();
+		const row = csvRows(csv).at(-1)!;
+		expect(row.sessionStatus).toBe(
+			problem === "header-only" ? "empty" : ["malformed", "invalid message"].includes(problem) ? "invalid" : problem,
+		);
+		for (const column of ["tokensIn", "tokensOut", "assistantTurns", "cellCount", "cellP50Ms", "errorToolResults"]) {
+			expect(row[column], column).toBe("");
+		}
+		const aggregate = summary(stdout, `fixture-model | ${group}`);
+		expect(aggregate.tokensOut).toBeNaN();
+		expect(aggregate.tokensIn).toBeNaN();
+		expect(aggregate.cells).toBeNaN();
+		expect(aggregate.compileErrors).toBe("n/a");
+		expect(aggregate.cellP50).toBe("n/a");
+		expect(stdout).toContain("fixture-model | F: output usage incomplete — no verdict");
+		expect(stdout).not.toContain("→ GO");
+	});
+	it.each(["B", "F"])("does not drop an unmetered turn or run from the %s token median", (group) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group, tokensOut: 100 });
+		const { sessionFile } = f.add({ group, tokensOut: 100 });
+		writeMessages(sessionFile, [
+			{ role: "assistant", usage: { input: 10, output: 20 } },
+			{ role: "assistant" },
+			{ role: "assistant", usage: { input: 10, output: 20 } },
+		]);
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)).toMatchObject({
+			sessionStatus: "ok",
+			tokensOut: "",
+			tokensIn: "",
+			assistantTurns: "3",
+		});
+		const condition = `${group}${group === "B" ? "/example" : ""}`;
+		expect(summary(stdout, `fixture-model | ${condition}`).tokensOut).toBeNaN();
+		expect(stdout).toContain(`fixture-model | ${condition}: output usage incomplete — no verdict`);
+	});
+	it.each([undefined, null, "10", -1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
+		"does not interpret output usage %s as a token count",
+		(output) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			const { sessionFile } = f.add({ group: "F", tokensOut: 100 });
+			writeMessages(sessionFile, [{ role: "assistant", usage: { input: 10, output } }]);
+			const { stdout, csv } = f.run();
+			expect(csvRows(csv).at(-1)).toMatchObject({ tokensOut: "", tokensIn: "10" });
+			expect(stdout).toContain("fixture-model | F: output usage incomplete — no verdict");
+		},
+	);
+	it("marks token totals unavailable when addition exceeds safe integer precision", () => {
+		const f = fixture();
+		const { sessionFile } = f.add({ tokensOut: 1 });
+		writeMessages(sessionFile, [
+			{
+				role: "assistant",
+				usage: { input: Number.MAX_SAFE_INTEGER, cacheRead: 1, output: Number.MAX_SAFE_INTEGER },
+			},
+			{ role: "assistant", usage: { input: 0, output: 1 } },
+		]);
+		expect(csvRows(f.run().csv)[0]).toMatchObject({ tokensOut: "", tokensIn: "" });
+	});
+	it.each([
+		{ usage: { output: 10 }, tokensIn: "" },
+		{ usage: { input: 5, cacheRead: "5", output: 10 }, tokensIn: "" },
+		{ usage: { input: 5, cacheWrite: null, output: 10 }, tokensIn: "" },
+		{ usage: { input: 5, output: 10 }, tokensIn: "5" },
+		{ usage: { input: 5, cacheRead: 10, cacheWrite: 20, output: 10 }, tokensIn: "35" },
+	])("handles input usage independently of the output gate: $usage", ({ usage, tokensIn }) => {
+		const f = fixture();
+		f.add({ tokensOut: 10 });
+		const { sessionFile } = f.add({ group: "F", tokensOut: 10 });
+		writeMessages(sessionFile, [{ role: "assistant", usage }]);
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)).toMatchObject({ tokensOut: "10", tokensIn });
+		if (tokensIn === "") expect(summary(stdout, "fixture-model | F").tokensIn).toBeNaN();
+		expect(stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 10 vs A 10 OK → GO");
+	});
+	it.each(["A", "F"].flatMap((group) => [null, undefined, "false"].map((checkPass) => ({ group, checkPass }))))(
+		"does not exclude an unscored $group run with checkPass=$checkPass",
+		({ group, checkPass }) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			f.add({ group: "F", tokensOut: 100 });
+			const { metaPath } = f.add({ group, tokensOut: 100 });
+			const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+			writeFileSync(metaPath, JSON.stringify({ ...meta, checkPass }));
+			const { stdout, csv } = f.run();
+			expect(csvRows(csv).at(-1)?.pass).toBe("");
+			expect(summary(stdout, `fixture-model | ${group}`).pass).toBe("n/a");
+			expect(stdout).toContain("fixture-model | F: checks incomplete — no verdict");
+		},
+	);
 	it.each([
 		{ values: [7], median: 7 },
 		{ values: [9, 2, 1], median: 2 },
