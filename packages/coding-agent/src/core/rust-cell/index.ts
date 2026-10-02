@@ -3,12 +3,14 @@
  * the kernel provisioner had so AgentSession wiring stays small. */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { BridgeServer } from "./bridge-server.js";
 import { CellRunner } from "./cell-runner.js";
+import { configurePreludeExtra, normalizePreludeExtra, type PreludeExtra } from "./prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
 import { testRustSkill } from "./skill-tests.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
@@ -70,6 +72,8 @@ export interface RustCellProvisionerOptions extends CellResourceLimits {
 	initialWorkspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
+	/** User-selected crates.io dependencies, fixed for the provisioner's lifetime. */
+	preludeExtra?: PreludeExtra[];
 	/** Host request registry; when set, cells run with a live bridge. */
 	hostHandlers?: HostRequestHandlers;
 	/** Extra WASI env vars for every cell (e.g. RLM_DEPTH). */
@@ -99,7 +103,7 @@ export class RustCellProvisioner {
 
 	constructor(options: RustCellProvisionerOptions) {
 		validateCellResourceLimits(options);
-		this.options = { ...options };
+		this.options = { ...options, preludeExtra: normalizePreludeExtra(options.preludeExtra) };
 	}
 
 	get hasRunner(): boolean {
@@ -156,6 +160,7 @@ export class RustCellProvisioner {
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
+		const extras = this.options.preludeExtra!;
 		prepareVersionedWorkspace(this.workspace, {
 			templateDir,
 			initialWorkspaceDir: this.options.initialWorkspaceDir,
@@ -164,8 +169,19 @@ export class RustCellProvisioner {
 				existsSync(this.workspace) ? this.workspace : templateDir,
 			),
 			wasmedgeVersion: this.toolchainInfo.wasmedgeVersion,
+			configurationHash: extras.length
+				? createHash("sha256").update(JSON.stringify(extras)).digest("hex")
+				: undefined,
 			configure: (workspace) => {
-				syncRustSkills(workspace, withInheritedSkills(workspace, this.options.rustSkills ?? []));
+				const skills = withInheritedSkills(workspace, this.options.rustSkills ?? []);
+				for (const extra of extras) {
+					if (skills.some((skill) => skill.crateName === extra.name.replaceAll("-", "_"))) {
+						throw new Error(`preludeExtra crate conflicts with a mounted skill: ${extra.name}`);
+					}
+				}
+				onProgress?.("Preparing configured prelude dependencies...");
+				configurePreludeExtra(workspace, extras, this.toolchainInfo!.cargoBin);
+				syncRustSkills(workspace, skills);
 			},
 			validate: (workspace) => {
 				execFileSync(this.toolchainInfo!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
@@ -177,6 +193,11 @@ export class RustCellProvisioner {
 			onProgress,
 		});
 		const rustSkills = withInheritedSkills(this.workspace, this.options.rustSkills ?? []);
+		for (const extra of extras) {
+			if (rustSkills.some((skill) => skill.crateName === extra.name.replaceAll("-", "_"))) {
+				throw new Error(`preludeExtra crate conflicts with a mounted skill: ${extra.name}`);
+			}
+		}
 		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
 			onProgress?.("Mounting rust skills...");
 			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });

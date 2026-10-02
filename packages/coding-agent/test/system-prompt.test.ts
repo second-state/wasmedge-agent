@@ -28,6 +28,14 @@ function emptyHarnessState(): HarnessState {
 }
 
 describe("buildRlmPrompt (rust doctrine, DESIGN §3)", () => {
+	it("lists user-configured crate paths only when Rust is active", () => {
+		const options = { ...BASE, preludeExtra: ["itoa", "unicode_width"] };
+		const prompt = buildSystemPrompt({ ...options, selectedTools: ["rust"] });
+		expect(prompt).toContain("User-configured crates under agent_lib::prelude::extra: itoa, unicode_width.");
+		expect(prompt).toContain("rustCell.preludeExtra and reload");
+		expect(buildSystemPrompt({ ...options, selectedTools: ["bash"] })).not.toContain("User-configured crates");
+	});
+
 	it("includes the rust-cell control doctrine and the fixed prelude", () => {
 		const prompt = buildRlmPrompt({ ...BASE, activeTools: ["rust", "bash"] });
 		expect(prompt).toContain("The rust tool is your control environment");

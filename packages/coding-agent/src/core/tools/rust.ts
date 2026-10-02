@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 import type { CellInput, CellResourceLimits, CellResult } from "../rust-cell/index.js";
 import { composeToolText, RustCellProvisioner } from "../rust-cell/index.js";
+import type { PreludeExtra } from "../rust-cell/prelude-extra.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const rustSchema = Type.Object({
@@ -41,6 +42,7 @@ export interface RustToolOptions extends CellResourceLimits {
 	workspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
+	preludeExtra?: PreludeExtra[];
 	/** Shared provisioner owning the runtime lifecycle. When provided, the remaining options are ignored. */
 	provisioner?: RustCellProvisioner;
 }
@@ -63,6 +65,7 @@ export function createRustToolDefinition(
 			cwd,
 			workspaceDir: options?.workspaceDir,
 			cellTimeoutMs: options?.cellTimeoutMs,
+			preludeExtra: options?.preludeExtra,
 			cellGasLimit: options?.cellGasLimit,
 			cellMemoryPageLimit: options?.cellMemoryPageLimit,
 		});

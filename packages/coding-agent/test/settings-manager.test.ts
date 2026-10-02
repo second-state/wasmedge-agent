@@ -409,6 +409,20 @@ describe("SettingsManager", () => {
 	});
 
 	describe("rustCell", () => {
+		it("loads configured crates and lets the project replace the global list", () => {
+			const extra = { name: "itoa", version: "1.0.18" };
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ rustCell: { preludeExtra: [extra] } }));
+			expect(SettingsManager.create(projectDir, agentDir).getRustCellPreludeExtra()).toEqual([
+				{ ...extra, features: [], defaultFeatures: true },
+			]);
+			writeFileSync(
+				join(projectDir, ".wasmedge-agent", "settings.json"),
+				JSON.stringify({ rustCell: { preludeExtra: [] } }),
+			);
+			expect(SettingsManager.create(projectDir, agentDir).getRustCellPreludeExtra()).toEqual([]);
+			expect(SettingsManager.inMemory({}).getRustCellPreludeExtra()).toEqual([]);
+		});
+
 		it("merges resource limits and supports an explicit null override", () => {
 			writeFileSync(
 				join(agentDir, "settings.json"),

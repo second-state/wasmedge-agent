@@ -65,7 +65,7 @@ Capabilities are ordinary Rust calls returning Result, composable into program l
 
 Prelude crates available: {PRELUDE_LABELS}. This set is fixed: you cannot add
 dependencies yourself. If a task genuinely needs another crate, tell the user (they
-can extend the prelude in settings). Do not work around this by making the sandbox
+can configure rustCell.preludeExtra and reload). Do not work around this by making the sandbox
 impersonate the project environment — the project's own tooling runs via bash.
 
 Editing project files: for targeted edits prefer
@@ -89,10 +89,14 @@ const RUST_EXAMPLE = `Example — one call that grows the library and uses it im
 
 export interface RustControlPromptOptions {
 	includeExample?: boolean;
+	preludeExtra?: string[];
 }
 
 /** The §3.2 doctrine body, ready to append inside buildRlmPrompt. */
 export function rustControlPromptSection(options: RustControlPromptOptions = {}): string {
-	const core = RUST_CONTROL_PROMPT.replace("{PRELUDE_LABELS}", RUST_PRELUDE_LABELS);
+	let core = RUST_CONTROL_PROMPT.replace("{PRELUDE_LABELS}", RUST_PRELUDE_LABELS);
+	if (options.preludeExtra?.length) {
+		core += `\n\nUser-configured crates under agent_lib::prelude::extra: ${options.preludeExtra.join(", ")}. After importing the prelude, use extra::<crate>::... .`;
+	}
 	return (options.includeExample ?? true) ? `${core}\n\n${RUST_EXAMPLE}` : core;
 }
