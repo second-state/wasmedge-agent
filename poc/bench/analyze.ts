@@ -219,6 +219,7 @@ console.log(`wrote ${runs.length} run(s) → ${csvPath}\n`);
 // Aggregates per (model, group)
 interface Agg {
 	runs: number;
+	taskCounts: Map<string, number> | null;
 	passRate: number | null;
 	tokensOutMedian: number | null;
 	tokensInMedian: number | null;
@@ -226,6 +227,16 @@ interface Agg {
 	compileErrorShare: number | null;
 	cellP50: number | null;
 }
+
+function countTasks(metrics: RunMetrics[]): Map<string, number> | null {
+	const counts = new Map<string, number>();
+	for (const { task } of metrics) {
+		if (typeof task !== "string" || !task.trim()) return null;
+		counts.set(task, (counts.get(task) ?? 0) + 1);
+	}
+	return counts;
+}
+
 const byCondition = new Map<string, RunMetrics[]>();
 for (const m of runs) {
 	const key = `${m.model} | ${m.group}${m.group === "B" ? `/${m.variant}` : ""}`;
@@ -239,6 +250,7 @@ for (const [key, ms] of byCondition) {
 	const totalCells = ms.reduce((sum, m) => sum + m.cellCount, 0);
 	aggs.set(key, {
 		runs: ms.length,
+		taskCounts: countTasks(ms),
 		passRate: scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: median(ms.map((m) => m.tokensOut)),
 		tokensInMedian: median(ms.map((m) => m.tokensIn)),
@@ -249,8 +261,9 @@ for (const [key, ms] of byCondition) {
 }
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
+console.log("tasks = distinct task IDs; runs = recorded repetitions.");
 console.log("n/a = unavailable: at least one run has missing or invalid evidence for that metric (blank in CSV).");
-console.log("condition                                                    runs  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50");
+console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50");
 for (const [key, a] of [...aggs.entries()].sort()) {
 	const pass = a.passRate === null ? "n/a" : `${Math.round(a.passRate * 100)}%`;
 	const compileErrors = a.compileErrorShare === null ? "n/a" : `${Math.round(a.compileErrorShare * 100)}%`;
@@ -258,6 +271,7 @@ for (const [key, a] of [...aggs.entries()].sort()) {
 		[
 			key.padEnd(60),
 			String(a.runs).padStart(4),
+			String(a.taskCounts?.size ?? "n/a").padStart(5),
 			pass.padStart(5),
 			String(a.tokensOutMedian ?? "n/a").padStart(11),
 			String(a.tokensInMedian ?? "n/a").padStart(10),
@@ -276,6 +290,20 @@ for (const [key, b] of aggs) {
 	const a = aggs.get(`${model} | A`);
 	if (!a) {
 		console.log(`  ${key}: baseline incomplete — no verdict`);
+		continue;
+	}
+	const baselineTasks = a.taskCounts;
+	const treatmentTasks = b.taskCounts;
+	if (!baselineTasks || !treatmentTasks) {
+		console.log(`  ${key}: task IDs incomplete — no verdict`);
+		continue;
+	}
+	// Compare relative task weights so D17 prompt splits can use fewer repetitions.
+	if (
+		baselineTasks.size !== treatmentTasks.size ||
+		[...baselineTasks].some(([task, count]) => count * b.runs !== (treatmentTasks.get(task) ?? 0) * a.runs)
+	) {
+		console.log(`  ${key}: task coverage differs — no verdict`);
 		continue;
 	}
 	if (a.passRate === null || b.passRate === null) {

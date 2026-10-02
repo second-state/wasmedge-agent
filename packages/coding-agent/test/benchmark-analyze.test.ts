@@ -22,6 +22,7 @@ function fixture() {
 	let nextId = 0;
 	return {
 		add({
+			task = "fixture",
 			model = "fixture-model",
 			group = "A",
 			variant = "example",
@@ -30,6 +31,7 @@ function fixture() {
 			durations = [],
 			pass = true,
 		}: {
+			task?: string;
 			model?: string;
 			group?: string;
 			variant?: string;
@@ -56,7 +58,7 @@ function fixture() {
 				metaPath,
 				JSON.stringify({
 					runId,
-					task: "fixture",
+					task,
 					category: "fixture",
 					model,
 					group,
@@ -94,12 +96,13 @@ function writeMessages(path: string, messages: unknown[]) {
 function summary(stdout: string, condition: string) {
 	const line = stdout.split("\n").find((line) => line.startsWith(`${condition} `));
 	expect(line, `missing aggregate for ${condition}`).toBeDefined();
-	const [runs, pass, tokensOut, tokensIn, cells, compileErrors, cellP50] = line!
+	const [runs, tasks, pass, tokensOut, tokensIn, cells, compileErrors, cellP50] = line!
 		.slice(condition.length)
 		.trim()
 		.split(/\s+/);
 	return {
 		runs: Number(runs),
+		tasks: Number(tasks),
 		pass,
 		tokensOut: Number(tokensOut),
 		tokensIn: Number(tokensIn),
@@ -110,6 +113,83 @@ function summary(stdout: string, condition: string) {
 }
 
 describe("offline benchmark analyzer", () => {
+	it.each(
+		["B", "F"].flatMap((group) =>
+			[
+				{ name: "disjoint", baseline: ["logs"], treatment: ["rename"] },
+				{ name: "missing", baseline: ["logs", "rename"], treatment: ["logs"] },
+				{ name: "extra", baseline: ["logs"], treatment: ["logs", "rename"] },
+				{ name: "reweighted", baseline: ["logs", "logs", "rename"], treatment: ["logs", "rename", "rename"] },
+			].map((example) => ({ group, ...example })),
+		),
+	)("withholds the $group verdict for $name task coverage", ({ group, baseline, treatment }) => {
+		const f = fixture();
+		for (const task of baseline) f.add({ task, tokensOut: 100 });
+		for (const task of treatment) f.add({ task, group, tokensOut: 1 });
+		const { stdout, csv } = f.run();
+		const condition = `fixture-model | ${group}${group === "B" ? "/example" : ""}`;
+		expect(stdout).toContain(`${condition}: task coverage differs — no verdict`);
+		expect(stdout).not.toContain("→ GO");
+		expect(stdout).not.toContain("→ NO-GO");
+		// Keep all recorded runs visible, including tasks that have no counterpart.
+		expect(csvRows(csv).map((row) => row.task)).toEqual([...baseline, ...treatment]);
+	});
+	it.each(["A", "F"].flatMap((group) => [undefined, null, 42, "", " "].map((task) => ({ group, task }))))(
+		"withholds verdicts when $group has task ID $task",
+		({ group, task }) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			f.add({ group: "F", tokensOut: 100 });
+			const { metaPath } = f.add({ group, tokensOut: 100 });
+			const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+			writeFileSync(metaPath, JSON.stringify({ ...meta, task }));
+			const { stdout } = f.run();
+			expect(summary(stdout, `fixture-model | ${group}`).tasks).toBeNaN();
+			expect(stdout).toContain("fixture-model | F: task IDs incomplete — no verdict");
+		},
+	);
+	it("reports tasks separately from runs and permits proportional repetition counts", () => {
+		const f = fixture();
+		for (const task of ["logs", "logs", "logs", "logs", "rename", "rename"]) f.add({ task, tokensOut: 100 });
+		for (const task of ["rename", "logs", "logs"]) f.add({ task, group: "F", tokensOut: 100 });
+		const { stdout } = f.run();
+		expect(summary(stdout, "fixture-model | A")).toMatchObject({ tasks: 2, runs: 6 });
+		expect(summary(stdout, "fixture-model | F")).toMatchObject({ tasks: 2, runs: 3 });
+		expect(stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
+	it("allows both D17 prompt splits against a baseline with three repetitions per task", () => {
+		const f = fixture();
+		for (const task of ["logs", "rename"]) {
+			for (let rep = 1; rep <= 3; rep++) {
+				f.add({ task, tokensOut: 100 });
+				f.add({ task, group: "B", variant: rep % 2 === 1 ? "example" : "noexample", tokensOut: 100 });
+			}
+		}
+		const { stdout } = f.run();
+		for (const [variant, runs] of [
+			["example", 4],
+			["noexample", 2],
+		] as const) {
+			expect(summary(stdout, `fixture-model | B/${variant}`)).toMatchObject({ tasks: 2, runs });
+			expect(stdout).toContain(
+				`fixture-model | B/${variant}: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO`,
+			);
+		}
+	});
+	it("isolates task coverage by model and prompt variant", () => {
+		const f = fixture();
+		for (const task of ["logs", "rename"]) {
+			f.add({ task, tokensOut: 100 });
+			f.add({ task, group: "B", tokensOut: 100 });
+			f.add({ task, model: "other-model", group: "B", variant: "noexample", tokensOut: 100 });
+		}
+		f.add({ task: "logs", group: "B", variant: "noexample", tokensOut: 100 });
+		f.add({ task: "logs", model: "other-model", tokensOut: 100 });
+		const { stdout } = f.run();
+		expect(stdout).toContain("fixture-model | B/example: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+		expect(stdout).toContain("fixture-model | B/noexample: task coverage differs — no verdict");
+		expect(stdout).toContain("other-model | B/noexample: task coverage differs — no verdict");
+	});
 	it.each(
 		["A", "F"].flatMap((group) =>
 			["missing", "unreadable", "empty", "header-only", "malformed", "invalid message"].map((problem) => ({
@@ -316,6 +396,7 @@ describe("offline benchmark analyzer", () => {
 			const row = Object.fromEntries(line.split(",").map((value, index) => [columns[index], value]));
 			// The CSV retains token totals, not individual cell durations.
 			f.add({
+				task: row.task,
 				model: row.model,
 				group: row.group,
 				tokensOut: Number(row.tokensOut),
@@ -331,6 +412,7 @@ describe("offline benchmark analyzer", () => {
 			["claude-sonnet-4-6", "F", 1186],
 		] as const) {
 			expect(summary(stdout, `gateway/anthropic/${model} | ${group}`)).toMatchObject({
+				tasks: 12,
 				runs: 36,
 				tokensOut: median,
 			});
