@@ -73,6 +73,17 @@ treatment pass-rate ≥ A − 15pp and median output tokens ≤ 2.0 × A. A zero
 baseline median permits only a zero treatment median; it does not waive the
 token threshold.
 
+The summary lists distinct `tasks` separately from `runs` (repeated
+measurements). Before applying the D20 thresholds, each treatment condition
+must have the same task IDs and the same share of runs per task as its
+baseline. For example, three repetitions per task in A and two per task in a
+B prompt split are comparable; omitting a task or changing its relative
+weight withholds the verdict. All recorded runs remain in the CSV and
+summary; the analyzer does not select only the overlapping tasks. A missing
+or invalid task ID makes the task count unavailable and also withholds the
+verdict. Matching IDs and weights does not verify identical fixture versions
+or model settings, or establish statistical significance.
+
 Unavailable metrics are blank in the per-run CSV and `n/a` in the summary.
 The appended `sessionStatus` CSV column distinguishes `ok` (parsed, with at
 least one assistant message), `missing`, `unreadable`, `invalid` (malformed
