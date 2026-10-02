@@ -15,6 +15,12 @@ const RUNS_DIR = join(HERE, "results", "runs");
 
 type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
 
+interface CompileRecovery {
+	recoveredErrors: number;
+	unrecoveredErrors: number;
+	distanceTotal: number;
+}
+
 interface RunMetrics {
 	runId: string;
 	task: string;
@@ -36,6 +42,7 @@ interface RunMetrics {
 	compileErrorCells: number;
 	cellDurationsMs: number[];
 	compileMsTotal: number;
+	compileRecovery: CompileRecovery | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,6 +68,10 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): SessionStatus
 	}
 	metrics.tokensIn = 0;
 	metrics.tokensOut = 0;
+	const recovery: CompileRecovery = { recoveredErrors: 0, unrecoveredErrors: 0, distanceTotal: 0 };
+	const pendingErrors: number[] = [];
+	let rustCellIndex = 0;
+	let recoveryComplete = true;
 	const lines = source.split("\n");
 	for (const line of lines) {
 		if (!line.trim()) continue;
@@ -107,9 +118,33 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): SessionStatus
 				if (details?.status === "compile_error") metrics.compileErrorCells += 1;
 				if (typeof details?.compileMs === "number") metrics.compileMsTotal += details.compileMs;
 			}
+			if (toolName === "rust") {
+				rustCellIndex += 1;
+				const status = details.status;
+				if (
+					typeof status !== "string" ||
+					!["ok", "compile_error", "error", "timeout", "aborted"].includes(status) ||
+					(message.isError !== undefined && message.isError !== (status !== "ok"))
+				) {
+					recoveryComplete = false;
+				} else if (status === "compile_error") {
+					pendingErrors.push(rustCellIndex);
+				} else if (status === "ok") {
+					for (const errorIndex of pendingErrors) recovery.distanceTotal += rustCellIndex - errorIndex;
+					recovery.recoveredErrors += pendingErrors.length;
+					pendingErrors.length = 0;
+				}
+			}
 		}
 	}
-	return metrics.assistantTurns ? "ok" : "empty";
+	if (!metrics.assistantTurns) return "empty";
+	recovery.unrecoveredErrors = pendingErrors.length;
+	metrics.compileRecovery = recoveryComplete ? recovery : null;
+	return "ok";
+}
+
+function compileRecoveryMean(recovery: CompileRecovery | null): number | null {
+	return recovery && recovery.recoveredErrors > 0 ? recovery.distanceTotal / recovery.recoveredErrors : null;
 }
 
 function percentile(values: number[], p: number): number {
@@ -173,6 +208,7 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 		compileErrorCells: 0,
 		cellDurationsMs: [],
 		compileMsTotal: 0,
+		compileRecovery: null,
 	};
 	if (typeof meta.sessionFile === "string" && meta.sessionFile) m.sessionStatus = analyzeSession(meta.sessionFile, m);
 	if (m.sessionStatus !== "ok") {
@@ -188,7 +224,7 @@ const csvPath =
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -211,6 +247,9 @@ const rows = runs.map((m) => {
 		hasSession ? percentile(m.cellDurationsMs, 95) : null,
 		hasSession ? m.errorToolResults : null,
 		m.sessionStatus,
+		m.compileRecovery?.recoveredErrors,
+		m.compileRecovery?.unrecoveredErrors,
+		compileRecoveryMean(m.compileRecovery),
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -226,6 +265,8 @@ interface Agg {
 	cellsMedian: number | null;
 	compileErrorShare: number | null;
 	cellP50: number | null;
+	compileRecovery: CompileRecovery | null;
+	unrecoveredRuns: number | null;
 }
 
 function countTasks(metrics: RunMetrics[]): Map<string, number> | null {
@@ -248,6 +289,19 @@ for (const [key, ms] of byCondition) {
 	const hasSessions = ms.every((m) => m.sessionStatus === "ok");
 	const allCells = ms.flatMap((m) => m.cellDurationsMs);
 	const totalCells = ms.reduce((sum, m) => sum + m.cellCount, 0);
+	const recoveries = ms.map((m) => m.compileRecovery);
+	let compileRecovery: CompileRecovery | null = null;
+	let unrecoveredRuns: number | null = null;
+	if (recoveries.every((r): r is CompileRecovery => r !== null)) {
+		compileRecovery = { recoveredErrors: 0, unrecoveredErrors: 0, distanceTotal: 0 };
+		unrecoveredRuns = 0;
+		for (const recovery of recoveries) {
+			compileRecovery.recoveredErrors += recovery.recoveredErrors;
+			compileRecovery.unrecoveredErrors += recovery.unrecoveredErrors;
+			compileRecovery.distanceTotal += recovery.distanceTotal;
+			if (recovery.unrecoveredErrors > 0) unrecoveredRuns += 1;
+		}
+	}
 	aggs.set(key, {
 		runs: ms.length,
 		taskCounts: countTasks(ms),
@@ -257,6 +311,8 @@ for (const [key, ms] of byCondition) {
 		cellsMedian: hasSessions ? median(ms.map((m) => m.cellCount)) : null,
 		compileErrorShare: hasSessions ? (totalCells ? ms.reduce((s, m) => s + m.compileErrorCells, 0) / totalCells : 0) : null,
 		cellP50: hasSessions ? percentile(allCells, 50) : null,
+		compileRecovery,
+		unrecoveredRuns,
 	});
 }
 
@@ -278,6 +334,21 @@ for (const [key, a] of [...aggs.entries()].sort()) {
 			String(a.cellsMedian ?? "n/a").padStart(10),
 			compileErrors.padStart(5),
 			a.cellP50 === null ? "n/a" : `${a.cellP50}ms`,
+		].join("  "),
+	);
+}
+
+console.log("\nCompile-error recovery (Rust cells):");
+console.log("meanCells averages Rust-cell distances to the next success in the same run; unrecovered errors are separate.");
+console.log("condition                                                     recoveredErrors  unrecoveredErrors  unrecoveredRuns  meanCells");
+for (const [key, a] of [...aggs.entries()].sort()) {
+	console.log(
+		[
+			key.padEnd(60),
+			String(a.compileRecovery?.recoveredErrors ?? "n/a").padStart(15),
+			String(a.compileRecovery?.unrecoveredErrors ?? "n/a").padStart(17),
+			String(a.unrecoveredRuns ?? "n/a").padStart(15),
+			compileRecoveryMean(a.compileRecovery)?.toFixed(2) ?? "n/a",
 		].join("  "),
 	);
 }

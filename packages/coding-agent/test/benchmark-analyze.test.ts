@@ -93,6 +93,30 @@ function writeMessages(path: string, messages: unknown[]) {
 	writeFileSync(path, messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"));
 }
 
+function rustResult(status: unknown, isError?: boolean) {
+	return { role: "toolResult", toolName: "rust", details: { status }, isError };
+}
+
+function writeRustCells(path: string, statuses: unknown[]) {
+	writeMessages(path, [
+		{ role: "assistant", usage: { input: 0, output: 100 } },
+		...statuses.map((status) => rustResult(status)),
+	]);
+}
+
+function recoverySummary(stdout: string, condition: string) {
+	const section = stdout.split("\nCompile-error recovery (Rust cells):\n")[1];
+	expect(section, "missing recovery summary").toBeDefined();
+	const line = section!.split("\n").find((line) => line.startsWith(`${condition} `));
+	expect(line, `missing recovery aggregate for ${condition}`).toBeDefined();
+	const [recoveredErrors, unrecoveredErrors, unrecoveredRuns, meanCells] = line!
+		.slice(condition.length)
+		.trim()
+		.split(/\s+/)
+		.map(Number);
+	return { recoveredErrors, unrecoveredErrors, unrecoveredRuns, meanCells };
+}
+
 function summary(stdout: string, condition: string) {
 	const line = stdout.split("\n").find((line) => line.startsWith(`${condition} `));
 	expect(line, `missing aggregate for ${condition}`).toBeDefined();
@@ -113,6 +137,119 @@ function summary(stdout: string, condition: string) {
 }
 
 describe("offline benchmark analyzer", () => {
+	it.each([
+		{ statuses: [], recovered: 0, unrecovered: 0, mean: null },
+		{ statuses: ["ok"], recovered: 0, unrecovered: 0, mean: null },
+		{ statuses: ["compile_error", "ok"], recovered: 1, unrecovered: 0, mean: 1 },
+		{ statuses: ["compile_error", "compile_error", "ok"], recovered: 2, unrecovered: 0, mean: 1.5 },
+		{ statuses: ["compile_error", "error", "timeout", "aborted", "ok"], recovered: 1, unrecovered: 0, mean: 4 },
+		{ statuses: ["compile_error", "compile_error"], recovered: 0, unrecovered: 2, mean: null },
+		{ statuses: ["compile_error", "ok", "compile_error"], recovered: 1, unrecovered: 1, mean: 1 },
+		{
+			statuses: ["compile_error", "ok", "ok", "compile_error", "error", "ok"],
+			recovered: 2,
+			unrecovered: 0,
+			mean: 1.5,
+		},
+		{ statuses: ["error", "timeout", "aborted", "ok"], recovered: 0, unrecovered: 0, mean: null },
+	])("reports compile-error recovery for $statuses", ({ statuses, recovered, unrecovered, mean }) => {
+		const f = fixture();
+		const { sessionFile } = f.add({ group: "F", tokensOut: 100 });
+		writeRustCells(sessionFile, statuses);
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv)[0]).toMatchObject({
+			pass: "true",
+			recoveredCompileErrors: String(recovered),
+			unrecoveredCompileErrors: String(unrecovered),
+			compileRecoveryMeanCells: mean === null ? "" : String(mean),
+		});
+		expect(recoverySummary(stdout, "fixture-model | F")).toEqual({
+			recoveredErrors: recovered,
+			unrecoveredErrors: unrecovered,
+			unrecoveredRuns: unrecovered > 0 ? 1 : 0,
+			meanCells: mean ?? Number.NaN,
+		});
+	});
+	it("counts only Rust cells and follows recovery across turns within a run", () => {
+		const f = fixture();
+		const { sessionFile } = f.add({ group: "F", tokensOut: 100 });
+		writeMessages(sessionFile, [
+			{ role: "assistant", usage: { input: 0, output: 100 } },
+			rustResult("compile_error"),
+			{ role: "toolResult", toolName: "bash", isError: false },
+			{ role: "toolResult", toolName: "ipython", details: { status: "ok" } },
+			rustResult("compile_error"),
+			{ role: "user", content: "Continue" },
+			{ role: "assistant", usage: { input: 0, output: 100 } },
+			rustResult("ok"),
+		]);
+		expect(recoverySummary(f.run().stdout, "fixture-model | F")).toEqual({
+			recoveredErrors: 2,
+			unrecoveredErrors: 0,
+			unrecoveredRuns: 0,
+			meanCells: 1.5,
+		});
+	});
+	it("never closes an unrecovered error using a success from another run", () => {
+		const f = fixture();
+		for (const statuses of [["compile_error"], ["ok"]]) {
+			const { sessionFile } = f.add({ group: "F", tokensOut: 100 });
+			writeRustCells(sessionFile, statuses);
+		}
+		expect(recoverySummary(f.run().stdout, "fixture-model | F")).toEqual({
+			recoveredErrors: 0,
+			unrecoveredErrors: 1,
+			unrecoveredRuns: 1,
+			meanCells: Number.NaN,
+		});
+	});
+	it("pools recovered-error distances and reports unrecovered errors alongside the mean", () => {
+		const f = fixture();
+		for (const statuses of [
+			["compile_error", "compile_error", "ok"],
+			["compile_error", "error", "error", "ok"],
+			["compile_error", "compile_error"],
+			["compile_error"],
+		]) {
+			const { sessionFile } = f.add({ group: "F", tokensOut: 100 });
+			writeRustCells(sessionFile, statuses);
+		}
+		expect(recoverySummary(f.run().stdout, "fixture-model | F")).toEqual({
+			recoveredErrors: 3,
+			unrecoveredErrors: 3,
+			unrecoveredRuns: 2,
+			meanCells: 2,
+		});
+	});
+	it.each([undefined, null, "starting", "running", "unknown", "ok"])(
+		"withholds recovery metrics for ambiguous Rust status %s",
+		(status) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			const complete = f.add({ group: "F", tokensOut: 100 });
+			writeRustCells(complete.sessionFile, ["compile_error", "ok"]);
+			const incomplete = f.add({ group: "F", tokensOut: 100 });
+			writeMessages(incomplete.sessionFile, [
+				{ role: "assistant", usage: { input: 0, output: 100 } },
+				rustResult("compile_error"),
+				rustResult(status, true),
+				rustResult("ok"),
+			]);
+			const { stdout, csv } = f.run();
+			expect(csvRows(csv).at(-1)).toMatchObject({
+				recoveredCompileErrors: "",
+				unrecoveredCompileErrors: "",
+				compileRecoveryMeanCells: "",
+			});
+			expect(recoverySummary(stdout, "fixture-model | F")).toEqual({
+				recoveredErrors: Number.NaN,
+				unrecoveredErrors: Number.NaN,
+				unrecoveredRuns: Number.NaN,
+				meanCells: Number.NaN,
+			});
+			expect(stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+		},
+	);
 	it.each(
 		["B", "F"].flatMap((group) =>
 			[
@@ -218,9 +355,25 @@ describe("offline benchmark analyzer", () => {
 		expect(row.sessionStatus).toBe(
 			problem === "header-only" ? "empty" : ["malformed", "invalid message"].includes(problem) ? "invalid" : problem,
 		);
-		for (const column of ["tokensIn", "tokensOut", "assistantTurns", "cellCount", "cellP50Ms", "errorToolResults"]) {
+		for (const column of [
+			"tokensIn",
+			"tokensOut",
+			"assistantTurns",
+			"cellCount",
+			"cellP50Ms",
+			"errorToolResults",
+			"recoveredCompileErrors",
+			"unrecoveredCompileErrors",
+			"compileRecoveryMeanCells",
+		]) {
 			expect(row[column], column).toBe("");
 		}
+		expect(recoverySummary(stdout, `fixture-model | ${group}`)).toEqual({
+			recoveredErrors: Number.NaN,
+			unrecoveredErrors: Number.NaN,
+			unrecoveredRuns: Number.NaN,
+			meanCells: Number.NaN,
+		});
 		const aggregate = summary(stdout, `fixture-model | ${group}`);
 		expect(aggregate.tokensOut).toBeNaN();
 		expect(aggregate.tokensIn).toBeNaN();

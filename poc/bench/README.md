@@ -107,6 +107,25 @@ values, select zero-based index `floor(n × p / 100)`, capped at the last index
 middle value for even samples. Per-condition cell p50 pools individual cell
 durations; it is not a median of per-run p50 values.
 
+Compile-error recovery (DESIGN §6.3) follows the ordered Rust tool results
+within each run. Every `compile_error` is one sample: its distance to the
+next `ok` Rust result counts subsequent Rust cells, including intervening
+errors, timeouts, and aborts. Thus `compile_error, compile_error, ok` yields
+distances 2 and 1 (mean 1.5). Other tools and conversation turns neither close
+a recovery nor add to that distance; a success in another run cannot close it.
+This measures the next observed success, not whether the same code was fixed
+or the task was correct.
+
+The CSV appends `recoveredCompileErrors`, `unrecoveredCompileErrors`, and
+`compileRecoveryMeanCells`. The summary also counts runs with unrecovered
+errors. Means pool recovered-error distances across runs, rather than
+averaging per-run means. Errors with no later successful Rust cell are
+reported separately, even if task acceptance passed. With no recovered
+samples, the mean is unavailable, not zero. Missing or inconsistent Rust
+statuses make recovery metrics unavailable for the run and its condition;
+unusable sessions do likewise. These observations do not add a D20 gate.
+Historical CSVs without ordered cell results cannot reconstruct this metric.
+
 Before the October 2 correction, the analyzer also used that upper-middle
 convention for values labeled `med`, and omitted D20 verdicts for F. Historical
 reports preserve those outputs separately from corrected sample medians.
