@@ -65,9 +65,23 @@ fresh group-B workspace root. Multi-turn tasks use `--resume` between turns.
 
 Per run: pass (check.sh), wall time, tokens in/out (incl. cache), assistant
 turns, tool calls by name, cell count, compile-error cell share, cell duration
-p50/p95, error tool results. Aggregates are medians per (model, group[/variant])
-with the D20 gate evaluated per model: B pass-rate ≥ A − 15pp and B median
-output tokens ≤ 2.0 × A.
+p50/p95, error tool results. Token and cell-count aggregates use conventional
+sample medians per (model, group[/variant]): odd samples select the middle
+value; even samples average the two middle values. The D20 gate compares
+each B prompt variant and the built-in fork group F with the same-model A:
+treatment pass-rate ≥ A − 15pp and median output tokens ≤ 2.0 × A. A zero
+baseline median permits only a zero treatment median; it does not waive the
+token threshold.
+
+Cell-duration p50/p95 retain the historical percentile convention: sort
+values, select zero-based index `floor(n × p / 100)`, capped at the last index
+(0 when no cell durations were recorded). Thus cell p50 selects the higher
+middle value for even samples. Per-condition cell p50 pools individual cell
+durations; it is not a median of per-run p50 values.
+
+Before the October 2 correction, the analyzer also used that upper-middle
+convention for values labeled `med`, and omitted D20 verdicts for F. Historical
+reports preserve those outputs separately from corrected sample medians.
 
 Known caveat: some gateways do not report input tokens in streaming
 responses, so `tokensIn` reads 0 through this provider. Both groups measure
