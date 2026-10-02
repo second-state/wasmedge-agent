@@ -2,6 +2,7 @@ import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HostRequestHandler } from "../host-bridge/types.js";
 import { withBuildPermit } from "./build-gate.js";
+import { cargoEnvironment } from "./cargo-environment.js";
 import {
 	CELL_DEPENDENCIES_FILE,
 	curatedDependency,
@@ -59,6 +60,7 @@ export function createDependencyHandler(options: {
 						const cargo = (args: string[]) =>
 							runProcess(options.cargoBin, args, {
 								cwd: staged,
+								env: cargoEnvironment(),
 								timeoutMs: deadline - Date.now(),
 								signal,
 							});

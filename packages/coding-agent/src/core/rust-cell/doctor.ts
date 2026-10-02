@@ -4,6 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { cargoEnvironment } from "./cargo-environment.js";
 import {
 	ensureTemplateReady,
 	findCargoBin,
@@ -109,7 +110,10 @@ export function fixRuntime(): string[] {
 
 	try {
 		if (existsSync(findRustupBin()) && wasmTargetMissing()) {
-			execFileSync(findRustupBin(), ["target", "add", "wasm32-wasip1"], { stdio: "pipe" });
+			execFileSync(findRustupBin(), ["target", "add", "wasm32-wasip1"], {
+				env: cargoEnvironment(),
+				stdio: "pipe",
+			});
 			messages.push("added the wasm32-wasip1 target");
 		}
 	} catch (error) {

@@ -315,6 +315,8 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 **Guest 網路政策**：所有 cell（有無 bridge 皆同）與 skill tests 共用非網路 WASI Preview 1 function import 白名單。執行前由 host JavaScript engine validate/compile Wasm 並讀取 imports，不 instantiate；socket／DNS、plugin、未知 module/function、非 function imports 及無法驗證的 Wasm features 均拒絕，未使用的 import 也不放行。WasmEdge 必須以 `--force-interpreter` 執行已檢查的 Wasm code，忽略 embedded AOT native payload。這是 agent runner 的 admission policy，不是 stock WasmEdge CLI 的全域網路限制；guest 對外能力仍由已註冊 host handlers 提供。Host bash、Cargo build scripts/proc macros、host handlers 的權限不受此政策限制。
 
+**Cargo 環境（2026-10-02）**：runtime 發起的 Cargo（模板準備、workspace upgrade、cell、skill probe/tests、依賴解析／vendoring）及 Rust toolchain probes/repairs 共用環境變數白名單，只繼承工具鏈、系統路徑與離線設定；skill tests 的 target/build 目錄由 host 另行指定。未列入的 provider credentials、registry tokens、proxy、compiler flags/wrappers 不再從 host 環境繼承，完整名單見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md#trust-boundary)。這不是編譯沙箱：`include_str!`、build scripts、proc macros 仍可依主機權限存取檔案，Cargo config 也能另行提供環境／credentials；既有產物不會被清除，host bash 與 handlers 的權限不變，不能宣稱 credentials 全面隔離。
+
 **Framing**：newline-delimited JSON（UTF-8，一行一訊息；換行以 `\n`，訊息內字串已由 JSON 轉義）。Guest 每個 stdout frame 加上 `\x1eRLM:<token>:` 前綴；host 分離 protocol 與普通輸出，回覆僅送 private stdin。普通輸出不需以換行結尾，跨 chunk 的 UTF-8 與前綴均保留。stdin 專供 bridge 使用；frame 上限 32 MiB。
 
 ```jsonc
