@@ -201,7 +201,7 @@ Matching workspaces and child snapshots reuse their lockfile and vendor director
 so subsequent cells compile offline. The shared template is unchanged.
 Configured dependencies are trusted host build inputs: build scripts and proc
 macros run on the host during compilation. Guest execution still uses the existing
-import restrictions. For the small curated catalog, cells can instead use
+import restrictions. For the curated catalog, cells can instead use
 [`rlm::deps::add`](rlm-runtime.md#workspace-lifecycle) without changing settings.
 Those additions persist separately; `preludeExtra: []` only removes user-configured
 entries. Explicit settings take precedence for matching crate names.

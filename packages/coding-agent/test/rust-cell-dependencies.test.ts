@@ -29,13 +29,22 @@ const roots: string[] = [];
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+function writeDependency(workspace: string, path: string, content: string) {
+	if (path === "vendor") {
+		mkdirSync(join(workspace, path), { recursive: true });
+		writeFileSync(join(workspace, path, "crate.txt"), content);
+	} else writeFileSync(join(workspace, path), content);
+}
+function readDependency(workspace: string, path: string) {
+	return readFileSync(join(workspace, path, ...(path === "vendor" ? ["crate.txt"] : [])), "utf-8");
+}
 function fixture() {
 	const root = mkdtempSync(join(tmpdir(), "deps-update-test-"));
 	roots.push(root);
 	const workspace = join(root, "workspace");
 	for (const path of DEPENDENCY_PATHS) {
 		mkdirSync(dirname(join(workspace, path)), { recursive: true });
-		if (path !== CELL_DEPENDENCIES_FILE) writeFileSync(join(workspace, path), "previous");
+		if (path !== CELL_DEPENDENCIES_FILE) writeDependency(workspace, path, "previous");
 	}
 	mkdirSync(join(workspace, "state"));
 	writeFileSync(join(workspace, "state/keep"), "state");
@@ -43,12 +52,12 @@ function fixture() {
 }
 function stage(workspace: string, next: string) {
 	cpSync(workspace, next, { recursive: true });
-	for (const path of DEPENDENCY_PATHS) writeFileSync(join(next, path), "next");
+	for (const path of DEPENDENCY_PATHS) writeDependency(next, path, "next");
 }
 function unchanged(workspace: string) {
 	for (const path of DEPENDENCY_PATHS) {
 		if (path === CELL_DEPENDENCIES_FILE) expect(existsSync(join(workspace, path))).toBe(false);
-		else expect(readFileSync(join(workspace, path), "utf-8")).toBe("previous");
+		else expect(readDependency(workspace, path)).toBe("previous");
 	}
 	expect(readFileSync(join(workspace, "state/keep"), "utf-8")).toBe("state");
 }
@@ -75,7 +84,28 @@ describe("curated dependency policy", () => {
 });
 
 describe("dependency publication", () => {
-	it("publishes only dependency files, preserving state written during preparation", async () => {
+	it("recovers an older eight-file journal without replacing vendor sources", () => {
+		const { workspace } = fixture();
+		const transaction = dependencyTransactionDir(workspace);
+		stage(workspace, join(transaction, "next"));
+		const originals = DEPENDENCY_PATHS.slice(0, 8).map((path) => existsSync(join(workspace, path)));
+		mkdirSync(join(transaction, "previous"));
+		renameSync(join(workspace, "Cargo.toml"), join(transaction, "previous/Cargo.toml"));
+		renameSync(join(transaction, "next/Cargo.toml"), join(workspace, "Cargo.toml"));
+		writeFileSync(join(transaction, "owner.json"), JSON.stringify({ pid: 0, phase: "publishing", originals }));
+		recoverDependencyUpdate(workspace);
+		unchanged(workspace);
+	});
+	it("rejects symlinked vendor directories without touching their contents", async () => {
+		const { root, workspace } = fixture();
+		renameSync(join(workspace, "vendor"), join(root, "external"));
+		symlinkSync(join(root, "external"), join(workspace, "vendor"));
+		await expect(updateDependencies(workspace, async () => {}, new AbortController().signal)).rejects.toThrow(
+			"regular scaffold directory: vendor",
+		);
+		expect(readFileSync(join(root, "external/crate.txt"), "utf-8")).toBe("previous");
+	});
+	it("publishes dependency files and vendor sources, preserving state written during preparation", async () => {
 		const { workspace } = fixture();
 		await updateDependencies(
 			workspace,
@@ -85,27 +115,31 @@ describe("dependency publication", () => {
 			},
 			new AbortController().signal,
 		);
-		for (const path of DEPENDENCY_PATHS) expect(readFileSync(join(workspace, path), "utf-8")).toBe("next");
+		for (const path of DEPENDENCY_PATHS) expect(readDependency(workspace, path)).toBe("next");
 		expect(readFileSync(join(workspace, "state/keep"), "utf-8")).toBe("written during build");
 	});
-	it.each(["build failure", "cancel", "partial publish"])("retains originals on %s", async (failure) => {
-		const { workspace } = fixture();
-		const controller = new AbortController();
-		await expect(
-			updateDependencies(
-				workspace,
-				async (next) => {
-					stage(workspace, next);
-					if (failure === "build failure") throw new Error("build failed");
-					if (failure === "cancel") controller.abort();
-					if (failure === "partial publish") rmSync(join(next, DEPENDENCY_PATHS[4]));
-				},
-				controller.signal,
-			),
-		).rejects.toThrow();
-		unchanged(workspace);
-		expect(existsSync(dependencyTransactionDir(workspace))).toBe(false);
-	});
+	it.each(["build failure", "cancel", "partial publish", "missing vendor"])(
+		"retains originals on %s",
+		async (failure) => {
+			const { workspace } = fixture();
+			const controller = new AbortController();
+			await expect(
+				updateDependencies(
+					workspace,
+					async (next) => {
+						stage(workspace, next);
+						if (failure === "build failure") throw new Error("build failed");
+						if (failure === "cancel") controller.abort();
+						if (failure === "partial publish") rmSync(join(next, DEPENDENCY_PATHS[4]));
+						if (failure === "missing vendor") rmSync(join(next, "vendor"), { recursive: true });
+					},
+					controller.signal,
+				),
+			).rejects.toThrow();
+			unchanged(workspace);
+			expect(existsSync(dependencyTransactionDir(workspace))).toBe(false);
+		},
+	);
 	it.each(Array.from({ length: DEPENDENCY_PATHS.length * 2 + 1 }, (_, n) => n))(
 		"recovers interruption after %i rename operations",
 		(steps) => {
@@ -130,13 +164,13 @@ describe("dependency publication", () => {
 		const { workspace } = fixture();
 		const transaction = dependencyTransactionDir(workspace);
 		cpSync(workspace, join(transaction, "previous"), { recursive: true });
-		for (const path of DEPENDENCY_PATHS) writeFileSync(join(workspace, path), "committed");
+		for (const path of DEPENDENCY_PATHS) writeDependency(workspace, path, "committed");
 		const journal = { pid: process.pid, phase: "committed", originals: DEPENDENCY_PATHS.map(() => true) };
 		writeFileSync(join(transaction, "owner.json"), JSON.stringify(journal));
 		expect(() => recoverDependencyUpdate(workspace)).toThrow("already running");
 		writeFileSync(join(transaction, "owner.json"), JSON.stringify({ ...journal, pid: 0 }));
 		recoverDependencyUpdate(workspace);
-		for (const path of DEPENDENCY_PATHS) expect(readFileSync(join(workspace, path), "utf-8")).toBe("committed");
+		for (const path of DEPENDENCY_PATHS) expect(readDependency(workspace, path)).toBe("committed");
 		expect(existsSync(transaction)).toBe(false);
 	});
 	it("rejects symlinked scaffold parents without touching their target", async () => {

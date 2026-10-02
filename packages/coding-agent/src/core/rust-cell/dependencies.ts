@@ -10,7 +10,7 @@ import {
 } from "./dependency-catalog.js";
 import { updateDependencies } from "./dependency-transaction.js";
 import { type PreludeExtra, preludeConfigurationHash, writePreludeExtra } from "./prelude-extra.js";
-import { runProcess } from "./process.js";
+import { type ProcOutcome, runProcess } from "./process.js";
 import { syncRustSkills } from "./workspace.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
 import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
@@ -55,22 +55,33 @@ export function createDependencyHandler(options: {
 						throw new Error(`Curated crate conflicts with a mounted skill: ${name}`);
 					}
 					writePreludeExtra(staged, extras);
-					syncRustSkills(staged, skills);
-					const result = await withBuildPermit(
-						() =>
-							runProcess(options.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
+					await withBuildPermit(async () => {
+						const cargo = (args: string[]) =>
+							runProcess(options.cargoBin, args, {
 								cwd: staged,
 								timeoutMs: deadline - Date.now(),
 								signal,
-							}),
-						signal,
-					);
-					signal.throwIfAborted();
-					if (result.timedOut || result.exitCode !== 0) {
-						throw new Error(
-							`Dependency build failed; workspace unchanged: ${result.timedOut ? "timed out" : result.stderr}`,
-						);
-					}
+							});
+						const requireSuccess = (result: ProcOutcome, operation: string) => {
+							signal.throwIfAborted();
+							if (result.timedOut || result.exitCode !== 0) {
+								throw new Error(
+									`Dependency ${operation} failed; workspace unchanged: ${result.timedOut ? "timed out" : result.stderr}`,
+								);
+							}
+						};
+						// Resolve against the existing vendor set first, including with an empty
+						// Cargo cache. Fetch only host-selected dependencies, before mounting skills.
+						const resolution = await cargo(["metadata", "--offline", "--format-version", "1"]);
+						signal.throwIfAborted();
+						if (resolution.timedOut) requireSuccess(resolution, "resolution");
+						if (resolution.exitCode !== 0) {
+							// Retain sources used only by skills; those must still resolve offline.
+							requireSuccess(await cargo(["vendor", "--no-delete", "vendor"]), "fetch");
+						}
+						syncRustSkills(staged, skills);
+						requireSuccess(await cargo(["build", "--release", "--offline", "-p", "cell"]), "build");
+					}, signal);
 					const versionPath = join(staged, ".workspace-version");
 					const version = JSON.parse(readFileSync(versionPath, "utf-8"));
 					writeFileSync(
