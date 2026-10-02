@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +16,17 @@ import { afterEach, describe, expect, it } from "vitest";
 const repo = resolve(__dirname, "../../..");
 const roots: string[] = [];
 afterEach(() => {
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+	for (const root of roots.splice(0)) {
+		const events = join(root, "daemon-events.jsonl");
+		if (existsSync(events)) {
+			for (const line of readFileSync(events, "utf-8").trim().split("\n")) {
+				const event = JSON.parse(line);
+				if (event.socketPath?.startsWith("/tmp/wasmedge-bench-"))
+					rmSync(dirname(event.socketPath), { recursive: true, force: true });
+			}
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 function fixture({ mode = "ok", config = true, turns = ["first"], check = "exit 0", timeoutMs = 5_000 } = {}) {
@@ -30,9 +49,37 @@ function fixture({ mode = "ok", config = true, turns = ["first"], check = "exit 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
 const mode = ${JSON.stringify(mode)};
 const agentDir = process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;
 const marker = ${JSON.stringify(join(root, "first-attempt"))};
+const events = ${JSON.stringify(join(root, "daemon-events.jsonl"))};
+const socketPath = process.argv[process.argv.indexOf("--daemon-socket") + 1];
+const record = (event) => appendFileSync(events, JSON.stringify({ event, socketPath, pid: process.pid }) + "\\n");
+if (process.argv.includes("daemon")) {
+  record("start");
+  if (mode === "daemon-fail") process.exit(2);
+  const ready = mode === "slow-ready" ? new Promise((resolve) => setTimeout(() => { record("ready"); resolve(); }, 2_200)) : Promise.resolve();
+  const server = createServer((socket) => {
+    socket.on("error", () => {});
+    const protocol = { name: "prime-agent.daemon", version: mode === "bad-protocol" ? 6 : 7 };
+    ready.then(() => { if (!socket.destroyed) socket.write(JSON.stringify({ type: "daemon_hello", protocol }) + "\\n"); });
+    socket.on("data", (data) => {
+      const envelope = JSON.parse(data.toString());
+      if (envelope.type !== "command" || envelope.protocol?.version !== 7 || envelope.command?.type !== "shutdown" || envelope.command.force !== true) process.exit(3);
+      record("stop");
+      socket.end(JSON.stringify({ type: "response", id: envelope.id, success: mode !== "reject-shutdown" }) + "\\n");
+      if (mode !== "reject-shutdown") server.close(() => process.exit(mode === "failed-shutdown" ? 2 : 0));
+    });
+  });
+  process.on("SIGTERM", () => {
+    record("signal-stop");
+    server.close(() => process.exit(0));
+  });
+  if (mode === "daemon-timeout") setInterval(() => {}, 1000);
+  else server.listen(socketPath);
+} else {
+record("turn");
 console.log("fixture turn");
 if (mode === "no-session" || (mode === "fail-first" && !existsSync(marker))) {
   writeFileSync(marker, "attempted");
@@ -47,13 +94,22 @@ if (mode === "remove-after-first") unlinkSync(fileURLToPath(import.meta.url));
 if (mode === "block-log") mkdirSync(join(agentDir, "../turn-0.log"));
 if (mode === "block-meta") mkdirSync(join(agentDir, "../meta.json.tmp"));
 if (mode === "timeout") setInterval(() => {}, 1000);
+}
 `,
 		{ mode: 0o755 },
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-	writeFileSync(join(root, "wasmedge-agent.sh"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fake)} "$@"\n`, {
-		mode: 0o755,
-	});
+	const realDaemon =
+		mode === "real-daemon"
+			? `if [ "$1" = "--mode" ]; then exec ${quote(join(repo, "wasmedge-agent.sh"))} "$@"; fi\n`
+			: "";
+	writeFileSync(
+		join(root, "wasmedge-agent.sh"),
+		`#!/bin/sh\n${realDaemon}exec ${quote(process.execPath)} ${quote(fake)} "$@"\n`,
+		{
+			mode: 0o755,
+		},
+	);
 	// A copied driver, fake executable, empty provider config, and isolated HOME
 	// and TMPDIR keep the real provider and per-user daemon out of these tests.
 	const env = {
@@ -66,6 +122,13 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	};
 	return {
 		fake,
+		temp,
+		events() {
+			return readFileSync(join(root, "daemon-events.jsonl"), "utf-8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+		},
 		run(reps = 1, group = "A") {
 			return spawnSync(
 				process.execPath,
@@ -79,7 +142,7 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 					"--reps",
 					String(reps),
 				],
-				{ cwd: root, env, encoding: "utf-8", timeout: 10_000 },
+				{ cwd: root, env, encoding: "utf-8", timeout: mode === "real-daemon" ? 30_000 : 10_000 },
 			);
 		},
 		metas() {
@@ -102,6 +165,74 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 }
 
 describe("offline benchmark driver", () => {
+	it.each(["A", "B", "F"])("uses a private %s daemon for each run and stops it after all turns", (group) => {
+		const f = fixture({ turns: ["first", "second"] });
+		expect(f.run(2, group).status).toBe(0);
+		const metas = f.metas();
+		expect(new Set(metas.map((meta) => meta.daemonSocket)).size).toBe(2);
+		for (const meta of metas) {
+			const events = f.events().filter((event) => event.socketPath === meta.daemonSocket);
+			expect(events.map((event) => event.event)).toEqual(["start", "turn", "turn", "stop"]);
+			expect(events[0].pid).toBe(meta.daemonPid);
+			expect(existsSync(dirname(meta.daemonSocket))).toBe(false);
+		}
+	});
+	it("does not inspect or remove either shared socket directory", () => {
+		const f = fixture();
+		const shared = ["prime-agent", "wasmedge-agent"].map((name) =>
+			join(f.temp, `${name}-${process.getuid?.() ?? "0"}`, "daemon.sock"),
+		);
+		for (const path of shared) {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, "unrelated socket sentinel");
+		}
+		expect(f.run().status).toBe(0);
+		for (const path of shared) expect(readFileSync(path, "utf-8")).toBe("unrelated socket sentinel");
+	});
+	it("starts and shuts down the real fork daemon without making model requests", () => {
+		const f = fixture({ mode: "real-daemon", timeoutMs: 15_000 });
+		const result = f.run(1, "F");
+		expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+		const [meta] = f.metas();
+		expect(meta).toMatchObject({ driverStatus: "completed", checkPass: true });
+		expect(existsSync(dirname(meta.daemonSocket))).toBe(false);
+	});
+	it("reports shutdown rejection and retains its private directory", () => {
+		const f = fixture({ mode: "reject-shutdown" });
+		expect(f.run().status).toBe(1);
+		const [meta] = f.metas();
+		expect(meta).toMatchObject({ driverStatus: "error", checkPass: null });
+		expect(meta.driverError).toContain("rejected shutdown");
+		expect(existsSync(dirname(meta.daemonSocket))).toBe(true);
+		expect(f.events().at(-1).event).toBe("signal-stop");
+	});
+	it("reports an unsupported protocol without sending a shutdown command", () => {
+		const f = fixture({ mode: "bad-protocol" });
+		expect(f.run().status).toBe(1);
+		expect(f.metas()[0].driverError).toContain("unsupported benchmark daemon protocol");
+		expect(f.events().map((event) => event.event)).toEqual(["start", "signal-stop"]);
+	});
+	it("waits for initialization after the daemon socket starts listening", () => {
+		const f = fixture({ mode: "slow-ready" });
+		const result = f.run();
+		expect(result.status, result.stdout).toBe(0);
+		expect(f.events().map((event) => event.event)).toEqual(["start", "ready", "turn", "stop"]);
+	});
+	it("records a daemon failure after the shutdown acknowledgement", () => {
+		const f = fixture({ mode: "failed-shutdown" });
+		expect(f.run().status).toBe(1);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "error", checkPass: null });
+		expect(f.metas()[0].driverError).toContain("failed during shutdown");
+	});
+	it.each(["daemon-fail", "daemon-timeout"])("records %s without running task turns", (mode) => {
+		const f = fixture({ mode, timeoutMs: 1_000 });
+		expect(f.run().status).toBe(1);
+		const [meta] = f.metas();
+		expect(meta).toMatchObject({ driverStatus: "error", checkPass: null, turnExitCodes: [] });
+		expect(meta.driverError).toContain(mode === "daemon-fail" ? "before readiness" : "startup timed out");
+		expect(f.events().some((event) => event.event === "turn")).toBe(false);
+		expect(existsSync(dirname(meta.daemonSocket))).toBe(false);
+	});
 	it("records setup failures for every attempted run and exits unsuccessfully", () => {
 		const f = fixture({ config: false });
 		const result = f.run(2);
@@ -127,7 +258,7 @@ describe("offline benchmark driver", () => {
 		const [meta] = f.metas();
 		expect(meta).toMatchObject({ driverStatus: "error", checkPass: null, turnExitCodes: [], sessionFile: null });
 		expect(meta.driverError).toContain("ENOENT");
-		expect(readFileSync(join(meta.runDir, "turn-0.log"), "utf-8")).toContain("ENOENT");
+		expect(readFileSync(join(meta.runDir, "daemon.log"), "utf-8")).toContain("ENOENT");
 	});
 	it("treats a task-checker spawn failure as a driver error, not a failed task", () => {
 		const f = fixture({ mode: "missing-checker" });

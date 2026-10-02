@@ -61,14 +61,34 @@ Isolation per run: fresh fixture copy as the project dir, fresh
 `PRIME_AGENT_CODING_AGENT_DIR` (so sessions/artifacts stay inside the run dir),
 fresh group-B workspace root. Multi-turn tasks use `--resume` between turns.
 
+On macOS/Linux, each run starts its own daemon with `--mode daemon` and a
+private `--daemon-socket`; baseline executables must support both options and
+daemon protocol 7 (as in the pinned TypeScript baseline).
+All turns in that run use the same socket. Socket directories are created
+under `/tmp/wasmedge-bench-*` to keep Unix socket paths short even when results
+live under a long path. The driver neither scans nor stops the user's shared
+daemons. Daemon startup counts toward `wallMs`; task checking and daemon
+shutdown do not. Historical measurements are unchanged.
+
+The driver requests shutdown on its private socket before task checking and
+also on failure, so the daemon stops its detached workers. A rejected request
+or 10-second shutdown timeout falls back to signalling only the process group
+it launched and records a driver error; detached workers may require manual
+cleanup. Unexpected daemon exit or failed shutdown retains the private socket
+directory for inspection. `daemonPid`, `daemonSocket`, and `daemon.log` record
+the launched process and endpoint. Terminating the driver can
+leave that daemon behind; a recorded PID alone is not proof of current process
+ownership. This is benchmark process separation, not a host security sandbox.
+
 The driver writes `meta.json` with `driverStatus: "running"` before run setup,
 checkpoints completed turns, then records `completed` after task checking or
 `error` with `driverError` for a caught driver failure. Updates use a temporary
 file and rename so an interrupted rewrite leaves the previous JSON record.
 An interrupted driver can therefore leave a `running` record. Setup failures
-have no measured `wallMs`; otherwise wall time covers the attempted agent
-turns, excluding setup and task checking. Completed turn exit codes, logs,
-and the last discovered session are retained when later work fails.
+have no measured `wallMs`; otherwise wall time covers daemon startup and the
+attempted agent turns, excluding fixture setup and task checking. Completed
+turn exit codes, logs, and the last discovered session are retained when
+later work fails.
 
 Driver failures still allow later runs to proceed, but make the driver exit
 nonzero. A completed task's failed check or timeout remains a benchmark

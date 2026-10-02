@@ -575,6 +575,11 @@ const ALLOWLIST = [
 		reason: "the multiclient bench harness speaks the protocol as a peer does and writes its name into every hello it sends (rule R1); only the quoted literal is exempt",
 	},
 	{
+		glob: "packages/coding-agent/test/benchmark-run.test.ts",
+		allow: [/"prime-agent\.daemon"/, /\["prime-agent", "wasmedge-agent"\]/],
+		reason: "the benchmark fixture sends the preserved protocol wire value and checks that upstream's shared socket directory is untouched (rule R1); only the wire literal and the endpoint-name pair are exempt",
+	},
+	{
 		glob: "packages/coding-agent/src/core/messages.ts",
 		allow: [/"prime-agent\.worker_recovery"/, /"prime-agent\.update_restart"/, /"prime-agent\.update_complete"/],
 		reason: "three persisted session-entry types, wire values under rule R1 on the same footing as prime-agent.refinement: each is written into session JSONL and is what a reload, an export, or a consumer outside this repository classifies the record by. Only these three quoted literals survive, so a branded identifier or a line of prose added to this file still fails",
