@@ -69,7 +69,8 @@ Prelude crates available: {PRELUDE_LABELS}.
 For a curated addition, call \`rlm::deps::add("crate-name")?\` first, then use
 \`extra::crate_name::...\` in a SUBSEQUENT cell after importing the prelude.
 Curated crates: ${Object.keys(CURATED_DEPENDENCIES).join(", ")}. Versions and features
-are host-selected. Additions persist across resume and child snapshots; repeated
+are host-selected. Missing sources are fetched by the host within the cell timeout;
+already-vendored crates resolve offline. Additions persist across resume and child snapshots; repeated
 calls are harmless. For other crates, ask the user to configure
 rustCell.preludeExtra and reload. Do not work around this by making the sandbox
 impersonate the project environment — the project's own tooling runs via bash.

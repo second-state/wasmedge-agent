@@ -205,7 +205,7 @@ cargo build --release --target wasm32-wasip1 \
 - **profile**：release（REPORT 的 0.28s 是特定小程式、暖快取下的 release 量測，不是固定 build 延遲）。`[profile.release] debug = false, incremental = true`；`codegen-units` 預設。不做 wasm-opt/strip。
 - 快取：per-session `target/`（模板預熱）。不跨 session 共享 target（鎖競爭與污染風險 > 收益；模板複製已解決冷啟動）。
 
-**Curated deps.add 初版（2026-10-02）**：`rlm::deps::add(name)` 已接上 host handler，先提供模板已 vendor 的六個精確版本 crate：aho-corasick 1.1.5、base64 0.22.1、itoa 1.0.18、memchr 2.8.3、regex-automata 0.4.18、regex-syntax 0.8.11。模型不能指定版本、features 或來源；新增在獨立暫存 workspace 離線 release-build，成功後原地發布依賴檔並記錄 `chore(deps)` snapshot，不替換執行中 cell 的 state directory／preopen。更新有中斷 recovery journal；build 失敗或取消不發布。新增記錄隨 resume／child seed 保留，下一個 cell 以 `extra::<crate>` 使用；使用者 `preludeExtra` 同名設定優先，重複新增是 no-op。已成功新增的依賴不因後續 cell panic 回滾；Git 失敗回報「已新增但 snapshot 失敗」。本次不擴充到原估 30–80 crates、不開放 guest removal，也不允許任意抓取。
+**Curated deps.add（2026-10-02）**：`rlm::deps::add(name)` 已接上 host handler，catalog 擴至 30 個精確版本 crates.io crate（default features；版本見 `dependency-catalog.ts`），全部有代表性 API 的 WASI build／WasmEdge execution 測試。模型不能指定版本、features 或來源。Host 先在暫存 workspace 離線解析，缺少來源才以 `cargo vendor` 抓取／re-vendor；此時尚未掛載 skills，保留僅供 skills 使用的既有 vendor sources，再掛回 skills 並離線 release-build。解析、抓取與 build 共用 cell timeout／abort。成功後原地發布依賴檔與 vendor directory，記錄 `chore(deps)` snapshot，不替換執行中 cell 的 state directory／preopen。更新有中斷 recovery journal，能回復初版八檔 journal；fetch／build 失敗或取消不發布。新增記錄隨 resume／child seed 保留，下一個 cell 以 `extra::<crate>` 使用；使用者 `preludeExtra` 同名設定優先，重複新增是 no-op。已成功新增的依賴不因後續 cell panic 回滾；Git 失敗回報「已新增但 snapshot 失敗」。未 vendor 的 crate 需要 registry access 或已有 Cargo cache；既有 vendor 與相同設定的 resume／child 可在空 Cargo cache 下離線使用。不開放 guest removal 或任意來源。
 
 ### 2.4 執行管線
 
@@ -303,7 +303,7 @@ rlm::display     // diff(path, old, new) / attach_image(path)   → emit 事件�
 rlm::harness     // 經 harness.request 由 host 讀寫 harness_state.json，沿用 schema v1
                  // host 驗證與測試 skill 後保存；guest 不掛載 harness stores
 rlm::mcp         // list_tools(server) / call_tool(server, tool, json)
-rlm::deps        // add(crate_name) -> Result<()>  // Phase 1 一律回 not-supported（D15）
+rlm::deps        // add(crate_name) -> Result<()>  // host-curated catalog（D15 後續已落實）
 rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 ```
 
@@ -698,7 +698,7 @@ wasmedge-agent/
 
 ### 8.2 其他
 
-- **Curated deps.add（D15 後續，初版已落實）**：六個模板已 vendor 的 crate 可離線新增、驗證、commit，細節見 §2.3 實作註記。原估 30–80 個常用 crate 的 catalog 擴充與新增抓取／re-vendor 流程仍待後續驗證。
+- **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
 - **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。

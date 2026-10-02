@@ -4,17 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDependencyHandler } from "../src/core/rust-cell/dependencies.js";
-import {
-	CELL_DEPENDENCIES_FILE,
-	CURATED_DEPENDENCIES,
-	readCellDependencies,
-} from "../src/core/rust-cell/dependency-catalog.js";
+import { CELL_DEPENDENCIES_FILE, readCellDependencies } from "../src/core/rust-cell/dependency-catalog.js";
 import { DEPENDENCY_PATHS } from "../src/core/rust-cell/dependency-transaction.js";
 import { RustCellProvisioner, type RustCellProvisionerOptions } from "../src/core/rust-cell/index.js";
 import { isTemplateWarm, resolveToolchain } from "../src/core/rust-cell/toolchain.js";
 import { resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 import { snapshotWorkspace } from "../src/core/rust-cell/workspace-snapshot.js";
+
+const TEMPLATE_CRATES = ["aho-corasick", "base64", "itoa", "memchr", "regex-automata", "regex-syntax"];
 
 let available = false;
 try {
@@ -41,7 +39,7 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		return { root, workspace: join(root, "workspace") };
 	}
 	it(
-		"adds offline without losing open files, then resumes and inherits all catalog crates",
+		"adds vendored crates offline, fetches a new crate, then resumes and inherits offline",
 		{ timeout: 600_000 },
 		async () => {
 			const { root, workspace } = fixture();
@@ -60,9 +58,7 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
                 let mut file = std::fs::File::create("/agent/state/open.txt")?;
                 file.write_all(b"before,")?;
                 rlm::state::set("before", &1)?;
-                for name in [${Object.keys(CURATED_DEPENDENCIES)
-							.map((name) => JSON.stringify(name))
-							.join(",")}] {
+                for name in [${TEMPLATE_CRATES.map((name) => JSON.stringify(name)).join(",")}] {
                     rlm::deps::add(name)?;
                 }
                 rlm::deps::add("itoa")?;
@@ -80,12 +76,30 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 				before: 1,
 				after: 2,
 			});
-			expect(readCellDependencies(workspace)).toEqual(Object.keys(CURATED_DEPENDENCIES).sort());
+			expect(readCellDependencies(workspace)).toEqual(TEMPLATE_CRATES.sort());
 			const history = execFileSync("git", ["-C", workspace, "log", "--pretty=%s"], { encoding: "utf-8" });
 			expect(history.match(/chore\(deps\):/g)).toHaveLength(6);
 			expect(
 				execFileSync("git", ["-C", workspace, "show", `HEAD:${CELL_DEPENDENCIES_FILE}`], { encoding: "utf-8" }),
 			).toContain("itoa");
+			// A missing crate must fail without publishing when registry access is disabled.
+			const lock = readFileSync(join(workspace, "Cargo.lock"), "utf-8");
+			const unavailable = await runner.execute({
+				code: 'use agent_lib::prelude::*; fn main() { assert!(rlm::deps::add("hex").unwrap_err().to_string().contains("Dependency fetch failed")); }',
+			});
+			expect(unavailable.status, unavailable.compileDiagnostics ?? unavailable.stderr).toBe("ok");
+			expect(readFileSync(join(workspace, "Cargo.lock"), "utf-8")).toBe(lock);
+			expect(readCellDependencies(workspace)).toEqual([...TEMPLATE_CRATES].sort());
+			expect(existsSync(join(workspace, "vendor/hex"))).toBe(false);
+			vi.unstubAllEnvs();
+			const fetched = await runner.execute({
+				code: 'use agent_lib::prelude::*; fn main() -> Result<()> { rlm::deps::add("hex")?; Ok(()) }',
+			});
+			expect(fetched.status, fetched.compileDiagnostics ?? fetched.stderr).toBe("ok");
+			expect(readCellDependencies(workspace)).toEqual([...TEMPLATE_CRATES, "hex"].sort());
+			expect(existsSync(join(workspace, "vendor/hex/Cargo.toml"))).toBe(true);
+			vi.stubEnv("CARGO_HOME", cargoHome);
+			vi.stubEnv("CARGO_NET_OFFLINE", "true");
 			const code = `use agent_lib::prelude::*;
             use extra::base64::Engine;
             fn main() -> Result<()> {
@@ -95,23 +109,24 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
                 assert!(extra::aho_corasick::AhoCorasick::new(["hello"])?.is_match("hello"));
                 assert!(extra::regex_automata::meta::Regex::new("[0-9]+")?.is_match("42"));
                 assert!(extra::regex_syntax::Parser::new().parse("[0-9]+").is_ok());
-                println!("all six"); Ok(())
+                assert_eq!(extra::hex::encode(b"ok"), "6f6b");
+                println!("all seven"); Ok(())
             }`;
 			const used = await runner.execute({ code });
 			expect(used.status, used.compileDiagnostics ?? used.stderr).toBe("ok");
-			expect(used.stdout.trim()).toBe("all six");
+			expect(used.stdout.trim()).toBe("all seven");
 			await first.dispose();
 			const marker = readFileSync(join(workspace, ".workspace-version"), "utf-8");
 			const resumed = await provision({ cwd: root, workspaceDir: workspace }).ensure();
 			expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
-			expect((await resumed.execute({ code })).stdout.trim()).toBe("all six");
+			expect((await resumed.execute({ code })).stdout.trim()).toBe("all seven");
 			const seed = join(root, "seed");
 			snapshotWorkspace(workspace, seed);
 			const childWorkspace = join(root, "child");
 			const child = await provision({ cwd: root, workspaceDir: childWorkspace, initialWorkspaceDir: seed }).ensure();
 			const inherited = await child.execute({ code });
 			expect(inherited.status, inherited.compileDiagnostics ?? inherited.stderr).toBe("ok");
-			expect(inherited.stdout.trim()).toBe("all six");
+			expect(inherited.stdout.trim()).toBe("all seven");
 			expect(existsSync(join(childWorkspace, "state/open.txt"))).toBe(false);
 			expect(readFileSync(join(resolveTemplateDir(), "Cargo.toml"), "utf-8")).toBe(templateManifest);
 		},
@@ -132,7 +147,7 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 			});
 			const context = { signal: new AbortController().signal };
 			const before = new Map(
-				DEPENDENCY_PATHS.filter((path) => existsSync(join(workspace, path))).map((path) => [
+				DEPENDENCY_PATHS.filter((path) => path !== "vendor" && existsSync(join(workspace, path))).map((path) => [
 					path,
 					readFileSync(join(workspace, path), "utf-8"),
 				]),

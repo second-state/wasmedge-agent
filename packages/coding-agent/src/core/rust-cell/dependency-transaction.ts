@@ -2,8 +2,9 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { basename, dirname, join, resolve } from "node:path";
 import { CELL_DEPENDENCIES_FILE } from "./dependency-catalog.js";
 
-// Replace files in place: replacing the workspace directory would detach a
+// Replace dependency paths in place: replacing the workspace directory would detach a
 // running guest's preopens and lose state written after its deps.add request.
+// Append paths only: recovery also accepts the previous eight-file journal.
 export const DEPENDENCY_PATHS = [
 	"Cargo.toml",
 	"Cargo.lock",
@@ -13,6 +14,7 @@ export const DEPENDENCY_PATHS = [
 	"agent_lib/src/prelude_extra.rs",
 	".workspace-version",
 	CELL_DEPENDENCIES_FILE,
+	"vendor",
 ] as const;
 
 interface Journal {
@@ -41,19 +43,22 @@ export function assertDependencyPaths(workspace: string): void {
 			parent = dirname(parent);
 		}
 		const stat = lstatSync(join(root, path), { throwIfNoEntry: false });
-		if (stat && !stat.isFile()) throw new Error(`Expected a regular scaffold file: ${path}`);
+		const directory = path === "vendor";
+		if (stat && !(directory ? stat.isDirectory() : stat.isFile())) {
+			throw new Error(`Expected a regular scaffold ${directory ? "directory" : "file"}: ${path}`);
+		}
 	}
 }
 
 function rollback(workspace: string, transaction: string, journal: Journal): void {
 	assertDependencyPaths(workspace);
-	for (const [index, path] of DEPENDENCY_PATHS.entries()) {
+	for (const [index, path] of DEPENDENCY_PATHS.slice(0, journal.originals.length).entries()) {
 		const backup = join(transaction, "previous", path);
 		if (existsSync(backup)) {
-			rmSync(join(workspace, path), { force: true });
+			rmSync(join(workspace, path), { recursive: path === "vendor", force: true });
 			renameSync(backup, join(workspace, path));
 		} else if (!journal.originals[index] && !existsSync(join(transaction, "next", path))) {
-			rmSync(join(workspace, path), { force: true });
+			rmSync(join(workspace, path), { recursive: path === "vendor", force: true });
 		}
 	}
 }
@@ -69,7 +74,7 @@ export function recoverDependencyUpdate(workspace: string): void {
 		journal.pid < 0 ||
 		!["preparing", "publishing", "committed"].includes(journal.phase) ||
 		!Array.isArray(journal.originals) ||
-		journal.originals.length !== DEPENDENCY_PATHS.length ||
+		![8, DEPENDENCY_PATHS.length].includes(journal.originals.length) ||
 		!journal.originals.every((value) => typeof value === "boolean")
 	) {
 		throw new Error("Invalid dependency transaction journal");
