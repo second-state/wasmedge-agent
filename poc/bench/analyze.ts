@@ -87,7 +87,10 @@ function percentile(values: number[], p: number): number {
 }
 
 function median(values: number[]): number {
-	return percentile(values, 50);
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((a, b) => a - b);
+	const middle = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
 /** Find meta.json up to depth 3 (tolerates the pre-fix nested "n/a" dirs). */
@@ -204,25 +207,26 @@ for (const [key, ms] of byCondition) {
 	});
 }
 
-console.log("condition                                                    runs  pass%  tokOut(med)  tokIn(med)  cells  cErr%  cellP50");
+console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
+console.log("condition                                                    runs  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50");
 for (const [key, a] of [...aggs.entries()].sort()) {
 	console.log(
-		`${key.padEnd(60)} ${String(a.runs).padStart(4)}  ${Number.isNaN(a.passRate) ? "  n/a" : `${Math.round(a.passRate * 100)}%`.padStart(5)}  ${String(a.tokensOutMedian).padStart(11)}  ${String(a.tokensInMedian).padStart(10)}  ${String(a.cellsMedian).padStart(5)}  ${`${Math.round(a.compileErrorShare * 100)}%`.padStart(5)}  ${a.cellP50}ms`,
+		`${key.padEnd(60)} ${String(a.runs).padStart(4)}  ${Number.isNaN(a.passRate) ? "  n/a" : `${Math.round(a.passRate * 100)}%`.padStart(5)}  ${String(a.tokensOutMedian).padStart(11)}  ${String(a.tokensInMedian).padStart(10)}  ${String(a.cellsMedian).padStart(10)}  ${`${Math.round(a.compileErrorShare * 100)}%`.padStart(5)}  ${a.cellP50}ms`,
 	);
 }
 
-// D20 gate: compare each B condition against the same-model A condition.
-console.log("\nD20 gate (per model): pass ≥ A−15pp, tokensOut ≤ 2.0×A");
+// D20 gate: compare each B/F condition against the same-model A condition.
+console.log("\nD20 gate (per model): pass ≥ A−15pp, median output tokens ≤ 2.0×A");
 for (const [key, b] of aggs) {
-	if (!key.includes("| B")) continue;
-	const model = key.split(" | ")[0];
+	const [model, condition] = key.split(" | ");
+	if (condition !== "F" && !condition.startsWith("B/")) continue;
 	const a = aggs.get(`${model} | A`);
 	if (!a || Number.isNaN(a.passRate) || Number.isNaN(b.passRate)) {
 		console.log(`  ${key}: baseline incomplete — no verdict`);
 		continue;
 	}
 	const passOk = b.passRate >= a.passRate - 0.15;
-	const tokOk = a.tokensOutMedian === 0 || b.tokensOutMedian <= 2.0 * a.tokensOutMedian;
+	const tokOk = b.tokensOutMedian <= 2.0 * a.tokensOutMedian;
 	console.log(
 		`  ${key}: pass ${Math.round(b.passRate * 100)}% vs A ${Math.round(a.passRate * 100)}% ${passOk ? "OK" : "MISS"}; tokensOut ${b.tokensOutMedian} vs A ${a.tokensOutMedian} ${tokOk ? "OK" : "MISS"} → ${passOk && tokOk ? "GO" : "NO-GO"}`,
 	);

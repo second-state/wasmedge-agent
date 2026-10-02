@@ -7,7 +7,7 @@ A 144-run campaign compared stock Prime Agent's IPython runtime (A), pinned at t
 - F passed **72/72 (100%)**; A passed **69/72 (95.8%)**.
 - F's overall median wall time was **33.47s**, versus **19.12s** for A: **1.75×**.
 - On per-model medians, F was **1.98×** A for Opus 5 and **1.74×** A for Sonnet 4.6.
-- F used **1.76×** A's reported output-token p50 on Opus and **1.55×** on Sonnet (the analyzer uses an upper-middle convention; see §3.1).
+- F used **1.76×** A's reported output-token p50 on Opus and **1.55×** on Sonnet (the historical analyzer used an upper-middle convention; see §3.1).
 - F used fewer model-facing cells (median 2 versus A's 3–4), but its cell p50 was about **15–16×** A's IPython cell p50.
 - F passed the recorded D20 acceptance gate for both models: pass rate was at least A minus 15 percentage points and the analyzer's output-token p50 stayed below 2.0× A.
 
@@ -74,7 +74,7 @@ Before the campaign:
 
 `0*` means unavailable: the gateway's streaming responses did not provide input-token usage.
 
-**Statistic definition (clarified 2026-10-02):** [the analyzer](../poc/bench/analyze.ts) sorts values and selects index `floor(n × p / 100)` (zero-based). Its function named `median` calls this p50 operation: for an even sample it selects the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.
+**Statistic definition (corrected 2026-10-02):** the historical analyzer sorted values and selected index `floor(n × p / 100)` (zero-based). Its function named `median` called this p50 operation: for an even sample it selected the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. The [current analyzer](../poc/bench/analyze.ts) averages the middle pair for token and cell-count medians; cell-duration p50/p95 retain the historical convention. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.
 
 The conventional sample medians below are recomputed from the unchanged [144-row CSV](benchmark-comparison-2026-08-10.csv). Wall-time medians in §3.2 already use this definition. Per-task medians use three repetitions, so the definitions agree there.
 
@@ -192,6 +192,8 @@ D20 requires, per model:
 | Sonnet 4.6 | F 100% vs A 91.7% | 1,213 / 781 = 1.55× | PASS |
 
 **Campaign verdict: GO.**
+
+These are the report's historical comparisons. The analyzer previously printed D20 verdicts only for the PoC group B; it now also evaluates the built-in fork group F, using conventional sample medians. Both models still meet the token threshold with the corrected medians in §3.1.
 
 Compared with the 2026-08-07 M5 report, F retained 100% pass rate. Its Sonnet output-token ratio against A moved from 1.99× to 1.55×, creating more headroom under the 2.0× ceiling. Absolute comparisons across campaigns remain approximate because model service behavior and upstream revision can change.
 
