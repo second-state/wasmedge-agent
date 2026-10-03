@@ -15,8 +15,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -48,6 +48,7 @@ interface TaskSpec {
 interface RunMeta {
 	runId: string;
 	task: string;
+	taskHash: string;
 	category: string;
 	group: "A" | "B" | "F";
 	model: string;
@@ -109,8 +110,8 @@ function parseArgs(argv: string[]) {
 	return opts;
 }
 
-function loadTask(id: string): TaskSpec {
-	const spec = JSON.parse(readFileSync(join(TASKS_DIR, id, "task.json"), "utf-8")) as TaskSpec;
+function loadTask(id: string, taskDir = join(TASKS_DIR, id)): TaskSpec {
+	const spec = JSON.parse(readFileSync(join(taskDir, "task.json"), "utf-8")) as TaskSpec;
 	if (
 		!spec || typeof spec.category !== "string" || !spec.category.trim() ||
 		!Array.isArray(spec.turns) || !spec.turns.length ||
@@ -121,6 +122,31 @@ function loadTask(id: string): TaskSpec {
 	}
 	spec.id = id;
 	return spec;
+}
+
+function hashTask(taskDir: string): string {
+	const hash = createHash("sha256");
+	const visit = (path: string, relative: string) => {
+		const info = lstatSync(path);
+		if (info.isDirectory()) {
+			hash.update(JSON.stringify(["directory", relative]));
+			for (const name of readdirSync(path).sort()) visit(join(path, name), relative ? `${relative}/${name}` : name);
+		} else if (info.isFile()) {
+			const bytes = readFileSync(path);
+			hash.update(JSON.stringify(["file", relative, info.mode & 0o111, bytes.length]));
+			hash.update(bytes);
+		} else {
+			throw new Error(`benchmark task inputs must be regular files or directories: ${path}`);
+		}
+	};
+	visit(taskDir, "");
+	return `sha256:${hash.digest("hex")}`;
+}
+
+function verifyTask(meta: RunMeta): void {
+	if (hashTask(join(meta.runDir, "task")) !== meta.taskHash) {
+		throw new Error("benchmark task inputs changed after planning");
+	}
 }
 
 function shortModel(model: string): string {
@@ -362,15 +388,20 @@ function planRun(
 	model: string,
 	variant: string,
 	rep: number,
-): RunMeta {
+): { task: TaskSpec; meta: RunMeta } {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
 	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
 	const runDir = join(RESULTS_DIR, "runs", runId);
 	mkdirSync(runDir);
+	const taskDir = join(runDir, "task");
+	cpSync(join(TASKS_DIR, task.id), taskDir, { recursive: true, verbatimSymlinks: true });
+	const taskHash = hashTask(taskDir);
+	const snapshot = loadTask(task.id, taskDir);
 	const meta: RunMeta = {
 		runId,
 		task: task.id,
-		category: task.category,
+		taskHash,
+		category: snapshot.category,
 		group,
 		model,
 		variant,
@@ -390,11 +421,12 @@ function planRun(
 		runDir,
 	};
 	persistMeta(meta);
-	return meta;
+	return { task: snapshot, meta };
 }
 
 async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 	const { runDir, group, model, variant } = meta;
+	const taskDir = join(runDir, "task");
 	const projectDir = join(runDir, "project");
 	const agentDir = join(runDir, "agent-dir");
 	meta.startedAt = new Date().toISOString();
@@ -410,10 +442,11 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		if (socketDir) rmSync(socketDir, { recursive: true, force: true });
 	})();
 	try {
+		verifyTask(meta);
 		mkdirSync(projectDir, { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 
-		const fixtureDir = join(TASKS_DIR, task.id, "fixture");
+		const fixtureDir = join(taskDir, "fixture");
 		if (existsSync(fixtureDir)) cpSync(fixtureDir, projectDir, { recursive: true });
 		if (!existsSync(MODELS_JSON)) throw new Error(`missing ${MODELS_JSON} (provider config)`);
 		cpSync(MODELS_JSON, join(agentDir, "models.json"));
@@ -479,11 +512,12 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		persistMeta(meta);
 		await cleanupDaemon();
 
-		const checkScript = join(TASKS_DIR, task.id, "check.sh");
+		verifyTask(meta);
+		const checkScript = join(taskDir, "check.sh");
 		if (existsSync(checkScript)) {
 			const check = await new Promise<{ code: number | null; out: string }>((res, reject) => {
 				const child = spawn("bash", [checkScript], {
-					cwd: join(TASKS_DIR, task.id),
+					cwd: taskDir,
 					env: { ...process.env, PROJECT_DIR: projectDir },
 					stdio: ["ignore", "pipe", "pipe"],
 				});
@@ -496,6 +530,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 			meta.checkPass = check.code === 0;
 			meta.checkOutput = check.out.slice(0, 4000);
 		}
+		verifyTask(meta);
 		meta.sessionFile = findSessionFile(agentDir);
 		meta.driverStatus = "completed";
 	} catch (err) {
@@ -532,7 +567,7 @@ function persistMeta(meta: RunMeta): void {
 
 const opts = parseArgs(process.argv.slice(2));
 // Validate the full selection and persist every slot before any agent can run.
-const tasks = opts.tasks.map(loadTask);
+const tasks = opts.tasks.map((id) => loadTask(id));
 console.log(
 	`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
 );
@@ -554,7 +589,7 @@ for (const task of tasks) {
 								? "example"
 								: "noexample"
 							: opts.variant;
-				plan.push({ task, meta: planRun(task, group, model, variant, rep) });
+				plan.push(planRun(task, group, model, variant, rep));
 			}
 		}
 	}

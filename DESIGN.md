@@ -620,6 +620,8 @@ wasmedge-agent/
 
 任務環境用**固定 fixture repos**（版本 pin、每 run 從乾淨副本開始）——可重現、兩組公平。
 
+**實作更新（2026-10-04）**：driver 在啟動 agents 前為每個 run 保存完整 task 目錄快照，prompts、timeout、fixture 與驗收腳本均從快照取得；`taskHash` 記錄相對路徑、檔案內容與 executable bits 的 SHA-256 指紋。執行前及驗收前後發現快照異動時記錄 driver error。Analyzer 的 D20 比較要求每個 task 在兩組皆為同一個已知版本；缺少指紋的歷史紀錄仍可呈現量測，但不產生新 verdict。此機制固定任務輸入，未固定 provider settings、agent binary 或外部工具鏈，也不是 host 安全隔離。
+
 同模型、同任務、同 settings；每 (任務, 模型, 組) 跑 3 次取中位。模型：Claude（sonnet 級與 opus/fable 級各一）+ 一個開源權重模型（經 openrouter），共 3 家交叉驗證（REPORT §6 風險 7）。
 
 **Treatment 組內部 sub-A/B（D17）**：prompt 有/無 few-shot 範例兩版各跑一半，判準為首個 cell 的 compile-error 率與整體修錯輪數；勝者定案進 Phase 1 prompt。此 sub-A/B 不增加對 baseline 的比較組數。

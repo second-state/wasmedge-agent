@@ -23,6 +23,7 @@ function fixture() {
 	return {
 		add({
 			task = "fixture",
+			taskHash = `sha256:${"a".repeat(64)}`,
 			model = "fixture-model",
 			group = "A",
 			variant = "example",
@@ -32,6 +33,7 @@ function fixture() {
 			pass = true,
 		}: {
 			task?: string;
+			taskHash?: string | null;
 			model?: string;
 			group?: string;
 			variant?: string;
@@ -59,6 +61,7 @@ function fixture() {
 				JSON.stringify({
 					runId,
 					task,
+					taskHash: taskHash ?? undefined,
 					category: "fixture",
 					model,
 					group,
@@ -137,6 +140,51 @@ function summary(stdout: string, condition: string) {
 }
 
 describe("offline benchmark analyzer", () => {
+	it.each(["B", "F"])("withholds the %s verdict for different task versions", (group) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group, tokensOut: 100, taskHash: `sha256:${"b".repeat(64)}` });
+		const { stdout, csv } = f.run();
+		const condition = `fixture-model | ${group}${group === "B" ? "/example" : ""}`;
+		expect(stdout).toContain(`${condition}: task versions differ — no verdict`);
+		expect(stdout).not.toContain("→ GO");
+		expect(csvRows(csv).at(-1)?.taskHash).toBe(`sha256:${"b".repeat(64)}`);
+	});
+	it.each(
+		["A", "F"].flatMap((group) =>
+			[undefined, null, 42, "", "sha256:abcd", "a".repeat(64)].map((taskHash) => ({ group, taskHash })),
+		),
+	)("withholds verdicts for $group task hash $taskHash while retaining metrics", ({ group, taskHash }) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group: "F", tokensOut: 100 });
+		const { metaPath } = f.add({ group, tokensOut: 100 });
+		const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		writeFileSync(metaPath, JSON.stringify({ ...meta, taskHash }));
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)).toMatchObject({ taskHash: "", tokensOut: "100", pass: "true" });
+		expect(summary(stdout, `fixture-model | ${group}`)).toMatchObject({ pass: "100%", tokensOut: 100 });
+		expect(stdout).toContain("fixture-model | F: task versions incomplete or inconsistent — no verdict");
+	});
+	it.each(["A", "F"])("rejects mixed task versions within %s even when another run matches", (group) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group: "F", tokensOut: 100 });
+		f.add({ group, tokensOut: 100, taskHash: `sha256:${"b".repeat(64)}` });
+		expect(f.run().stdout).toContain("fixture-model | F: task versions incomplete or inconsistent — no verdict");
+	});
+	it("matches versions by task and keeps prompt variants separate", () => {
+		const f = fixture();
+		const hashes = ["a", "b"].map((letter) => `sha256:${letter.repeat(64)}`);
+		for (const [index, task] of ["logs", "rename"].entries()) {
+			for (let rep = 0; rep < 3; rep++) f.add({ task, taskHash: hashes[index], tokensOut: 100 });
+			f.add({ task, group: "B", taskHash: hashes[index], tokensOut: 100 });
+			f.add({ task, group: "B", variant: "noexample", taskHash: hashes[1 - index], tokensOut: 100 });
+		}
+		const { stdout } = f.run();
+		expect(stdout).toContain("fixture-model | B/example: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+		expect(stdout).toContain("fixture-model | B/noexample: task versions differ — no verdict");
+	});
 	it.each(
 		["A", "F"].flatMap((group) =>
 			["planned", "running", "error", "unknown", null, 0].map((driverStatus) => ({ group, driverStatus })),
@@ -667,6 +715,7 @@ describe("offline benchmark analyzer", () => {
 			// The CSV retains token totals, not individual cell durations.
 			f.add({
 				task: row.task,
+				taskHash: null,
 				model: row.model,
 				group: row.group,
 				tokensOut: Number(row.tokensOut),
@@ -688,10 +737,10 @@ describe("offline benchmark analyzer", () => {
 			});
 		}
 		expect(stdout).toContain(
-			"  gateway/anthropic/claude-opus-5 | F: pass 100% vs A 100% OK; tokensOut 755.5 vs A 427.5 OK → GO",
+			"  gateway/anthropic/claude-opus-5 | F: task versions incomplete or inconsistent — no verdict",
 		);
 		expect(stdout).toContain(
-			"  gateway/anthropic/claude-sonnet-4-6 | F: pass 100% vs A 92% OK; tokensOut 1186 vs A 767.5 OK → GO",
+			"  gateway/anthropic/claude-sonnet-4-6 | F: task versions incomplete or inconsistent — no verdict",
 		);
 	});
 });
