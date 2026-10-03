@@ -11,7 +11,7 @@ bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
-└── results/      # gitignored: runs/<runId>/{project,agent-dir,workspaces,meta.json,turn-*.log}
+└── results/      # gitignored: runs/<runId>/{task,project,agent-dir,workspaces,meta.json,turn-*.log}
 ```
 
 ## Tasks (full set, DESIGN.md appendix C)
@@ -87,6 +87,18 @@ are unique even when different providers use the same model name. All plan
 records must be written before execution begins. `plannedAt` records when a
 slot was registered; `startedAt` stays null until that run starts.
 
+Each run also retains a `task/` snapshot of the selected task directory before
+any agent starts. Prompts, timeout, fixture copies, and task checking all use
+that snapshot, so edits to the original task during execution do not change
+later runs. `taskHash` records its SHA-256 fingerprint: sorted relative paths,
+directory entries, file bytes, and file executable bits; absolute paths and
+timestamps are excluded. Task inputs must be regular files or directories;
+symlinks and special files are unsupported. Snapshot changes detected before
+run setup or around task checking become driver errors. Checkers must write
+outputs to `PROJECT_DIR` or temporary storage, not into their task snapshot.
+These snapshots record task inputs; they are not protected from host code
+and do not pin model/provider settings, agent binaries, or external tools.
+
 The driver changes the record to `running` before run setup, checkpoints
 completed turns, then records `completed` after task checking or
 `error` with `driverError` for a caught driver failure. Updates use a temporary
@@ -125,8 +137,14 @@ B prompt split are comparable; omitting a task or changing its relative
 weight withholds the verdict. All recorded runs remain in the CSV and
 summary; the analyzer does not select only the overlapping tasks. A missing
 or invalid task ID makes the task count unavailable and also withholds the
-verdict. Matching IDs and weights does not verify identical fixture versions
-or model settings, or establish statistical significance.
+verdict. Each task must also have one valid `taskHash` across all runs within
+a condition, matching the same task's hash in its baseline. Missing or
+malformed hashes, mixed versions within a condition, or different versions
+between conditions withhold the verdict. The CSV appends `taskHash`; recorded
+metrics remain visible even when versions cannot be compared. Historical
+runs without fingerprints therefore retain their metrics but get no new D20
+verdict. Matching task inputs does not verify identical model settings or
+establish statistical significance.
 
 Unavailable metrics are blank in the per-run CSV and `n/a` in the summary.
 The appended `sessionStatus` CSV column distinguishes `ok` (parsed, with at
