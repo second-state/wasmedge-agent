@@ -157,10 +157,16 @@ Legacy records retain the existing evidence checks for compatibility; absent
 historical runs cannot be recovered from the available metadata.
 
 Cell-duration p50/p95 retain the historical percentile convention: sort
-values, select zero-based index `floor(n × p / 100)`, capped at the last index
-(0 when no cell durations were recorded). Thus cell p50 selects the higher
-middle value for even samples. Per-condition cell p50 pools individual cell
-durations; it is not a median of per-run p50 values.
+values, select zero-based index `floor(n × p / 100)`, capped at the last index.
+Thus cell p50 selects the higher middle value for even samples. Every Rust or
+IPython cell result must provide a finite, nonnegative numeric `durationMs`;
+zero and fractional durations are valid. A missing or invalid duration makes
+latency unavailable for that run and its condition, rather than pooling only
+the known durations. An empty sample is also unavailable, not 0 ms. Runs with
+no cells contribute no duration samples and do not invalidate other runs'
+complete samples. Per-condition cell p50 pools individual cell durations; it
+is not a median of per-run p50 values. Missing timing alone does not change
+other metrics or the D20 verdict.
 
 Compile-error recovery (DESIGN §6.3) follows the ordered Rust tool results
 within each run. Every `compile_error` is one sample: its distance to the
