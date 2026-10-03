@@ -42,7 +42,7 @@ interface RunMetrics {
 	errorToolResults: number;
 	cellCount: number;
 	compileErrorCells: number;
-	cellDurationsMs: number[];
+	cellDurationsMs: number[] | null;
 	compileMsTotal: number;
 	compileRecovery: CompileRecovery | null;
 }
@@ -124,8 +124,11 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): SessionStatus
 			const toolName = message.toolName;
 			if (toolName === "rust" || toolName === "ipython") {
 				metrics.cellCount += 1;
-				if (typeof details?.durationMs === "number") {
-					metrics.cellDurationsMs.push(details.durationMs);
+				const duration = details.durationMs;
+				if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) {
+					metrics.cellDurationsMs?.push(duration);
+				} else {
+					metrics.cellDurationsMs = null;
 				}
 				if (details?.status === "compile_error") metrics.compileErrorCells += 1;
 				if (typeof details?.compileMs === "number") metrics.compileMsTotal += details.compileMs;
@@ -159,8 +162,8 @@ function compileRecoveryMean(recovery: CompileRecovery | null): number | null {
 	return recovery && recovery.recoveredErrors > 0 ? recovery.distanceTotal / recovery.recoveredErrors : null;
 }
 
-function percentile(values: number[], p: number): number {
-	if (values.length === 0) return 0;
+function percentile(values: number[] | null, p: number): number | null {
+	if (!values?.length) return null;
 	const sorted = [...values].sort((a, b) => a - b);
 	const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
 	return sorted[idx];
@@ -304,7 +307,8 @@ for (const [key, ms] of byCondition) {
 	const driverIncompleteRuns = ms.filter((m) => !driverComplete(m)).length;
 	const complete = driverIncompleteRuns === 0;
 	const hasSessions = complete && ms.every((m) => m.sessionStatus === "ok");
-	const allCells = ms.flatMap((m) => m.cellDurationsMs);
+	const durations = ms.map((m) => m.cellDurationsMs);
+	const allCells = durations.every((values): values is number[] => values !== null) ? durations.flat() : null;
 	const totalCells = ms.reduce((sum, m) => sum + m.cellCount, 0);
 	const recoveries = ms.map((m) => m.compileRecovery);
 	let compileRecovery: CompileRecovery | null = null;
@@ -336,7 +340,7 @@ for (const [key, ms] of byCondition) {
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
 console.log("tasks = distinct task IDs; runs = registered repetitions, including planned runs that have not started.");
-console.log("n/a = unavailable: at least one run has missing or invalid evidence for that metric (blank in CSV).");
+console.log("n/a = unavailable: missing or invalid evidence for that metric, or no samples (blank in CSV).");
 console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50  driverIncomplete");
 for (const [key, a] of [...aggs.entries()].sort()) {
 	const pass = a.passRate === null ? "n/a" : `${Math.round(a.passRate * 100)}%`;

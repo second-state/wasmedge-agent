@@ -533,9 +533,82 @@ describe("offline benchmark analyzer", () => {
 		expect(rows.map((row) => row.slice(15, 17))).toEqual([
 			["9", "9"],
 			["100", "100"],
-			["0", "0"],
+			["", ""],
 		]);
 	});
+	it.each(
+		["A", "F"].flatMap((group) =>
+			[
+				"null",
+				"[]",
+				"{}",
+				'{"durationMs":null}',
+				'{"durationMs":"10"}',
+				'{"durationMs":true}',
+				'{"durationMs":-1}',
+				'{"durationMs":1e400}',
+				'{"durationMs":-1e400}',
+			].map((details) => ({ group, details })),
+		),
+	)("withholds incomplete cell timings for $group with details $details", ({ group, details }) => {
+		const f = fixture();
+		f.add({ tokensOut: 100, durations: [10] });
+		f.add({ group: "F", tokensOut: 100, durations: [20] });
+		const { sessionFile } = f.add({ group, tokensOut: 100, durations: [30] });
+		const toolName = group === "A" ? "ipython" : "rust";
+		const source = readFileSync(sessionFile, "utf-8");
+		// Raw JSON preserves overflowing numbers, which JSON.stringify replaces with null.
+		writeFileSync(
+			sessionFile,
+			`${source}\n{"type":"message","message":{"role":"toolResult","toolName":"${toolName}","details":${details}}}\n${JSON.stringify(
+				{
+					type: "message",
+					message: { role: "toolResult", toolName, details: { durationMs: 50, status: "ok" } },
+				},
+			)}`,
+		);
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)).toMatchObject({
+			sessionStatus: "ok",
+			cellCount: "3",
+			cellP50Ms: "",
+			cellP95Ms: "",
+			tokensOut: "100",
+		});
+		expect(summary(stdout, `fixture-model | ${group}`).cellP50).toBe("n/a");
+		expect(summary(stdout, `fixture-model | ${group === "A" ? "F" : "A"}`).cellP50).toBe(
+			group === "A" ? "20ms" : "10ms",
+		);
+		expect(stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
+	it.each(["A", "F"])("reports no latency sample for %s runs without cells", (group) => {
+		const f = fixture();
+		f.add({ group, tokensOut: 100 });
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv)[0]).toMatchObject({ cellCount: "0", cellP50Ms: "", cellP95Ms: "" });
+		expect(summary(stdout, `fixture-model | ${group}`).cellP50).toBe("n/a");
+	});
+	it.each(["A", "F"].flatMap((group) => [0, 0.5].map((duration) => ({ group, duration }))))(
+		"preserves valid $group duration $duration",
+		({ group, duration }) => {
+			const f = fixture();
+			const { sessionFile } = f.add({ group, tokensOut: 100, durations: [duration] });
+			writeFileSync(
+				sessionFile,
+				`${readFileSync(sessionFile, "utf-8")}\n${JSON.stringify({
+					type: "message",
+					message: { role: "toolResult", toolName: "read", details: {} },
+				})}`,
+			);
+			const { stdout, csv } = f.run();
+			expect(csvRows(csv)[0]).toMatchObject({
+				cellCount: "1",
+				cellP50Ms: String(duration),
+				cellP95Ms: String(duration),
+			});
+			expect(summary(stdout, `fixture-model | ${group}`).cellP50).toBe(`${duration}ms`);
+		},
+	);
 	it.each(["B", "F"])("evaluates the %s token gate with sample medians", (group) => {
 		const f = fixture();
 		for (const tokensOut of [1, 100]) f.add({ tokensOut });
