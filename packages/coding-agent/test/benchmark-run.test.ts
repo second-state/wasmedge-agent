@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
@@ -7,6 +8,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,6 +96,22 @@ mkdirSync(sessions, { recursive: true });
 const message = { type: "message", message: { role: "assistant", usage: { input: 0, output: 100 } } };
 appendFileSync(join(sessions, "fixture.jsonl"), JSON.stringify(message) + "\\n");
 if (mode === "observe") writeFileSync(join(agentDir, "observed.json"), readFileSync(join(agentDir, "../meta.json")));
+if (mode === "edit-task-source") {
+  appendFileSync(join(agentDir, "observed.jsonl"), JSON.stringify({ prompt: process.argv.at(-1), input: readFileSync("input.txt", "utf-8") }) + "\\n");
+  const task = ${JSON.stringify(task)};
+  writeFileSync(join(task, "task.json"), JSON.stringify({ category: "changed", turns: ["changed"] }));
+  writeFileSync(join(task, "fixture/input.txt"), "changed");
+  writeFileSync(join(task, "check.sh"), "exit 1");
+}
+if (mode === "edit-task-snapshot") writeFileSync(join(agentDir, "../task/check.sh"), "exit 0");
+if (mode === "edit-planned-snapshot") {
+  const runs = join(agentDir, "../..");
+  for (const id of readdirSync(runs)) {
+    if (JSON.parse(readFileSync(join(runs, id, "meta.json"), "utf-8")).driverStatus === "planned") {
+      writeFileSync(join(runs, id, "task/check.sh"), "exit 1");
+    }
+  }
+}
 if (mode === "remove-after-first") unlinkSync(fileURLToPath(import.meta.url));
 if (mode === "block-log") mkdirSync(join(agentDir, "../turn-0.log"));
 if (mode === "block-meta") mkdirSync(join(agentDir, "../meta.json.tmp"));
@@ -127,6 +145,7 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	return {
 		fake,
 		temp,
+		taskDir: task,
 		addTask(id: string, spec?: unknown) {
 			const dir = join(bench, "tasks", id);
 			mkdirSync(dir);
@@ -183,6 +202,101 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 }
 
 describe("offline benchmark driver", () => {
+	it("compares unchanged task inputs across separate invocations", () => {
+		const f = fixture();
+		expect(f.run(1, "A").status).toBe(0);
+		expect(f.run(1, "F").status).toBe(0);
+		expect(new Set(f.metas().map((meta) => meta.taskHash)).size).toBe(1);
+		expect(f.analyze().stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
+	it("uses planned task snapshots after the original prompts, fixture and checker change", () => {
+		const f = fixture({
+			mode: "edit-task-source",
+			turns: ["first", "second"],
+			check: 'test "$(cat "$PROJECT_DIR/input.txt")" = original',
+		});
+		mkdirSync(join(f.taskDir, "fixture"));
+		writeFileSync(join(f.taskDir, "fixture/input.txt"), "original");
+		// A task input named meta.json must not be mistaken for a benchmark run.
+		writeFileSync(join(f.taskDir, "meta.json"), "not run metadata");
+		const result = f.run(1, "A,B,F");
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		const metas = f.metas();
+		expect(metas).toHaveLength(3);
+		expect(new Set(metas.map((meta) => meta.taskHash)).size).toBe(1);
+		for (const meta of metas) {
+			expect(meta).toMatchObject({ driverStatus: "completed", checkPass: true, category: "fixture" });
+			expect(meta.taskHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(readFileSync(join(meta.runDir, "task/fixture/input.txt"), "utf-8")).toBe("original");
+			expect(
+				readFileSync(join(meta.runDir, "agent-dir/observed.jsonl"), "utf-8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line)),
+			).toEqual([
+				{ prompt: "first", input: "original" },
+				{ prompt: "second", input: "original" },
+			]);
+		}
+		expect(f.analyze().stdout).toContain("wrote 3 run(s)");
+	});
+	it.each(["prompt", "timeout", "fixture", "checker", "helper", "executable"])(
+		"records a new hash when the %s changes",
+		(part) => {
+			const f = fixture();
+			mkdirSync(join(f.taskDir, "fixture"));
+			writeFileSync(join(f.taskDir, "fixture/input.txt"), "original");
+			expect(f.run(1, "A").status).toBe(0);
+			const original = f.metas()[0].taskHash;
+			if (part === "prompt" || part === "timeout") {
+				const path = join(f.taskDir, "task.json");
+				const spec = JSON.parse(readFileSync(path, "utf-8"));
+				if (part === "prompt") spec.turns = ["changed"];
+				else spec.timeoutMs += 1;
+				writeFileSync(path, JSON.stringify(spec));
+			} else if (part === "executable") chmodSync(join(f.taskDir, "fixture/input.txt"), 0o755);
+			else
+				writeFileSync(
+					join(
+						f.taskDir,
+						part === "fixture" ? "fixture/input.txt" : part === "checker" ? "check.sh" : "helper.txt",
+					),
+					part === "checker" ? "exit 0\n" : "changed",
+				);
+			expect(f.run(1, "F").status).toBe(0);
+			const changed = f.metas().find((meta) => meta.group === "F");
+			expect(changed.taskHash).not.toBe(original);
+			expect(f.analyze().stdout).toContain("task versions differ — no verdict");
+		},
+	);
+	it.each(["edit-task-snapshot", "checker"])("records %s changes to the snapshot as a driver error", (mode) => {
+		const f = fixture({ mode, check: mode === "checker" ? 'printf "changed" > helper.txt' : "exit 1" });
+		expect(f.run().status).toBe(1);
+		expect(f.metas()[0]).toMatchObject({
+			driverStatus: "error",
+			checkPass: null,
+			driverError: "benchmark task inputs changed after planning",
+		});
+	});
+	it("rejects a modified planned snapshot before starting its daemon", () => {
+		const f = fixture({ mode: "edit-planned-snapshot" });
+		expect(f.run(2).status).toBe(1);
+		expect(f.metas().find((meta) => meta.rep === 2)).toMatchObject({
+			driverStatus: "error",
+			checkPass: null,
+			daemonPid: null,
+			wallMs: null,
+		});
+		expect(f.events().filter((event) => event.event === "start")).toHaveLength(1);
+	});
+	it("rejects symlink task inputs before launching an agent", () => {
+		const f = fixture();
+		symlinkSync("check.sh", join(f.taskDir, "linked-check"));
+		const result = f.run();
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("task inputs must be regular files or directories");
+		expect(f.hasEvents()).toBe(false);
+	});
 	it("registers the full matrix before launch and retains unstarted runs after interruption", () => {
 		const f = fixture({ mode: "observe-plan", check: 'kill -KILL "$PPID"' });
 		f.addTask("second");
@@ -207,6 +321,7 @@ describe("offline benchmark driver", () => {
 				turnExitCodes: [],
 			});
 			expect(typeof meta.plannedAt).toBe("string");
+			expect(meta.taskHash).toMatch(/^sha256:[a-f0-9]{64}$/);
 		}
 		for (const task of ["fixture", "second"]) {
 			for (const model of ["provider-one/shared", "provider-two/shared"]) {
@@ -226,7 +341,7 @@ describe("offline benchmark driver", () => {
 		expect(stdout).toContain("wrote 36 run(s)");
 		expect(stdout).toContain("driver runs incomplete — no verdict");
 		expect(stdout).not.toContain("→ GO");
-		expect(csv.split("\n").filter((line) => line.endsWith(",planned"))).toHaveLength(35);
+		expect(csv.split("\n").filter((line) => line.includes(",planned,"))).toHaveLength(35);
 	});
 	it("validates later tasks before launching any selected task", () => {
 		const f = fixture();

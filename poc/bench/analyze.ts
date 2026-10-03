@@ -25,6 +25,7 @@ interface CompileRecovery {
 interface RunMetrics {
 	runId: string;
 	task: string;
+	taskHash: string | null;
 	category: string;
 	group: string;
 	model: string;
@@ -184,7 +185,7 @@ function findMetaFiles(dir: string, depth = 0): string[] {
 		if (name === "meta.json") out.push(path);
 		else if (depth < 3) {
 			try {
-				if (statSync(path).isDirectory() && !["project", "agent-dir", "workspaces"].includes(name)) {
+				if (statSync(path).isDirectory() && !["project", "agent-dir", "workspaces", "task"].includes(name)) {
 					out.push(...findMetaFiles(path, depth + 1));
 				}
 			} catch {
@@ -205,6 +206,7 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 	const m: RunMetrics = {
 		runId: meta.runId,
 		task: meta.task,
+		taskHash: typeof meta.taskHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.taskHash) ? meta.taskHash : null,
 		category: meta.category,
 		group: meta.group,
 		model: meta.model,
@@ -240,7 +242,7 @@ const csvPath =
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -267,6 +269,7 @@ const rows = runs.map((m) => {
 		m.compileRecovery?.unrecoveredErrors,
 		compileRecoveryMean(m.compileRecovery),
 		m.driverStatus,
+		m.taskHash,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -276,6 +279,7 @@ console.log(`wrote ${runs.length} run(s) → ${csvPath}\n`);
 interface Agg {
 	runs: number;
 	taskCounts: Map<string, number> | null;
+	taskVersions: Map<string, string> | null;
 	passRate: number | null;
 	tokensOutMedian: number | null;
 	tokensInMedian: number | null;
@@ -294,6 +298,15 @@ function countTasks(metrics: RunMetrics[]): Map<string, number> | null {
 		counts.set(task, (counts.get(task) ?? 0) + 1);
 	}
 	return counts;
+}
+
+function taskVersions(metrics: RunMetrics[]): Map<string, string> | null {
+	const versions = new Map<string, string>();
+	for (const { task, taskHash } of metrics) {
+		if (taskHash === null || (versions.has(task) && versions.get(task) !== taskHash)) return null;
+		versions.set(task, taskHash);
+	}
+	return versions;
 }
 
 const byCondition = new Map<string, RunMetrics[]>();
@@ -326,6 +339,7 @@ for (const [key, ms] of byCondition) {
 	aggs.set(key, {
 		runs: ms.length,
 		taskCounts: countTasks(ms),
+		taskVersions: taskVersions(ms),
 		passRate: complete && scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: complete ? median(ms.map((m) => m.tokensOut)) : null,
 		tokensInMedian: complete ? median(ms.map((m) => m.tokensIn)) : null,
@@ -402,6 +416,14 @@ for (const [key, b] of aggs) {
 		[...baselineTasks].some(([task, count]) => count * b.runs !== (treatmentTasks.get(task) ?? 0) * a.runs)
 	) {
 		console.log(`  ${key}: task coverage differs — no verdict`);
+		continue;
+	}
+	if (!a.taskVersions || !b.taskVersions) {
+		console.log(`  ${key}: task versions incomplete or inconsistent — no verdict`);
+		continue;
+	}
+	if ([...a.taskVersions].some(([task, hash]) => b.taskVersions?.get(task) !== hash)) {
+		console.log(`  ${key}: task versions differ — no verdict`);
 		continue;
 	}
 	if (a.passRate === null || b.passRate === null) {
