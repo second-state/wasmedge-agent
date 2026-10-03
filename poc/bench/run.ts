@@ -15,6 +15,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
@@ -52,9 +53,10 @@ interface RunMeta {
 	model: string;
 	variant: string;
 	rep: number;
-	startedAt: string;
+	plannedAt: string;
+	startedAt: string | null;
 	wallMs: number | null;
-	driverStatus: "running" | "completed" | "error";
+	driverStatus: "planned" | "running" | "completed" | "error";
 	driverError: string | null;
 	daemonSocket: string | null;
 	daemonPid: number | null;
@@ -76,7 +78,11 @@ function parseArgs(argv: string[]) {
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		const next = () => argv[++i];
+		const next = () => {
+			const value = argv[++i];
+			if (!value || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
+			return value;
+		};
 		if (arg === "--tasks") opts.tasks = next().split(",");
 		else if (arg === "--models") opts.models = next().split(",");
 		else if (arg === "--groups") opts.groups = next().split(",") as ("A" | "B" | "F")[];
@@ -90,11 +96,29 @@ function parseArgs(argv: string[]) {
 		);
 		opts.tasks.sort();
 	}
+	if (!Number.isSafeInteger(opts.reps) || opts.reps < 1) throw new Error("--reps must be a positive safe integer");
+	for (const [name, values] of [
+		["tasks", opts.tasks], ["models", opts.models], ["groups", opts.groups],
+	] as const) {
+		if (!values.length || values.some((value) => !value.trim()) || new Set(values).size !== values.length) {
+			throw new Error(`--${name} must contain distinct, nonempty values`);
+		}
+	}
+	if (opts.groups.some((group) => !["A", "B", "F"].includes(group))) throw new Error("--groups must use A, B, or F");
+	if (!["example", "noexample", "split"].includes(opts.variant)) throw new Error("invalid --variant");
 	return opts;
 }
 
 function loadTask(id: string): TaskSpec {
 	const spec = JSON.parse(readFileSync(join(TASKS_DIR, id, "task.json"), "utf-8")) as TaskSpec;
+	if (
+		!spec || typeof spec.category !== "string" || !spec.category.trim() ||
+		!Array.isArray(spec.turns) || !spec.turns.length ||
+		spec.turns.some((turn) => typeof turn !== "string" || !turn.trim()) ||
+		(spec.timeoutMs !== undefined && (!Number.isSafeInteger(spec.timeoutMs) || spec.timeoutMs <= 0))
+	) {
+		throw new Error(`invalid task specification: ${id}`);
+	}
 	spec.id = id;
 	return spec;
 }
@@ -332,19 +356,17 @@ async function stopDaemon(daemon: BenchDaemon, socketPath: string): Promise<void
 	throw new Error("benchmark daemon did not stop gracefully; inspect daemon.log and the recorded socket directory");
 }
 
-async function runOne(
+function planRun(
 	task: TaskSpec,
 	group: "A" | "B" | "F",
 	model: string,
 	variant: string,
 	rep: number,
-): Promise<RunMeta> {
+): RunMeta {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
-	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${Date.now().toString(36)}`;
+	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
 	const runDir = join(RESULTS_DIR, "runs", runId);
-	const projectDir = join(runDir, "project");
-	const agentDir = join(runDir, "agent-dir");
-	mkdirSync(runDir, { recursive: true });
+	mkdirSync(runDir);
 	const meta: RunMeta = {
 		runId,
 		task: task.id,
@@ -353,9 +375,10 @@ async function runOne(
 		model,
 		variant,
 		rep,
-		startedAt: new Date().toISOString(),
+		plannedAt: new Date().toISOString(),
+		startedAt: null,
 		wallMs: null,
-		driverStatus: "running",
+		driverStatus: "planned",
 		driverError: null,
 		daemonSocket: null,
 		daemonPid: null,
@@ -366,6 +389,16 @@ async function runOne(
 		checkOutput: "",
 		runDir,
 	};
+	persistMeta(meta);
+	return meta;
+}
+
+async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
+	const { runDir, group, model, variant } = meta;
+	const projectDir = join(runDir, "project");
+	const agentDir = join(runDir, "agent-dir");
+	meta.startedAt = new Date().toISOString();
+	meta.driverStatus = "running";
 	persistMeta(meta);
 	let turnStartedAt: number | null = null;
 	let turnsFinished = false;
@@ -498,15 +531,15 @@ function persistMeta(meta: RunMeta): void {
 
 
 const opts = parseArgs(process.argv.slice(2));
+// Validate the full selection and persist every slot before any agent can run.
+const tasks = opts.tasks.map(loadTask);
 console.log(
 	`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
 );
 mkdirSync(join(RESULTS_DIR, "runs"), { recursive: true });
 
-const failures: string[] = [];
-let done = 0;
-for (const taskId of opts.tasks) {
-	const task = loadTask(taskId);
+const plan: { task: TaskSpec; meta: RunMeta }[] = [];
+for (const task of tasks) {
 	for (const model of opts.models) {
 		for (const group of opts.groups) {
 			for (let rep = 1; rep <= opts.reps; rep++) {
@@ -521,33 +554,38 @@ for (const taskId of opts.tasks) {
 								? "example"
 								: "noexample"
 							: opts.variant;
-				const label = `${taskId} ${group} ${shortModel(model)} ${variant} r${rep}`;
-				process.stdout.write(`→ ${label} ... `);
-				try {
-					const meta = await runOne(task, group, model, variant, rep);
-					if (meta.driverStatus === "error") {
-						console.log(`DRIVER-ERROR: ${meta.driverError}`);
-						failures.push(label);
-						process.exitCode = 1;
-						continue;
-					}
-					done += 1;
-					const status = meta.timedOut
-						? "TIMEOUT"
-						: meta.checkPass === null
-							? "no-check"
-							: meta.checkPass
-								? "PASS"
-								: "FAIL";
-					console.log(`${status} (${Math.round((meta.wallMs ?? 0) / 1000)}s)`);
-					if (status === "FAIL" || status === "TIMEOUT") failures.push(label);
-				} catch (err) {
-					console.log(`DRIVER-ERROR: ${err instanceof Error ? err.message : err}`);
-					failures.push(label);
-					process.exitCode = 1;
-				}
+				plan.push({ task, meta: planRun(task, group, model, variant, rep) });
 			}
 		}
+	}
+}
+const failures: string[] = [];
+let done = 0;
+for (const { task, meta } of plan) {
+	const label = `${task.id} ${meta.group} ${shortModel(meta.model)} ${meta.variant} r${meta.rep}`;
+	process.stdout.write(`→ ${label} ... `);
+	try {
+		await runOne(task, meta);
+		if (meta.driverStatus === "error") {
+			console.log(`DRIVER-ERROR: ${meta.driverError}`);
+			failures.push(label);
+			process.exitCode = 1;
+			continue;
+		}
+		done += 1;
+		const status = meta.timedOut
+			? "TIMEOUT"
+			: meta.checkPass === null
+				? "no-check"
+				: meta.checkPass
+					? "PASS"
+					: "FAIL";
+		console.log(`${status} (${Math.round((meta.wallMs ?? 0) / 1000)}s)`);
+		if (status === "FAIL" || status === "TIMEOUT") failures.push(label);
+	} catch (err) {
+		console.log(`DRIVER-ERROR: ${err instanceof Error ? err.message : err}`);
+		failures.push(label);
+		process.exitCode = 1;
 	}
 }
 console.log(`\n${done} run(s) complete. ${failures.length} failure(s).`);

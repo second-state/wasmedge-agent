@@ -139,7 +139,7 @@ function summary(stdout: string, condition: string) {
 describe("offline benchmark analyzer", () => {
 	it.each(
 		["A", "F"].flatMap((group) =>
-			["running", "error", "unknown", null, 0].map((driverStatus) => ({ group, driverStatus })),
+			["planned", "running", "error", "unknown", null, 0].map((driverStatus) => ({ group, driverStatus })),
 		),
 	)(
 		"withholds aggregate metrics and verdicts for $group with driver status $driverStatus",
@@ -153,7 +153,7 @@ describe("offline benchmark analyzer", () => {
 			const { stdout, csv } = f.run();
 			// Recorded observations stay visible, but may be only part of the run.
 			expect(csvRows(csv).at(-1)).toMatchObject({
-				driverStatus: driverStatus === "running" || driverStatus === "error" ? driverStatus : "invalid",
+				driverStatus: ["planned", "running", "error"].includes(String(driverStatus)) ? driverStatus : "invalid",
 				tokensOut: "100",
 			});
 			expect(summary(stdout, `fixture-model | ${group}`)).toMatchObject({

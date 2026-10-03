@@ -46,7 +46,7 @@ function fixture({ mode = "ok", config = true, turns = ["first"], check = "exit 
 	writeFileSync(
 		fake,
 		`#!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
@@ -58,6 +58,10 @@ const socketPath = process.argv[process.argv.indexOf("--daemon-socket") + 1];
 const record = (event) => appendFileSync(events, JSON.stringify({ event, socketPath, pid: process.pid }) + "\\n");
 if (process.argv.includes("daemon")) {
   record("start");
+  if (mode === "observe-plan") {
+    const runs = join(agentDir, "../..");
+    writeFileSync(${JSON.stringify(join(root, "plan-at-start.json"))}, JSON.stringify(readdirSync(runs).map((id) => JSON.parse(readFileSync(join(runs, id, "meta.json"), "utf-8")))));
+  }
   if (mode === "daemon-fail") process.exit(2);
   const ready = mode === "slow-ready" ? new Promise((resolve) => setTimeout(() => { record("ready"); resolve(); }, 2_200)) : Promise.resolve();
   const server = createServer((socket) => {
@@ -123,13 +127,25 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	return {
 		fake,
 		temp,
+		addTask(id: string, spec?: unknown) {
+			const dir = join(bench, "tasks", id);
+			mkdirSync(dir);
+			writeFileSync(join(dir, "task.json"), JSON.stringify(spec ?? { category: "fixture", turns, timeoutMs }));
+			copyFileSync(join(task, "check.sh"), join(dir, "check.sh"));
+		},
+		planAtStart() {
+			return JSON.parse(readFileSync(join(root, "plan-at-start.json"), "utf-8"));
+		},
+		hasEvents() {
+			return existsSync(join(root, "daemon-events.jsonl"));
+		},
 		events() {
 			return readFileSync(join(root, "daemon-events.jsonl"), "utf-8")
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line));
 		},
-		run(reps = 1, group = "A") {
+		run(reps = 1, group = "A", extraArgs: string[] = []) {
 			return spawnSync(
 				process.execPath,
 				[
@@ -141,12 +157,14 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 					"fixture-model",
 					"--reps",
 					String(reps),
+					...extraArgs,
 				],
 				{ cwd: root, env, encoding: "utf-8", timeout: mode === "real-daemon" ? 30_000 : 10_000 },
 			);
 		},
 		metas() {
 			const runs = join(bench, "results/runs");
+			if (!existsSync(runs)) return [];
 			return readdirSync(runs)
 				.sort()
 				.map((id) => JSON.parse(readFileSync(join(runs, id, "meta.json"), "utf-8")));
@@ -165,6 +183,85 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 }
 
 describe("offline benchmark driver", () => {
+	it("registers the full matrix before launch and retains unstarted runs after interruption", () => {
+		const f = fixture({ mode: "observe-plan", check: 'kill -KILL "$PPID"' });
+		f.addTask("second");
+		const result = f.run(3, "A,B,F", ["--models", "provider-one/shared,provider-two/shared", "--variant", "split"]);
+		expect(result.signal).toBe("SIGKILL");
+		const before = f.planAtStart();
+		const metas = f.metas();
+		expect(before).toHaveLength(36);
+		expect(metas).toHaveLength(36);
+		expect(new Set(metas.map((meta) => meta.runId)).size).toBe(36);
+		expect(before.filter((meta: { driverStatus: string }) => meta.driverStatus === "running")).toHaveLength(1);
+		const planned = metas.filter((meta) => meta.driverStatus === "planned");
+		expect(planned).toHaveLength(35);
+		for (const meta of planned) {
+			expect(meta).toMatchObject({
+				startedAt: null,
+				wallMs: null,
+				daemonSocket: null,
+				daemonPid: null,
+				checkPass: null,
+				sessionFile: null,
+				turnExitCodes: [],
+			});
+			expect(typeof meta.plannedAt).toBe("string");
+		}
+		for (const task of ["fixture", "second"]) {
+			for (const model of ["provider-one/shared", "provider-two/shared"]) {
+				const slots = metas.filter((meta) => meta.task === task && meta.model === model);
+				for (const group of ["A", "B", "F"]) {
+					const groupSlots = slots.filter((meta) => meta.group === group).sort((a, b) => a.rep - b.rep);
+					expect(groupSlots.map((meta) => meta.rep)).toEqual([1, 2, 3]);
+					expect(groupSlots.map((meta) => meta.variant)).toEqual(
+						group === "B"
+							? ["example", "noexample", "example"]
+							: Array(3).fill(group === "A" ? "n/a" : "builtin"),
+					);
+				}
+			}
+		}
+		const { stdout, csv } = f.analyze();
+		expect(stdout).toContain("wrote 36 run(s)");
+		expect(stdout).toContain("driver runs incomplete — no verdict");
+		expect(stdout).not.toContain("→ GO");
+		expect(csv.split("\n").filter((line) => line.endsWith(",planned"))).toHaveLength(35);
+	});
+	it("validates later tasks before launching any selected task", () => {
+		const f = fixture();
+		f.addTask("second", { category: "fixture", turns: [] });
+		const result = f.run();
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("invalid task specification: second");
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()).toEqual([]);
+	});
+	it("does not launch an agent if a later plan record cannot be created", () => {
+		const f = fixture();
+		const result = f.run(1, "A", ["--models", `first,${"x".repeat(256)}`]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("ENAMETOOLONG");
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()).toHaveLength(1);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "planned", startedAt: null, checkPass: null });
+	});
+	it.each([
+		["--reps", "0"],
+		["--reps", "-1"],
+		["--reps", "1.5"],
+		["--reps", "Infinity"],
+		["--groups", "A,A"],
+		["--groups", "A,Z"],
+		["--models", "one,"],
+		["--variant", "unknown"],
+		["--reps"],
+	])("rejects an invalid run selection %j before launch", (...args) => {
+		const f = fixture();
+		expect(f.run(1, "A", args).status).toBe(1);
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()).toEqual([]);
+	});
 	it.each(["A", "B", "F"])("uses a private %s daemon for each run and stops it after all turns", (group) => {
 		const f = fixture({ turns: ["first", "second"] });
 		expect(f.run(2, group).status).toBe(0);
@@ -324,6 +421,7 @@ describe("offline benchmark driver", () => {
 			checkPass: true,
 			turnExitCodes: [0, 0],
 		});
+		expect(Date.parse(meta.startedAt)).toBeGreaterThanOrEqual(Date.parse(meta.plannedAt));
 		const observed = JSON.parse(readFileSync(join(meta.runDir, "agent-dir/observed.json"), "utf-8"));
 		expect(observed).toMatchObject({ driverStatus: "running", checkPass: null, turnExitCodes: [0] });
 		expect(f.analyze().csv).toContain(",completed");
