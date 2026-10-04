@@ -49,6 +49,7 @@ interface RunMeta {
 	runId: string;
 	task: string;
 	taskHash: string;
+	providerConfigHash: string;
 	category: string;
 	group: "A" | "B" | "F";
 	model: string;
@@ -147,6 +148,41 @@ function verifyTask(meta: RunMeta): void {
 	if (hashTask(join(meta.runDir, "task")) !== meta.taskHash) {
 		throw new Error("benchmark task inputs changed after planning");
 	}
+}
+
+function hashProviderConfig(source: Buffer): string {
+	return `sha256:${createHash("sha256").update(source).digest("hex")}`;
+}
+
+function loadProviderConfig(): Buffer {
+	if (!existsSync(MODELS_JSON)) throw new Error(`missing ${MODELS_JSON} (provider config)`);
+	const source = readFileSync(MODELS_JSON);
+	let config: unknown;
+	try {
+		// Match model-registry's line comments and trailing commas; retain the original bytes.
+		const json = source.toString("utf-8")
+			.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (match) => (match[0] === '"' ? match : ""))
+			.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (match, tail) => tail ?? (match[0] === '"' ? match : ""));
+		config = JSON.parse(json);
+	} catch {
+		// JSON parse errors can include literal credentials from the source.
+		throw new Error("invalid provider config: expected a JSON object");
+	}
+	if (!config || typeof config !== "object" || Array.isArray(config)) {
+		throw new Error("invalid provider config: expected a JSON object");
+	}
+	return source;
+}
+
+function verifyProviderConfig(meta: RunMeta, active = false): Buffer {
+	const source = readFileSync(join(meta.runDir, "models.json"));
+	if (
+		hashProviderConfig(source) !== meta.providerConfigHash ||
+		(active && hashProviderConfig(readFileSync(join(meta.runDir, "agent-dir", "models.json"))) !== meta.providerConfigHash)
+	) {
+		throw new Error("benchmark provider config changed after planning");
+	}
+	return source;
 }
 
 function shortModel(model: string): string {
@@ -388,11 +424,13 @@ function planRun(
 	model: string,
 	variant: string,
 	rep: number,
+	providerConfig: Buffer,
 ): { task: TaskSpec; meta: RunMeta } {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
 	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
 	const runDir = join(RESULTS_DIR, "runs", runId);
-	mkdirSync(runDir);
+	mkdirSync(runDir, { mode: 0o700 });
+	writeFileSync(join(runDir, "models.json"), providerConfig, { mode: 0o600 });
 	const taskDir = join(runDir, "task");
 	cpSync(join(TASKS_DIR, task.id), taskDir, { recursive: true, verbatimSymlinks: true });
 	const taskHash = hashTask(taskDir);
@@ -401,6 +439,7 @@ function planRun(
 		runId,
 		task: task.id,
 		taskHash,
+		providerConfigHash: hashProviderConfig(providerConfig),
 		category: snapshot.category,
 		group,
 		model,
@@ -443,13 +482,13 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 	})();
 	try {
 		verifyTask(meta);
+		const providerConfig = verifyProviderConfig(meta);
 		mkdirSync(projectDir, { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 
 		const fixtureDir = join(taskDir, "fixture");
 		if (existsSync(fixtureDir)) cpSync(fixtureDir, projectDir, { recursive: true });
-		if (!existsSync(MODELS_JSON)) throw new Error(`missing ${MODELS_JSON} (provider config)`);
-		cpSync(MODELS_JSON, join(agentDir, "models.json"));
+		writeFileSync(join(agentDir, "models.json"), providerConfig, { mode: 0o600 });
 
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
@@ -476,6 +515,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		const bin = group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH;
 
 		const timeoutMs = task.timeoutMs ?? 600_000;
+		verifyProviderConfig(meta, true);
 		turnStartedAt = Date.now();
 		daemon = launchDaemon(bin, baseArgs, projectDir, env, join(runDir, "daemon.log"));
 		meta.daemonPid = daemon.child.pid ?? null;
@@ -483,6 +523,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		await waitForDaemon(daemon, meta.daemonSocket, Math.min(timeoutMs, 30_000));
 
 		for (let turn = 0; turn < task.turns.length; turn++) {
+			verifyProviderConfig(meta, true);
 			if (daemon.exited) throw new Error("benchmark daemon exited before the next turn");
 			const args = [...baseArgs];
 			if (turn > 0) {
@@ -503,6 +544,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 			meta.wallMs = Date.now() - turnStartedAt;
 			meta.sessionFile = findSessionFile(agentDir);
 			persistMeta(meta);
+			verifyProviderConfig(meta, true);
 			if (result.timedOut) {
 				break;
 			}
@@ -513,6 +555,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		await cleanupDaemon();
 
 		verifyTask(meta);
+		verifyProviderConfig(meta, true);
 		const checkScript = join(taskDir, "check.sh");
 		if (existsSync(checkScript)) {
 			const check = await new Promise<{ code: number | null; out: string }>((res, reject) => {
@@ -531,6 +574,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 			meta.checkOutput = check.out.slice(0, 4000);
 		}
 		verifyTask(meta);
+		verifyProviderConfig(meta, true);
 		meta.sessionFile = findSessionFile(agentDir);
 		meta.driverStatus = "completed";
 	} catch (err) {
@@ -568,6 +612,7 @@ function persistMeta(meta: RunMeta): void {
 const opts = parseArgs(process.argv.slice(2));
 // Validate the full selection and persist every slot before any agent can run.
 const tasks = opts.tasks.map((id) => loadTask(id));
+const providerConfig = loadProviderConfig();
 console.log(
 	`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
 );
@@ -589,7 +634,7 @@ for (const task of tasks) {
 								? "example"
 								: "noexample"
 							: opts.variant;
-				plan.push(planRun(task, group, model, variant, rep));
+				plan.push(planRun(task, group, model, variant, rep, providerConfig));
 			}
 		}
 	}

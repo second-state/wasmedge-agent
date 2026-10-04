@@ -8,6 +8,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -60,6 +61,7 @@ const socketPath = process.argv[process.argv.indexOf("--daemon-socket") + 1];
 const record = (event) => appendFileSync(events, JSON.stringify({ event, socketPath, pid: process.pid }) + "\\n");
 if (process.argv.includes("daemon")) {
   record("start");
+  if (mode === "edit-provider-on-start") writeFileSync(join(agentDir, "models.json"), "{}");
   if (mode === "observe-plan") {
     const runs = join(agentDir, "../..");
     writeFileSync(${JSON.stringify(join(root, "plan-at-start.json"))}, JSON.stringify(readdirSync(runs).map((id) => JSON.parse(readFileSync(join(runs, id, "meta.json"), "utf-8")))));
@@ -104,6 +106,20 @@ if (mode === "edit-task-source") {
   writeFileSync(join(task, "check.sh"), "exit 1");
 }
 if (mode === "edit-task-snapshot") writeFileSync(join(agentDir, "../task/check.sh"), "exit 0");
+if (mode === "edit-provider-source") {
+  appendFileSync(join(agentDir, "observed-config.jsonl"), readFileSync(join(agentDir, "models.json"), "utf-8") + "\\n");
+  writeFileSync(${JSON.stringify(join(home, ".wasmedge-agent/models.json"))}, '{"changed":true}');
+}
+if (mode === "edit-provider-active") writeFileSync(join(agentDir, "models.json"), "{}");
+if (mode === "edit-provider-snapshot") writeFileSync(join(agentDir, "../models.json"), "{}");
+if (mode === "edit-planned-provider-snapshot") {
+  for (const id of readdirSync(join(agentDir, "../.."))) {
+    const runDir = join(agentDir, "../..", id);
+    if (JSON.parse(readFileSync(join(runDir, "meta.json"), "utf-8")).driverStatus === "planned") {
+      writeFileSync(join(runDir, "models.json"), "{}");
+    }
+  }
+}
 if (mode === "edit-planned-snapshot") {
   const runs = join(agentDir, "../..");
   for (const id of readdirSync(runs)) {
@@ -145,6 +161,8 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	return {
 		fake,
 		temp,
+		configPath: join(home, ".wasmedge-agent/models.json"),
+		legacyConfigPath: join(home, ".prime/agent/models.json"),
 		taskDir: task,
 		addTask(id: string, spec?: unknown) {
 			const dir = join(bench, "tasks", id);
@@ -207,6 +225,120 @@ describe("offline benchmark driver", () => {
 		expect(f.run(1, "A").status).toBe(0);
 		expect(f.run(1, "F").status).toBe(0);
 		expect(new Set(f.metas().map((meta) => meta.taskHash)).size).toBe(1);
+		expect(new Set(f.metas().map((meta) => meta.providerConfigHash)).size).toBe(1);
+		expect(f.analyze().stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
+	it("uses the same planned provider config after the seed changes during a run", () => {
+		const f = fixture({ mode: "edit-provider-source", turns: ["first", "second"] });
+		const source = '{"providers":{"fixture":{"apiKey":"fixture-only-secret"}}}';
+		writeFileSync(f.configPath, source);
+		const result = f.run(1, "A,B,F");
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		expect(result.stdout + result.stderr).not.toContain("fixture-only-secret");
+		expect(readFileSync(f.configPath, "utf-8")).toBe('{"changed":true}');
+		expect(new Set(f.metas().map((meta) => meta.providerConfigHash)).size).toBe(1);
+		for (const meta of f.metas()) {
+			expect(meta).toMatchObject({ driverStatus: "completed", checkPass: true });
+			expect(meta.providerConfigHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(JSON.stringify(meta)).not.toContain("fixture-only-secret");
+			for (const file of ["models.json", "agent-dir/models.json"]) {
+				const path = join(meta.runDir, file);
+				expect(readFileSync(path, "utf-8")).toBe(source);
+				expect(statSync(path).mode & 0o777).toBe(0o600);
+			}
+			expect(readFileSync(join(meta.runDir, "agent-dir/observed-config.jsonl"), "utf-8")).toBe(
+				`${source}\n${source}\n`,
+			);
+		}
+		expect(f.analyze().stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 200 vs A 200 OK → GO");
+	});
+	it("withholds comparisons after the provider seed changes between invocations", () => {
+		const f = fixture();
+		expect(f.run(1, "A").status).toBe(0);
+		writeFileSync(f.configPath, '{"providers":{}}');
+		expect(f.run(1, "F").status).toBe(0);
+		expect(new Set(f.metas().map((meta) => meta.providerConfigHash)).size).toBe(2);
+		expect(f.analyze().stdout).toContain("provider configs differ — no verdict");
+	});
+	it.each(["edit-provider-on-start", "edit-provider-active", "edit-provider-snapshot"])(
+		"rejects %s before proceeding to another turn or task checking",
+		(mode) => {
+			const f = fixture({ mode, turns: ["first", "second"], check: 'touch "$PROJECT_DIR/checked"' });
+			writeFileSync(f.configPath, '{"providers":{}}');
+			expect(f.run().status).toBe(1);
+			const [meta] = f.metas();
+			expect(meta).toMatchObject({
+				driverStatus: "error",
+				checkPass: null,
+				driverError: "benchmark provider config changed after planning",
+				turnExitCodes: mode === "edit-provider-on-start" ? [] : [0],
+			});
+			expect(f.events().at(-1).event).toBe("stop");
+			expect(existsSync(join(meta.runDir, "project/checked"))).toBe(false);
+		},
+	);
+	it("rejects a changed provider snapshot for a later run before launching its daemon", () => {
+		const f = fixture({ mode: "edit-planned-provider-snapshot" });
+		writeFileSync(f.configPath, '{"providers":{}}');
+		expect(f.run(2).status).toBe(1);
+		expect(f.metas().find((meta) => meta.rep === 2)).toMatchObject({
+			driverStatus: "error",
+			driverError: "benchmark provider config changed after planning",
+			daemonPid: null,
+			wallMs: null,
+			checkPass: null,
+		});
+		expect(f.events().filter((event) => event.event === "start")).toHaveLength(1);
+	});
+	it.each(["models.json", "agent-dir/models.json"])("rejects checker changes to %s", (path) => {
+		const f = fixture({ check: `printf '{}' > "$PROJECT_DIR/../${path}"` });
+		writeFileSync(f.configPath, '{"providers":{}}');
+		expect(f.run().status).toBe(1);
+		expect(f.metas()[0]).toMatchObject({
+			driverStatus: "error",
+			driverError: "benchmark provider config changed after planning",
+			checkPass: null,
+		});
+	});
+	it.each(['{"apiKey":"fixture-only-secret", broken}', "null", "[]", "42"])(
+		"rejects malformed provider config before planning without disclosing its content: %s",
+		(source) => {
+			const f = fixture();
+			writeFileSync(f.configPath, source);
+			const result = f.run();
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain("invalid provider config: expected a JSON object");
+			expect(result.stderr).not.toContain("fixture-only-secret");
+			expect(f.metas()).toEqual([]);
+			expect(f.hasEvents()).toBe(false);
+		},
+	);
+	it("snapshots the legacy provider config when the fork config is absent", () => {
+		const f = fixture({ config: false });
+		mkdirSync(dirname(f.legacyConfigPath), { recursive: true });
+		writeFileSync(f.legacyConfigPath, '{"providers":{}}');
+		expect(f.run().status).toBe(0);
+		expect(readFileSync(join(f.metas()[0].runDir, "models.json"), "utf-8")).toBe('{"providers":{}}');
+	});
+	it("preserves supported comments, trailing commas, and string contents in config snapshots", () => {
+		const f = fixture();
+		const source = `{
+  // A provider config accepted by the model registry.
+  "providers": {
+    "fixture": {
+      "baseUrl": "https://fixture.invalid/v1",
+      "apiKey": "contains // and ,} and \\"quoted\\" text",
+      "models": [{"id": "fixture",},],
+    },
+  },
+}`;
+		writeFileSync(f.configPath, source);
+		const result = f.run(1, "A,F");
+		expect(result.status, result.stderr).toBe(0);
+		for (const meta of f.metas()) {
+			expect(readFileSync(join(meta.runDir, "models.json"), "utf-8")).toBe(source);
+			expect(readFileSync(join(meta.runDir, "agent-dir/models.json"), "utf-8")).toBe(source);
+		}
 		expect(f.analyze().stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
 	});
 	it("uses planned task snapshots after the original prompts, fixture and checker change", () => {
@@ -227,6 +359,8 @@ describe("offline benchmark driver", () => {
 		for (const meta of metas) {
 			expect(meta).toMatchObject({ driverStatus: "completed", checkPass: true, category: "fixture" });
 			expect(meta.taskHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(meta.providerConfigHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(readFileSync(join(meta.runDir, "models.json"), "utf-8")).toBe("{}");
 			expect(readFileSync(join(meta.runDir, "task/fixture/input.txt"), "utf-8")).toBe("original");
 			expect(
 				readFileSync(join(meta.runDir, "agent-dir/observed.jsonl"), "utf-8")
@@ -322,6 +456,8 @@ describe("offline benchmark driver", () => {
 			});
 			expect(typeof meta.plannedAt).toBe("string");
 			expect(meta.taskHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(meta.providerConfigHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+			expect(readFileSync(join(meta.runDir, "models.json"), "utf-8")).toBe("{}");
 		}
 		for (const task of ["fixture", "second"]) {
 			for (const model of ["provider-one/shared", "provider-two/shared"]) {
@@ -445,23 +581,13 @@ describe("offline benchmark driver", () => {
 		expect(f.events().some((event) => event.event === "turn")).toBe(false);
 		expect(existsSync(dirname(meta.daemonSocket))).toBe(false);
 	});
-	it("records setup failures for every attempted run and exits unsuccessfully", () => {
+	it("rejects a missing provider config before planning or launching any agent", () => {
 		const f = fixture({ config: false });
 		const result = f.run(2);
 		expect(result.status, result.stderr).toBe(1);
-		expect(result.stdout).toContain("2 failure(s)");
-		expect(f.metas()).toHaveLength(2);
-		for (const meta of f.metas()) {
-			expect(meta).toMatchObject({
-				driverStatus: "error",
-				checkPass: null,
-				wallMs: null,
-				sessionFile: null,
-				turnExitCodes: [],
-			});
-			expect(meta.driverError).toContain("provider config");
-		}
-		expect(f.analyze().stdout).toContain("wrote 2 run(s)");
+		expect(result.stderr).toContain("provider config");
+		expect(f.metas()).toEqual([]);
+		expect(f.hasEvents()).toBe(false);
 	});
 	it("records an executable spawn failure and its log", () => {
 		const f = fixture();

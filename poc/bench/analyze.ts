@@ -26,6 +26,7 @@ interface RunMetrics {
 	runId: string;
 	task: string;
 	taskHash: string | null;
+	providerConfigHash: string | null;
 	category: string;
 	group: string;
 	model: string;
@@ -207,6 +208,7 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 		runId: meta.runId,
 		task: meta.task,
 		taskHash: typeof meta.taskHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.taskHash) ? meta.taskHash : null,
+		providerConfigHash: typeof meta.providerConfigHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.providerConfigHash) ? meta.providerConfigHash : null,
 		category: meta.category,
 		group: meta.group,
 		model: meta.model,
@@ -242,7 +244,7 @@ const csvPath =
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -270,6 +272,7 @@ const rows = runs.map((m) => {
 		compileRecoveryMean(m.compileRecovery),
 		m.driverStatus,
 		m.taskHash,
+		m.providerConfigHash,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -280,6 +283,7 @@ interface Agg {
 	runs: number;
 	taskCounts: Map<string, number> | null;
 	taskVersions: Map<string, string> | null;
+	providerConfigHash: string | null;
 	passRate: number | null;
 	tokensOutMedian: number | null;
 	tokensInMedian: number | null;
@@ -348,6 +352,7 @@ for (const [key, ms] of byCondition) {
 		runs: ms.length,
 		taskCounts: countTasks(ms),
 		taskVersions: taskVersions(ms),
+		providerConfigHash: new Set(ms.map((m) => m.providerConfigHash)).size === 1 ? ms[0].providerConfigHash : null,
 		passRate: complete && scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: complete ? median(ms.map((m) => m.tokensOut)) : null,
 		tokensInMedian: complete ? median(ms.map((m) => m.tokensIn)) : null,
@@ -432,6 +437,8 @@ function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
 	if (!sameTaskCoverage(a, b)) return noVerdict("task coverage differs");
 	if (!a.taskVersions || !b.taskVersions) return noVerdict("task versions incomplete or inconsistent");
 	if (!sameTaskVersions(a, b)) return noVerdict("task versions differ");
+	if (!a.providerConfigHash || !b.providerConfigHash) return noVerdict("provider config fingerprints incomplete or inconsistent");
+	if (a.providerConfigHash !== b.providerConfigHash) return noVerdict("provider configs differ");
 	if (a.passRate === null || b.passRate === null) return noVerdict("checks incomplete");
 	if (a.tokensOutMedian === null || b.tokensOutMedian === null) return noVerdict("output usage incomplete");
 	const passOk = b.passRate >= a.passRate - 0.15;
@@ -453,6 +460,7 @@ for (const [key, b] of aggs) {
 
 console.log("\nD20 overall (per treatment): at least 2 distinct model IDs must meet both thresholds");
 console.log("All recorded models need complete comparisons on the same task versions and relative task weights.");
+console.log("Each model needs matching models.json fingerprints across baseline and treatment; environment-resolved settings are not verified.");
 const treatments = [...new Set(runs.map(conditionFor).filter(isTreatment))].sort();
 if (treatments.length === 0) console.log("  no treatment conditions — no verdict");
 for (const condition of treatments) {

@@ -626,6 +626,8 @@ wasmedge-agent/
 
 同模型、同任務、同 settings；每 (任務, 模型, 組) 跑 3 次取中位。模型：Claude（sonnet 級與 opus/fable 級各一）+ 一個開源權重模型（經 openrouter），共 3 家交叉驗證（REPORT §6 風險 7）。
 
+**Provider config 快照（2026-10-04）**：driver 在規劃前只讀取一次 seed `models.json`，每個 run 保存相同 bytes 的快照，並以此建立 active config；`providerConfigHash` 記錄 SHA-256。執行前、各 turn 前後、驗收前後偵測快照或 active config 異動即記錄 driver error。Analyzer 要求同一 condition 的所有 runs 與同模型 baseline 使用一致的已知指紋，否則只保留量測、不產生 D20 verdict。原始快照可能含 credentials，以 `0600` 寫入 gitignored results；metadata／CSV 僅記錄指紋。此機制只固定設定檔 bytes，未固定環境變數、credential commands、provider 端路由／model aliases、agent defaults、binary 或工具鏈，也不保證不同 agent 版本對設定檔的解讀相同；不構成 host 隔離。
+
 **Treatment 組內部 sub-A/B（D17）**：prompt 有/無 few-shot 範例兩版各跑一半，判準為首個 cell 的 compile-error 率與整體修錯輪數；勝者定案進 Phase 1 prompt。此 sub-A/B 不增加對 baseline 的比較組數。
 
 ### 6.3 Benchmark 任務集（12 項）與量測

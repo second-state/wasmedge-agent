@@ -11,7 +11,7 @@ bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
-└── results/      # gitignored: runs/<runId>/{task,project,agent-dir,workspaces,meta.json,turn-*.log}
+└── results/      # gitignored: runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
 ```
 
 ## Tasks (full set, DESIGN.md appendix C)
@@ -51,7 +51,8 @@ node poc/bench/run.ts --groups A,B --reps 3 --variant split \
 node poc/bench/analyze.ts
 ```
 
-Requirements: `~/.prime/agent/models.json` configured with your OpenAI/Anthropic-compatible
+Requirements: `~/.wasmedge-agent/models.json` (or the fallback `~/.prime/agent/models.json`)
+configured with your OpenAI/Anthropic-compatible
 provider (the API key env var it references must be set), prime-agent runnable from source
 (`BENCH_PRIME_AGENT` overrides the path), and for group B the PoC extension
 prerequisites (see `../README.md`). Group A bootstraps a shared kernel venv on
@@ -97,7 +98,27 @@ symlinks and special files are unsupported. Snapshot changes detected before
 run setup or around task checking become driver errors. Checkers must write
 outputs to `PROJECT_DIR` or temporary storage, not into their task snapshot.
 These snapshots record task inputs; they are not protected from host code
-and do not pin model/provider settings, agent binaries, or external tools.
+and do not pin agent binaries or external tools.
+
+Before planning, the driver reads the seed `models.json` once and requires a
+JSON object (allowing the model registry's line comments and trailing commas);
+missing or malformed input stops the invocation before any run
+is registered or agent starts. Every planned run retains those exact bytes
+in its own `models.json`, with a SHA-256 `providerConfigHash` in `meta.json`.
+The active `agent-dir/models.json` is created from that snapshot. Editing the
+original seed during execution therefore does not change subsequent runs.
+Both copies are checked before launch, around every turn, and around task
+checking; detected changes become driver errors. Snapshots and active copies
+are created with mode `0600`, inside run directories created with mode `0700`.
+They may contain literal credentials and stay in the gitignored results;
+metadata and CSV contain only the fingerprint, not configuration contents.
+
+This pins file bytes, not effective provider settings. Environment references,
+credential commands, provider-side routing/model aliases, agent defaults,
+and external tools remain outside the fingerprint. Matching hashes also do
+not prove both agent versions interpret the configuration identically.
+Boundary checks do not prevent host code from modifying and restoring a file
+between checks. This does not provide process or filesystem isolation.
 
 The driver changes the record to `running` before run setup, checkpoints
 completed turns, then records `completed` after task checking or
@@ -145,7 +166,7 @@ This summarizes the recorded selection, not the completeness of the full
 D21 experiment: it does not require all 12 tasks, three repetitions, or the
 open-weight model. Model IDs are compared literally; provider aliases and
 model families are not resolved. The summary cannot recover wholly absent
-models/runs or verify provider settings and toolchain versions. Latency and
+models/runs or verify effective provider settings and toolchain versions. Latency and
 recovery remain reported observations, outside the D20 pass/token gate.
 
 The summary lists distinct `tasks` separately from `runs` (registered
@@ -162,8 +183,18 @@ malformed hashes, mixed versions within a condition, or different versions
 between conditions withhold the verdict. The CSV appends `taskHash`; recorded
 metrics remain visible even when versions cannot be compared. Historical
 runs without fingerprints therefore retain their metrics but get no new D20
-verdict. Matching task inputs does not verify identical model settings or
-establish statistical significance.
+verdict. Matching task inputs does not establish statistical significance.
+
+Each condition must also have one valid `providerConfigHash` across all its
+runs, matching the same-model baseline. Missing, malformed, mixed, or
+different fingerprints withhold both per-model and overall D20 verdicts,
+while retaining recorded metrics. The CSV appends `providerConfigHash`;
+historical records without it retain metrics but cannot receive a new verdict.
+The hash covers the whole file, including whitespace and unused providers,
+so even those differences conservatively prevent comparison. Different
+models may use different files if each model's baseline and treatment match;
+B variants are still evaluated separately. The analyzer compares recorded
+fingerprints and does not resolve environment-dependent settings.
 
 Unavailable metrics are blank in the per-run CSV and `n/a` in the summary.
 The appended `sessionStatus` CSV column distinguishes `ok` (parsed, with at

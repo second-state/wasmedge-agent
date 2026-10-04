@@ -24,6 +24,7 @@ function fixture() {
 		add({
 			task = "fixture",
 			taskHash = `sha256:${"a".repeat(64)}`,
+			providerConfigHash = `sha256:${"c".repeat(64)}`,
 			model = "fixture-model",
 			group = "A",
 			variant = "example",
@@ -34,6 +35,7 @@ function fixture() {
 		}: {
 			task?: string;
 			taskHash?: string | null;
+			providerConfigHash?: string | null;
 			model?: string;
 			group?: string;
 			variant?: string;
@@ -62,6 +64,7 @@ function fixture() {
 					runId,
 					task,
 					taskHash: taskHash ?? undefined,
+					providerConfigHash: providerConfigHash ?? undefined,
 					category: "fixture",
 					model,
 					group,
@@ -208,7 +211,7 @@ describe("overall D20 gate", () => {
 		expect(output).not.toContain("→ GO");
 	});
 
-	it.each(["baseline", "treatment", "planned", "session", "usage", "check", "version"])(
+	it.each(["baseline", "treatment", "planned", "session", "usage", "check", "version", "provider config"])(
 		"withholds the overall verdict when a third model has incomplete %s evidence",
 		(problem) => {
 			const f = fixture();
@@ -223,6 +226,7 @@ describe("overall D20 gate", () => {
 				if (problem === "planned") meta.driverStatus = "planned";
 				if (problem === "check") delete meta.checkPass;
 				if (problem === "version") delete meta.taskHash;
+				if (problem === "provider config") delete meta.providerConfigHash;
 				writeFileSync(metaPath, JSON.stringify(meta));
 				if (problem === "session") rmSync(sessionFile);
 				if (problem === "usage") writeMessages(sessionFile, [{ role: "assistant" }]);
@@ -300,6 +304,63 @@ describe("overall D20 gate", () => {
 });
 
 describe("offline benchmark analyzer", () => {
+	it.each(["B", "F"])("withholds the %s verdict for different provider configs", (group) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		const providerConfigHash = `sha256:${"d".repeat(64)}`;
+		f.add({ group, tokensOut: 100, providerConfigHash });
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("provider configs differ — no verdict");
+		expect(stdout).not.toContain("→ GO");
+		expect(csvRows(csv).at(-1)).toMatchObject({ providerConfigHash, tokensOut: "100", pass: "true" });
+	});
+	it.each(
+		["A", "F"].flatMap((group) =>
+			[undefined, null, 42, "", "sha256:abcd", "c".repeat(64)].map((providerConfigHash) => ({
+				group,
+				providerConfigHash,
+			})),
+		),
+	)("withholds the verdict for $group provider config hash $providerConfigHash", ({ group, providerConfigHash }) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group: "F", tokensOut: 100 });
+		const { metaPath } = f.add({ group, tokensOut: 100 });
+		const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		writeFileSync(metaPath, JSON.stringify({ ...meta, providerConfigHash }));
+		const { stdout, csv } = f.run();
+		expect(csvRows(csv).at(-1)).toMatchObject({ providerConfigHash: "", tokensOut: "100", pass: "true" });
+		expect(summary(stdout, `fixture-model | ${group}`)).toMatchObject({ pass: "100%", tokensOut: 100 });
+		expect(stdout).toContain("provider config fingerprints incomplete or inconsistent — no verdict");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+	});
+	it.each(["A", "F"])("rejects mixed provider configs across %s tasks", (group) => {
+		const f = fixture();
+		for (const condition of ["A", "F"]) {
+			f.add({ group: condition, task: "logs", tokensOut: 100 });
+			f.add({
+				group: condition,
+				task: "rename",
+				providerConfigHash: condition === group ? `sha256:${"d".repeat(64)}` : undefined,
+				tokensOut: 100,
+			});
+		}
+		expect(f.run().stdout).toContain("provider config fingerprints incomplete or inconsistent — no verdict");
+	});
+	it("compares config fingerprints within each model and keeps B variants separate", () => {
+		const f = fixture();
+		for (const [index, model] of ["model-a", "model-b"].entries()) {
+			const providerConfigHash = `sha256:${String(index).repeat(64)}`;
+			for (const group of ["A", "F", "B"]) f.add({ model, group, providerConfigHash, tokensOut: 100 });
+			f.add({ model, group: "B", variant: "noexample", tokensOut: 100 });
+		}
+		const { stdout } = f.run();
+		for (const condition of ["F", "B/example"]) {
+			expect(overall(stdout)).toContain(`${condition}: 2/2 models meet both thresholds → GO`);
+		}
+		expect(overall(stdout)).toContain("B/noexample: 0/2 models meet both thresholds; 2 incomplete — no verdict");
+		expect(stdout).toContain("provider configs differ — no verdict");
+	});
 	it.each(["B", "F"])("withholds the %s verdict for different task versions", (group) => {
 		const f = fixture();
 		f.add({ tokensOut: 100 });
@@ -876,6 +937,7 @@ describe("offline benchmark analyzer", () => {
 			f.add({
 				task: row.task,
 				taskHash: null,
+				providerConfigHash: null,
 				model: row.model,
 				group: row.group,
 				tokensOut: Number(row.tokensOut),
