@@ -22,7 +22,11 @@ import {
 	VERSION,
 } from "../src/config.js";
 import type { AgentSessionRuntimeMetadata } from "../src/core/agent-session-runtime.js";
-import { DAEMON_PROTOCOL_VERSION, DAEMON_SCHEMA_ID } from "../src/modes/daemon/daemon-protocol.js";
+import {
+	DAEMON_PROTOCOL_VERSION,
+	DAEMON_SCHEMA_ID,
+	type DaemonErrorInfo,
+} from "../src/modes/daemon/daemon-protocol.js";
 import type * as DaemonSocketModule from "../src/modes/daemon/daemon-socket.js";
 import {
 	handlePackageCommand,
@@ -121,7 +125,9 @@ interface MockDaemonRequest {
 	runtimeMetadata?: AgentSessionRuntimeMetadata;
 }
 
-type MockDaemonResponse = { success: true; data?: unknown } | { success: false; error: string };
+type MockDaemonResponse =
+	| { success: true; data?: unknown }
+	| { success: false; error: string; errorInfo?: DaemonErrorInfo };
 
 const mockState = vi.hoisted(() => ({
 	calls: [] as string[],
@@ -154,6 +160,7 @@ const mockState = vi.hoisted(() => ({
 	promptFailures: 0,
 	probeSocketPaths: [] as string[],
 	requestThrowTypes: [] as string[],
+	workerUnavailableTypes: [] as string[],
 	disconnectRequestTypes: [] as string[],
 	disconnectAfterPersistRequestTypes: [] as string[],
 	requestPayloads: [] as MockDaemonRequest[],
@@ -351,6 +358,15 @@ vi.mock("../src/modes/daemon/daemon-client.js", () => ({
 			this.observedHello ??= mockState.hello;
 			mockState.calls.push(`daemon-request:${request.type}`);
 			mockState.requestPayloads.push(request);
+			const unavailableIndex = mockState.workerUnavailableTypes.indexOf(request.type);
+			if (unavailableIndex !== -1) {
+				mockState.workerUnavailableTypes.splice(unavailableIndex, 1);
+				return {
+					success: false,
+					error: "Session worker is disconnected",
+					errorInfo: { code: "worker_unavailable" },
+				};
+			}
 			if (mockState.disconnectRequestTypes.includes(request.type)) {
 				this.connected = false;
 				throw new Error(`${request.type} disconnected`);
@@ -517,6 +533,7 @@ describe("self-update daemon restart", () => {
 		mockState.promptFailures = 0;
 		mockState.probeSocketPaths = [];
 		mockState.requestThrowTypes = [];
+		mockState.workerUnavailableTypes = [];
 		mockState.requestPayloads = [];
 		mockState.restoreActionFailures = 0;
 		mockState.restoreNextTurnFailures = 0;
@@ -1491,6 +1508,24 @@ describe("self-update daemon restart", () => {
 			errorSpy.mockRestore();
 		}
 	});
+
+	it.each(["append_custom_message", "restore_next_turn", "restore_actions", "prompt", "resume_queue"])(
+		"restores and resumes after %s is rejected before worker dispatch",
+		async (command) => {
+			mockState.prepareManifest = createAcceptedRecoveryManifest([
+				{ role: "custom", customType: "context", content: "pending context", display: false, timestamp: 1 },
+			]);
+			if (command === "prompt") mockState.prepareManifest.sessions[0].queue.actions.actions = [];
+			mockState.workerUnavailableTypes = [command];
+			await performUpdateAndRunCoordinator("old-active");
+			expect(mockState.requestPayloads.filter((request) => request.type === command)).toHaveLength(2);
+			expect(mockState.lastCoordinatorStatus).toMatchObject({
+				phase: "complete",
+				counts: { total: 1, restored: 1, resumed: 1, failed: 0 },
+				resumeFailures: [],
+			});
+		},
+	);
 
 	it("continues restoring later sessions after a resume rejection", async () => {
 		mockState.prepareManifest = createAcceptedRecoveryManifest();
