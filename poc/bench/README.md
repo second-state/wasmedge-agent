@@ -11,7 +11,7 @@ bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
-└── results/      # gitignored: runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
+└── results/      # gitignored: plans/<planId>.json and runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
 ```
 
 ## Tasks (full set, DESIGN.md appendix C)
@@ -88,6 +88,13 @@ are unique even when different providers use the same model name. All plan
 records must be written before execution begins. `plannedAt` records when a
 slot was registered; `startedAt` stays null until that run starts.
 
+After all run records are registered, the driver atomically publishes a
+separate `results/plans/<planId>.json` before launching the first agent.
+This inventory lists every expected run ID, task, model, group, resolved
+prompt variant, repetition, and task/provider-config fingerprint. Each
+run's metadata links to it with `planId`. If saving the inventory fails,
+no agent starts. The inventory is not rewritten as runs progress.
+
 Each run also retains a `task/` snapshot of the selected task directory before
 any agent starts. Prompts, timeout, fixture copies, and task checking all use
 that snapshot, so edits to the original task during execution do not change
@@ -135,10 +142,27 @@ Driver failures still allow later runs to proceed, but make the driver exit
 nonzero. A completed task's failed check or timeout remains a benchmark
 outcome, distinct from a driver error. Recording requires a writable results
 directory. A failed or interrupted registration may leave only part of the
-plan, but no agent has run yet. This does not implement resuming a plan or
-detect records deleted after registration.
+plan, but no agent has run yet. Records left without their inventory block
+analyzer verdicts. This does not implement resuming a plan.
 
 ## Metrics (analyze.ts)
+
+The analyzer checks every saved plan against the discovered run records.
+Missing records (including an entire model), duplicate run IDs or planned
+slots, changed slot fields, unknown plan links, and malformed plans or records
+withhold **all** D20 verdicts for that results directory. It lists the problems
+under `Run inventory`; readable per-run metrics and discovered-record
+aggregates remain available. Missing records do not become failed tasks,
+zero-token samples, or invented CSV rows. The CSV appends `planId`.
+
+Separate driver invocations have separate inventories and may still be
+compared when their task/config evidence matches. Legacy records without
+`planId` retain the existing evidence checks and are counted separately;
+their full inventory cannot be verified. Keep plans together with their run
+records when archiving results. These local files are not tamper-proof: if a
+plan and all its records disappear together, the analyzer cannot recover
+them. An inventory describes the driver's selected matrix; it does not
+prove the full D21 selection was requested.
 
 Per run: pass (check.sh), wall time, tokens in/out (incl. cache), assistant
 turns, tool calls by name, cell count, compile-error cell share, cell duration
@@ -165,12 +189,14 @@ are allowed. Per-model results and CSV metrics remain available separately.
 This summarizes the recorded selection, not the completeness of the full
 D21 experiment: it does not require all 12 tasks, three repetitions, or the
 open-weight model. Model IDs are compared literally; provider aliases and
-model families are not resolved. The summary cannot recover wholly absent
-models/runs or verify effective provider settings and toolchain versions. Latency and
-recovery remain reported observations, outside the D20 pass/token gate.
+model families are not resolved. The summary cannot recover models/runs
+absent from both records and saved plans or verify effective provider settings
+and toolchain versions. Latency and recovery remain reported observations,
+outside the D20 pass/token gate.
 
-The summary lists distinct `tasks` separately from `runs` (registered
-repetitions, including unstarted ones). Before applying the D20 thresholds,
+The summary lists distinct `tasks` separately from `runs` (discovered
+records, including unstarted ones); missing planned records are listed in
+the inventory report. Before applying the D20 thresholds,
 each treatment condition must have the same task IDs and the same share of runs per task as its
 baseline. For example, three repetitions per task in A and two per task in a
 B prompt split are comparable; omitting a task or changing its relative
@@ -210,8 +236,8 @@ evidence; the analyzer does not silently drop that run or substitute zero.
 The D20 verdict requires boolean task-check results and complete output-token
 totals for every run in both conditions. Missing input usage alone does not
 block the output-token gate. Explicit zero counts remain valid measurements.
-These checks cover discovered records, including the driver's preregistered
-slots; they cannot reconstruct unrecorded historical runs or deleted records.
+Saved inventories detect missing preregistered records; these checks cannot
+reconstruct unrecorded historical runs or deleted plans and their records.
 
 The appended `driverStatus` CSV field distinguishes `planned`, `running`,
 `completed`, `error`, `invalid` (unrecognized status), and `legacy` (field absent). Per-run

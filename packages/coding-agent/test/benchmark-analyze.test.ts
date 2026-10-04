@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,25 @@ function fixture() {
 	mkdirSync(join(root, "results/runs"), { recursive: true });
 	let nextId = 0;
 	return {
+		runsDir: join(root, "results/runs"),
+		registerPlan(planId = "fixture-plan") {
+			const runs = readdirSync(join(root, "results/runs")).map((id) => {
+				const path = join(root, "results/runs", id, "meta.json");
+				const meta = JSON.parse(readFileSync(path, "utf-8"));
+				writeFileSync(path, JSON.stringify({ ...meta, planId }));
+				return Object.fromEntries(
+					["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"].map((key) => [
+						key,
+						meta[key],
+					]),
+				);
+			});
+			const dir = join(root, "results/plans");
+			mkdirSync(dir, { recursive: true });
+			const path = join(dir, `${planId}.json`);
+			writeFileSync(path, JSON.stringify({ version: 1, planId, runs }));
+			return path;
+		},
 		add({
 			task = "fixture",
 			taskHash = `sha256:${"a".repeat(64)}`,
@@ -147,6 +166,151 @@ function overall(stdout: string) {
 	expect(section, "missing overall D20 summary").toBeDefined();
 	return section!;
 }
+
+describe("benchmark run inventory", () => {
+	it("retains D20 verdicts for complete plans and identifies their CSV records", () => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			for (const group of ["A", "B", "F"]) f.add({ model, group, tokensOut: 100 });
+		}
+		f.registerPlan();
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("Run inventory: 6/6 planned records match; 0 legacy records");
+		for (const condition of ["F", "B/example"]) {
+			expect(overall(stdout)).toContain(`${condition}: 2/2 models meet both thresholds → GO`);
+		}
+		expect(csvRows(csv).every((row) => row.planId === "fixture-plan")).toBe(true);
+	});
+
+	it("withholds verdicts when every record for a planned third model disappears", () => {
+		const f = fixture();
+		const removed: string[] = [];
+		for (const model of ["model-a", "model-b", "model-c"]) {
+			for (const group of ["A", "F"]) {
+				const { metaPath } = f.add({ model, group, tokensOut: 100 });
+				if (model === "model-c") removed.push(metaPath);
+			}
+		}
+		f.registerPlan();
+		for (const path of removed) rmSync(path);
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("run inventory incomplete or inconsistent — no verdict");
+		expect(stdout).toContain("missing run record");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+		expect(csvRows(csv)).toHaveLength(4);
+	});
+
+	it.each(["A", "B", "F"])("detects a missing %s repetition even if task weights still match", (group) => {
+		const f = fixture();
+		const paths: string[] = [];
+		for (const condition of ["A", "B", "F"]) {
+			for (let rep = 0; rep < 2; rep++) {
+				const { metaPath } = f.add({ group: condition, tokensOut: 100 });
+				if (condition === group) paths.push(metaPath);
+			}
+		}
+		f.registerPlan();
+		rmSync(paths[0]);
+		const { stdout } = f.run();
+		expect(stdout).toContain("Run inventory: 5/6 planned records match");
+		expect(stdout).toContain("missing run record");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+	});
+
+	it("reports absent planned runs even when the entire runs directory is removed", () => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		f.add({ group: "F", tokensOut: 100 });
+		f.registerPlan();
+		rmSync(f.runsDir, { recursive: true });
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("Run inventory: 0/2 planned records match");
+		expect(stdout.match(/missing run record/g)).toHaveLength(2);
+		expect(csvRows(csv)).toEqual([]);
+	});
+
+	it.each(["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep", "planId"])(
+		"withholds verdicts when a run's %s no longer matches its plan",
+		(field) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			const { metaPath } = f.add({ group: "F", tokensOut: 100 });
+			f.registerPlan();
+			const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+			meta[field] = field === "rep" ? 99 : field.endsWith("Hash") ? `sha256:${"f".repeat(64)}` : "changed";
+			writeFileSync(metaPath, JSON.stringify(meta));
+			const { stdout, csv } = f.run();
+			expect(stdout).toContain("Run inventory incomplete or inconsistent");
+			expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+			expect(csvRows(csv)).toHaveLength(2);
+		},
+	);
+
+	it.each([undefined, null, 42, ""])("rejects a lost or invalid plan link: %s", (planId) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		const { metaPath } = f.add({ group: "F", tokensOut: 100 });
+		f.registerPlan();
+		const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		writeFileSync(metaPath, JSON.stringify({ ...meta, planId }));
+		expect(f.run().stdout).toContain("run inventory incomplete or inconsistent — no verdict");
+	});
+
+	it("rejects extra and duplicate records while retaining their observed metrics", () => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		const { metaPath } = f.add({ group: "F", tokensOut: 100 });
+		f.registerPlan();
+		const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		for (const id of ["duplicate", "extra"]) {
+			mkdirSync(join(f.runsDir, id));
+			writeFileSync(
+				join(f.runsDir, id, "meta.json"),
+				JSON.stringify({ ...meta, runId: id === "extra" ? id : meta.runId }),
+			);
+		}
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("duplicate run record");
+		expect(stdout).toContain("unplanned run record");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+		expect(csvRows(csv)).toHaveLength(4);
+	});
+
+	it.each(["missing", "json", "version", "id", "empty", "invalid slot", "duplicate ID", "duplicate slot"])(
+		"withholds verdicts for a %s plan",
+		(problem) => {
+			const f = fixture();
+			f.add({ tokensOut: 100 });
+			f.add({ group: "F", tokensOut: 100 });
+			const path = f.registerPlan();
+			const plan = JSON.parse(readFileSync(path, "utf-8"));
+			if (problem === "version") plan.version = 2;
+			if (problem === "id") plan.planId = "different";
+			if (problem === "empty") plan.runs = [];
+			if (problem === "invalid slot") plan.runs[0].rep = 0;
+			if (problem === "duplicate ID") plan.runs.push(plan.runs[0]);
+			if (problem === "duplicate slot") plan.runs.push({ ...plan.runs[0], runId: "different" });
+			writeFileSync(path, problem === "json" ? "{" : JSON.stringify(plan));
+			if (problem === "missing") rmSync(path);
+			const { stdout, csv } = f.run();
+			expect(stdout).toContain("run inventory incomplete or inconsistent — no verdict");
+			expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+			expect(csvRows(csv)).toHaveLength(2);
+		},
+	);
+
+	it.each(["{", "null", "[]"])("retains other observations when run metadata is invalid: %s", (source) => {
+		const f = fixture();
+		f.add({ tokensOut: 100 });
+		const { metaPath } = f.add({ group: "F", tokensOut: 100 });
+		f.registerPlan();
+		writeFileSync(metaPath, source);
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("unreadable or invalid run record");
+		expect(stdout).toContain("missing run record");
+		expect(csvRows(csv)).toHaveLength(1);
+	});
+});
 
 describe("overall D20 gate", () => {
 	it.each(["B", "F"])("requires two distinct models, not repeated runs of %s", (group) => {

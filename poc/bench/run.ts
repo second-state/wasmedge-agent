@@ -47,6 +47,7 @@ interface TaskSpec {
 
 interface RunMeta {
 	runId: string;
+	planId: string;
 	task: string;
 	taskHash: string;
 	providerConfigHash: string;
@@ -425,6 +426,7 @@ function planRun(
 	variant: string,
 	rep: number,
 	providerConfig: Buffer,
+	planId: string,
 ): { task: TaskSpec; meta: RunMeta } {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
 	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
@@ -437,6 +439,7 @@ function planRun(
 	const snapshot = loadTask(task.id, taskDir);
 	const meta: RunMeta = {
 		runId,
+		planId,
 		task: task.id,
 		taskHash,
 		providerConfigHash: hashProviderConfig(providerConfig),
@@ -619,6 +622,7 @@ console.log(
 mkdirSync(join(RESULTS_DIR, "runs"), { recursive: true });
 
 const plan: { task: TaskSpec; meta: RunMeta }[] = [];
+const planId = randomUUID();
 for (const task of tasks) {
 	for (const model of opts.models) {
 		for (const group of opts.groups) {
@@ -634,11 +638,32 @@ for (const task of tasks) {
 								? "example"
 								: "noexample"
 							: opts.variant;
-				plan.push(planRun(task, group, model, variant, rep, providerConfig));
+				plan.push(planRun(task, group, model, variant, rep, providerConfig, planId));
 			}
 		}
 	}
 }
+// Keep the expected inventory outside individual run directories so deleted
+// records cannot silently shrink the comparison after execution.
+const plansDir = join(RESULTS_DIR, "plans");
+mkdirSync(plansDir, { recursive: true });
+const planPath = join(plansDir, `${planId}.json`);
+writeFileSync(`${planPath}.tmp`, JSON.stringify({
+	version: 1,
+	planId,
+	plannedAt: new Date().toISOString(),
+	runs: plan.map(({ meta }) => ({
+		runId: meta.runId,
+		task: meta.task,
+		taskHash: meta.taskHash,
+		providerConfigHash: meta.providerConfigHash,
+		model: meta.model,
+		group: meta.group,
+		variant: meta.variant,
+		rep: meta.rep,
+	})),
+}, null, 2), { flag: "wx", mode: 0o600 });
+renameSync(`${planPath}.tmp`, planPath);
 const failures: string[] = [];
 let done = 0;
 for (const { task, meta } of plan) {

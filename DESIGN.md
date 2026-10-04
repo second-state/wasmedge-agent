@@ -653,7 +653,9 @@ wasmedge-agent/
 
 **Exit 判準（D20 已確認）**（→ Phase 1 GO）：成功率與 token 閾值同時達標於 ≥2 家模型；未達標 → 回修 prompt/prelude 一輪（≤1 週）再測；仍未達 → 升級決策（範圍收窄為 systems-agent 場景或轉選項 C 重新評估）。模型組合依 D21：Claude sonnet 級 + opus/fable 級 + 開源權重一家。
 
-**D20 整體摘要（2026-10-04）**：analyzer 除逐模型判定，另對 F 與每個 B prompt variant 分別輸出整體結果；同一模型的 repetitions 不重複計數，也不混用不同 treatment 的通過模型。該 treatment 或 A 中已記錄的模型都必須有完整、可比較的兩組資料，且跨模型 task IDs、versions、相對比重一致；任一缺漏／不一致即不下整體 verdict。資料完整且至少兩個不同 model IDs 同時通過成功率與 output-token 閾值才是 GO，完整但通過數不足為 NO-GO；模型總數不足兩個仍屬資料不足。這是已記錄選集的閾值摘要，未驗證 D21 的完整模型組合、12 tasks／3 repetitions、model aliases、provider settings 或 toolchain；亦無法找回完全未記錄的模型／runs。Latency 與 recovery 仍為觀測／調校目標，不加入 D20 放行閘。
+**D20 整體摘要（2026-10-04）**：analyzer 除逐模型判定，另對 F 與每個 B prompt variant 分別輸出整體結果；同一模型的 repetitions 不重複計數，也不混用不同 treatment 的通過模型。該 treatment 或 A 中已記錄的模型都必須有完整、可比較的兩組資料，且跨模型 task IDs、versions、相對比重一致；任一缺漏／不一致即不下整體 verdict。資料完整且至少兩個不同 model IDs 同時通過成功率與 output-token 閾值才是 GO，完整但通過數不足為 NO-GO；模型總數不足兩個仍屬資料不足。這是已記錄選集的閾值摘要，未驗證 D21 的完整模型組合、12 tasks／3 repetitions、model aliases、provider settings 或 toolchain；亦無法找回連同 plan 一起遺失或從未登錄的模型／runs。Latency 與 recovery 仍為觀測／調校目標，不加入 D20 放行閘。
+
+**Run inventory（2026-10-04）**：driver 為每次 invocation 在第一個 agent 啟動前原子寫入獨立的 `results/plans/<planId>.json`，保存所有預定 run IDs、task/model/group/variant/rep 與 task/provider config 指紋；每筆 metadata 記錄 `planId`。Analyzer 比對清單與實際紀錄，偵測整批模型或單筆 run 遺失、重複、欄位不符、plan 遺失或格式錯誤時，停止該 results 目錄的所有 D20 verdict，保留可讀的量測並列出問題。舊紀錄缺少 plan 時仍依既有證據檢查，不推定完整性。這是所選 matrix 的本機登錄清單，不防竄改，也未實作 D21 完整選集驗證或計畫續跑。
 
 ---
 
