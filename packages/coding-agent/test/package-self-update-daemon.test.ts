@@ -1527,6 +1527,91 @@ describe("self-update daemon restart", () => {
 		},
 	);
 
+	it.each([
+		["accepted", false],
+		["accepted", true],
+		["continuation", false],
+		["continuation", true],
+		["idle", false],
+		["idle", true],
+	] as const)("fails context restoration before %s recovery (throws=%s)", async (mode, throws) => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest([
+			{ role: "custom", customType: "context", content: "required context", display: false, timestamp: 1 },
+		]);
+		const session = mockState.prepareManifest.sessions[0];
+		if (mode === "continuation") session.queue.actions.actions = [];
+		if (mode === "idle") session.shouldResume = false;
+		if (throws) mockState.requestThrowTypes = ["restore_next_turn"];
+		else mockState.restoreNextTurnFailures = 1;
+		const message = `restore_next_turn: ${throws ? "restore_next_turn failed" : "restore failed"}`;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			expect(
+				mockState.requestPayloads
+					.filter((request) => request.activeSessionId === "restored-active")
+					.map((request) => request.type),
+			).toEqual(["restore_next_turn"]);
+			const expected = {
+				phase: "complete",
+				counts: { total: 1, restored: 0, resumed: 0, failed: 1 },
+				failures: [{ sessionFile: session.sessionFile, message }],
+				resumeFailures: [],
+				message: "Restarted the daemon with 1 session restore failure",
+			};
+			expect(mockState.lastCoordinatorStatus).toMatchObject(expected);
+			const persisted = readDaemonUpdateRestartStatus(join(agentDir, "update-restarts", "test-status.json"));
+			expect(persisted).toMatchObject(expected);
+			if (!persisted) throw new Error("Missing restart status");
+			expect(buildDaemonUpdateRestartReport(persisted)).toEqual({
+				info: ["Restored 0 daemon sessions"],
+				warnings: [
+					"1 daemon session could not be restored.",
+					`Could not restore ${session.sessionFile}: ${message}`,
+				],
+			});
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it.each([true, false])("continues other sessions after context rejection (shutdown=%s)", async (shutdown) => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest([
+			{ role: "custom", customType: "context", content: "required context", display: false, timestamp: 1 },
+		]);
+		const session = mockState.prepareManifest.sessions[0];
+		mockState.prepareManifest.sessions.push({
+			...session,
+			activeSessionId: "second",
+			sessionId: "second",
+			sessionFile: join(projectDir, "second.jsonl"),
+		});
+		mockState.createActiveSessionIds = ["context-failed", "context-restored"];
+		mockState.restoreNextTurnFailures = 1;
+		mockState.shutdownResult = shutdown;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			expect(mockState.lastCoordinatorStatus).toMatchObject({
+				phase: shutdown ? "complete" : "failed",
+				counts: { total: 2, restored: 1, resumed: 1, failed: 1 },
+				failures: [{ sessionFile: session.sessionFile, message: "restore_next_turn: restore failed" }],
+			});
+			expect(
+				mockState.requestPayloads
+					.filter((request) => request.activeSessionId === "context-failed")
+					.map((request) => request.type),
+			).toEqual(["restore_next_turn"]);
+			expect(
+				mockState.requestPayloads
+					.filter((request) => request.activeSessionId === "context-restored")
+					.map((request) => request.type),
+			).toEqual(["restore_next_turn", "restore_actions", "resume_queue"]);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("continues restoring later sessions after a resume rejection", async () => {
 		mockState.prepareManifest = createAcceptedRecoveryManifest();
 		const session = mockState.prepareManifest.sessions[0];
