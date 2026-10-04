@@ -6,12 +6,13 @@ import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
+import { skillTestFingerprint } from "./skill-fingerprint.js";
 import { MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
 import { syncRustSkills } from "./workspace.js";
 import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
 
-interface SkillTestOptions extends CellResourceLimits {
+export interface SkillTestOptions extends CellResourceLimits {
 	workspaceDir: string;
 	cargoBin: string;
 	wasmedgeBin: string;
@@ -27,17 +28,21 @@ function requireSuccess(result: ProcOutcome, phase: string): void {
 	}
 }
 
-/** Compile test binaries only on the host; execute their WASI artifacts in
- * WasmEdge without the session's project, state, harness, or bridge mounts. */
-export async function testRustSkill(reference: Record<string, unknown>, options: SkillTestOptions): Promise<void> {
-	const resourceArgs = wasmedgeResourceArgs(options);
+export function skillReferenceCrate(reference: Record<string, unknown>): string {
 	const match =
 		typeof reference.use === "string"
 			? /^agent_lib::skills::([a-zA-Z_][a-zA-Z0-9_]*)(?:::[a-zA-Z_][a-zA-Z0-9_]*)*$/.exec(reference.use)
 			: null;
 	if (reference.type !== "rust" || !match)
 		throw new Error("skill tests require an agent_lib::skills::<crate> reference");
-	const crateName = match[1];
+	return match[1];
+}
+
+/** Compile test binaries only on the host; execute their WASI artifacts in
+ * WasmEdge without the session's project, state, harness, or bridge mounts. */
+export async function testRustSkill(reference: Record<string, unknown>, options: SkillTestOptions): Promise<void> {
+	const resourceArgs = wasmedgeResourceArgs(options);
+	const crateName = skillReferenceCrate(reference);
 	if (!existsSync(join(options.workspaceDir, "skills", crateName, "Cargo.toml"))) {
 		throw new Error(`skill crate ${crateName} is not mounted; reload skills before refinement`);
 	}
@@ -48,7 +53,11 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 	const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-skill-tests-"));
 	try {
 		const workspace = join(root, "workspace");
+		const fingerprint = skillTestFingerprint(options.workspaceDir);
 		snapshotWorkspace(options.workspaceDir, workspace);
+		if (skillTestFingerprint(workspace) !== fingerprint) {
+			throw new Error("Skill sources changed while taking the test snapshot; retry validation");
+		}
 		syncRustSkills(workspace, withInheritedSkills(workspace, []));
 		const target = join(workspace, "target");
 		const build = await withBuildPermit(
@@ -130,6 +139,10 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 			passed += Number(summary[1]);
 		}
 		if (passed === 0) throw new Error("skill registration requires at least one passing, non-ignored test");
+		signal.throwIfAborted();
+		if (skillTestFingerprint(options.workspaceDir) !== fingerprint) {
+			throw new Error("Skill sources changed during testing; retry validation");
+		}
 	} catch (error) {
 		options.signal?.throwIfAborted();
 		if (timeout.aborted) throw new Error("sandboxed skill tests timed out");

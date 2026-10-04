@@ -9,6 +9,7 @@ import {
 	loadHarnessState,
 } from "../../../src/core/refinement/index.js";
 import { RustCellProvisioner } from "../../../src/core/rust-cell/index.js";
+import * as skillTests from "../../../src/core/rust-cell/skill-tests.js";
 import { isTemplateWarm, resolveToolchain } from "../../../src/core/rust-cell/toolchain.js";
 import { loadSkillsFromDir } from "../../../src/core/skills.js";
 import { createTestResourceLoader } from "../../utilities.js";
@@ -57,19 +58,19 @@ describe.skipIf(!available)("guest harness skill gate (real WasmEdge, faux provi
 		};
 	}
 
-	async function cell(h: Harness, code: string) {
+	async function cell(h: Harness, code: string, status = "ok") {
 		h.setResponses([
 			fauxAssistantMessage(fauxToolCall("rust", { code }), { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
 		await h.session.prompt("Use the harness API");
 		const result = h.session.messages.filter((message) => message.role === "toolResult").at(-1)!;
-		expect(result, getMessageText(result)).toMatchObject({ isError: false });
+		expect(result, getMessageText(result)).toMatchObject({ details: { status } });
 		return getMessageText(result);
 	}
 
 	it(
-		"gates local/global creates and both update APIs without losing other harness entries",
+		"retests edited registered skills before cells and preserves harness entries on failure",
 		{ timeout: 300_000 },
 		async () => {
 			const f = await setup("pub fn run() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
@@ -100,6 +101,9 @@ fn main() -> Result<()> {
 				scope: "global",
 				version: 1,
 			});
+			const tests = vi.spyOn(skillTests, "testRustSkill");
+			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 42); }");
+			expect(tests).not.toHaveBeenCalled();
 			writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
 			const output = await cell(
 				f.h,
@@ -113,11 +117,18 @@ fn main() -> Result<()> {
     local.create_memory("After Failure", "still writable")?;
     Ok(())
 }`,
+				"error",
 			);
 			expect(output).toContain("sandboxed skill tests failed");
+			expect(tests).toHaveBeenCalledTimes(1);
 			const after = loadHarnessState(f.local, "local");
 			expect(after.entries.skill).toEqual(before.entries.skill);
-			expect(after.entries.memory.after_failure.content).toBe("still writable");
+			expect(after.entries.memory.after_failure).toBeUndefined();
+			writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 43); }");
+			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
+			expect(tests).toHaveBeenCalledTimes(2);
+			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
+			expect(tests).toHaveBeenCalledTimes(2);
 		},
 	);
 

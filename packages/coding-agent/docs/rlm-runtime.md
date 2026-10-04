@@ -34,7 +34,7 @@ The same bridge supports the other typed host requests: `rlm::goal`, `rlm::msg`,
 
 Each `rust` tool call runs one complete program:
 
-1. Optional `lib` files are applied to `agent_lib/` (declarative extension, with backups).
+1. Before source edits, changed previously tested or harness-registered mounted skills must pass sandboxed tests again. Results are cached by source/dependency fingerprint within the runtime; reload/resume rechecks registered skills. Revalidation shares the cell deadline, and failure leaves the cell source and library untouched. See [Skills](skills.md#installed-skills-and-continual-harness-skills) for fingerprint scope and recovery. Optional `lib` files are then applied to `agent_lib/` (declarative extension, with backups).
 2. The cell source is written to `cell/src/main.rs` and compiled with `cargo build --release --offline -p cell`. Compiles across sessions share a concurrency gate (`WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`).
 3. A failed or interrupted build restores the previous cell source and lib files, including the generated helper module index. Compile errors return the rendered rustc diagnostics. Successful builds retain their source changes even if the cell later panics or times out; runtime side effects are not rolled back.
 4. The host validates the compiled module and rejects imports outside a fixed set of non-network WASI Preview 1 functions, before any cell code executes. Socket/DNS, plugin, unknown, and non-function imports are rejected even if unused. Validation uses the host JavaScript engine without instantiating the module; unsupported Wasm features fail closed. WasmEdge runs the accepted module with `--force-interpreter`, preventing embedded AOT native payloads from replacing the inspected code.
@@ -72,7 +72,7 @@ On provisioning, `.workspace-version` records the installed template's content a
 
 Upgrades retain helpers, skill sources, state/blobs, the last cell source, unrelated files, and Git history. Unmodified library defaults follow the template; locally changed or deleted library files remain local overrides. Workspaces predating the marker retain their existing library sources conservatively because their original defaults are unknown. An incompatible library or retained cell blocks the upgrade with compiler diagnostics and leaves the original workspace intact. The next provisioning attempt can retry; an abandoned upgrade journal recovers an interrupted directory switch. Provisioning rejects a live upgrade owner and malformed version metadata. This assumes one active runtime owns a session workspace.
 
-The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest changes still use the separate `.skills-hash` synchronization mechanism. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
+The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest, source, test, and fixture changes use the separate `.skills-hash` synchronization mechanism to repeat mount probes on reload. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
 
 ## Delegation Flow
 

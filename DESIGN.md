@@ -536,7 +536,9 @@ emits a diff to the user); write whole files with std::fs when generating them.
 
 **Harness 檔案邊界（2026-10-01）**：移除 `/agent/harness`、`/agent/harness-global` preopens。Runner 在編譯前與執行前，檢查 `/workspace`、`/agent/state`、`/scratch` 的實際路徑不得涵蓋或落在 local/global harness store 內；解析已存在的 symlink 與尚未建立 store 的祖先，也檢查既存 state-file symlink 目標。專案與 session/agent storage 必須分離；以 home 或包含 session storage 的專案為 cwd 可能被拒絕。此檢查不掃描 host 建立的 hard links，也不提供跨進程交易鎖或抵禦 host 同時更動檔案系統。
 
-**範圍限制**：此 gate 是登錄當下的品質檢查，skill source 後續修改不會自動重測。一般 cell/lib 修改仍只有 compile gate；prompt、memory、subagent specs 是資料。host 手動改寫 harness 檔案不經此 gate。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行；guest 網路限制見 §2.7，不應把這個 gate 描述成全面的惡意程式隔離。
+**來源重驗（2026-10-04）**：成功測試以 runtime 內的 content fingerprint 快取。每個 cell 套用來源修改前，已測試或 local/global harness 登錄且仍掛載的 skill，若來源、測試、fixtures、workspace manifests/lockfile/config、rlm 或 scaffold version 改變，必須重新通過沙箱測試；reload/resume 清空快取並重測登錄的 skills。Fingerprint 包含 symlink target 內容，排除 `.git` 與 crate-root `target`；不涵蓋任意外部 build inputs、vendor 內容或 host environment。Snapshot／測試期間偵測到來源異動即拒絕，但不提供跨進程檔案鎖。重驗共用 cell deadline，失敗或取消不執行 cell、不套用本次 cell/lib 修改、保留 harness entry；透過 host 檔案工具修復後重試。Mount fingerprint 同步涵蓋來源、tests、fixtures，reload 時可重做 compile probe 並卸載壞 skill；未 probe 的掛載不再被誤認為通過 probe。
+
+**範圍限制**：一般 cell/lib 修改及未登錄且未測試的 installed skills 仍只有 compile gate；prompt、memory、subagent specs 是資料。host 手動改寫 harness 檔案不等於通過登錄閘；其中已掛載 Rust reference 會在下一個 cell 前重驗。Cargo build scripts/proc macros 仍依既有 host 信任邊界執行；guest 網路限制見 §2.7，不應把這個 gate 描述成全面的惡意程式隔離。
 
 **Skill scaffold（2026-10-02）**：`rlm::skills::package(name, description, instructions, source)` 經 `skills.package` host request 在 project config 的 `skills/<name>/` 建立 SKILL.md、固定 workspace dependencies 的 Cargo.toml 與 src/lib.rs。只建立新 project-local skill；拒絕既有目標、已載入名稱／crate 名衝突、保留名稱與 symlink parents，不接受自訂路徑或 dependencies。回傳 guest path、crate name、use path 與 `requires_reload: true`。此操作不編譯、測試、掛載或登錄；`/reload`／新 session 掛載後，仍須通過上述 harness 測試閘。Global scaffold 與自動 reload 不在此實作範圍。
 
