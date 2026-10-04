@@ -1048,10 +1048,12 @@ interface RestoreDaemonUpdateRestartSessionResult {
 	restored: boolean;
 	resumed: boolean;
 	failureMessage?: string;
+	resumeFailureMessage?: string;
 }
 
 interface RestoreDaemonUpdateRestartResult extends DaemonUpdateRestartCounts {
 	failures: DaemonUpdateRestartFailure[];
+	resumeFailures: DaemonUpdateRestartFailure[];
 }
 
 function remapDaemonUpdateRestartRuntimeMetadata(
@@ -1140,52 +1142,71 @@ async function restoreDaemonUpdateRestartSession(
 		session.hadAcceptedPromptInFlight;
 	let resumedSession = false;
 	let restoredQueuedWork = false;
-	if (session.queue.actions.actions.length > 0) {
-		const response = await client.request(
-			{ type: "restore_actions", activeSessionId, snapshot: session.queue.actions },
-			30000,
-		);
-		if (response.success) {
-			restoredQueuedWork = true;
-		} else {
-			console.error(
-				chalk.yellow(`Warning: could not restore queued actions for ${session.sessionFile}: ${response.error}`),
+	const resumeErrors: string[] = [];
+	let operation = "restore_actions";
+	try {
+		if (session.queue.actions.actions.length > 0) {
+			const response = await client.request(
+				{ type: "restore_actions", activeSessionId, snapshot: session.queue.actions },
+				30000,
 			);
+			if (response.success) {
+				restoredQueuedWork = true;
+			} else {
+				resumeErrors.push(`${operation}: ${response.error}`);
+				console.error(
+					chalk.yellow(`Warning: could not restore queued actions for ${session.sessionFile}: ${response.error}`),
+				);
+			}
 		}
-	}
-	const restoredAcceptedTurn =
-		restoredQueuedWork &&
-		session.queue.actions.actions.some(
-			(action) =>
-				action.payload.kind === "turn" && !action.payload.queueVisible && action.payload.acceptedBeforeCompletion,
-		);
-	if (needsContinuationPrompt && !restoredAcceptedTurn) {
-		const promptResponse = await client.request(
-			{
-				type: "prompt",
-				activeSessionId,
-				message: UPDATE_RESTART_CONTINUATION_PROMPT,
-				expandPromptTemplates: false,
-			},
-			120000,
-		);
-		if (!promptResponse.success) {
-			console.error(chalk.yellow(`Warning: could not resume ${session.sessionFile}: ${promptResponse.error}`));
-		} else {
-			resumedSession = true;
-		}
-	}
-	if (!resumedSession && restoredQueuedWork) {
-		const response = await client.request({ type: "resume_queue", activeSessionId }, 30000);
-		if (response.success) {
-			resumedSession = true;
-		} else {
-			console.error(
-				chalk.yellow(`Warning: could not resume queued work for ${session.sessionFile}: ${response.error}`),
+		const restoredAcceptedTurn =
+			restoredQueuedWork &&
+			session.queue.actions.actions.some(
+				(action) =>
+					action.payload.kind === "turn" &&
+					!action.payload.queueVisible &&
+					action.payload.acceptedBeforeCompletion,
 			);
+		if (needsContinuationPrompt && !restoredAcceptedTurn) {
+			operation = "prompt";
+			const promptResponse = await client.request(
+				{
+					type: "prompt",
+					activeSessionId,
+					message: UPDATE_RESTART_CONTINUATION_PROMPT,
+					expandPromptTemplates: false,
+				},
+				120000,
+			);
+			if (!promptResponse.success) {
+				resumeErrors.push(`${operation}: ${promptResponse.error}`);
+				console.error(chalk.yellow(`Warning: could not resume ${session.sessionFile}: ${promptResponse.error}`));
+			} else {
+				resumedSession = true;
+			}
 		}
+		if (!resumedSession && restoredQueuedWork) {
+			operation = "resume_queue";
+			const response = await client.request({ type: "resume_queue", activeSessionId }, 30000);
+			if (response.success) {
+				resumedSession = true;
+			} else {
+				resumeErrors.push(`${operation}: ${response.error}`);
+				console.error(
+					chalk.yellow(`Warning: could not resume queued work for ${session.sessionFile}: ${response.error}`),
+				);
+			}
+		}
+	} catch (error: unknown) {
+		resumeErrors.push(`${operation}: ${formatUnknownError(error)}`);
 	}
-	return { restored: true, resumed: resumedSession };
+	return {
+		restored: true,
+		resumed: resumedSession,
+		...(!resumedSession
+			? { resumeFailureMessage: resumeErrors.join("; ") || "No queued work or interrupted turn to resume" }
+			: {}),
+	};
 }
 
 async function restoreDaemonUpdateRestart(
@@ -1196,12 +1217,13 @@ async function restoreDaemonUpdateRestart(
 ): Promise<RestoreDaemonUpdateRestartResult> {
 	const restoredActiveSessionIds = new Map<string, string>();
 	if (manifest.sessions.length === 0) {
-		return { total: 0, restored: 0, resumed: 0, failed: 0, failures: [] };
+		return { total: 0, restored: 0, resumed: 0, failed: 0, failures: [], resumeFailures: [] };
 	}
 	const client = new DaemonClient(socketPath);
 	let restored = 0;
 	let resumed = 0;
 	const failures: DaemonUpdateRestartFailure[] = [];
+	const resumeFailures: DaemonUpdateRestartFailure[] = [];
 	try {
 		await client.connect(10000);
 		for (const session of manifest.sessions) {
@@ -1224,6 +1246,9 @@ async function restoreDaemonUpdateRestart(
 						message: result.failureMessage ?? "unknown restore error",
 					});
 				}
+				if (result.resumeFailureMessage) {
+					resumeFailures.push({ sessionFile: session.sessionFile, message: result.resumeFailureMessage });
+				}
 			} catch (error: unknown) {
 				const message = formatUnknownError(error);
 				console.error(chalk.yellow(`Warning: could not restore ${session.sessionFile}: ${message}`));
@@ -1235,6 +1260,7 @@ async function restoreDaemonUpdateRestart(
 				resumed,
 				failed: failures.length,
 				failures: [...failures],
+				resumeFailures: [...resumeFailures],
 			});
 		}
 	} finally {
@@ -1250,6 +1276,7 @@ async function restoreDaemonUpdateRestart(
 		resumed,
 		failed: manifest.sessions.length - restored,
 		failures,
+		resumeFailures,
 	};
 }
 
@@ -1349,6 +1376,7 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 				...(activeStatus.predecessor ? { predecessor: activeStatus.predecessor } : {}),
 				...(activeStatus.successor ? { successor: activeStatus.successor } : {}),
 				...(activeStatus.failures ? { failures: activeStatus.failures } : {}),
+				...(activeStatus.resumeFailures ? { resumeFailures: activeStatus.resumeFailures } : {}),
 				...(activeStatus.message ? { message: activeStatus.message } : {}),
 			});
 			return statusWriter.current();
@@ -1356,8 +1384,8 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 		shutdownAdmission = await acquireDaemonShutdownAdmission();
 		const daemonProbe = await probeRunningDaemonSessions(options.socketPath);
 		const reportRestoreProgress = (progress: RestoreDaemonUpdateRestartResult) => {
-			const { failures, ...counts } = progress;
-			statusWriter.update({ counts, failures });
+			const { failures, resumeFailures, ...counts } = progress;
+			statusWriter.update({ counts, failures, resumeFailures });
 		};
 		let predecessor: DaemonUpdateRestartProcessIdentity | undefined;
 		if (daemonProbe.reachable) {
@@ -1404,10 +1432,11 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 								options.originActiveSessionId,
 								reportRestoreProgress,
 							);
-							const { failures: restoreFailures, ...counts } = restoreResult;
+							const { failures: restoreFailures, resumeFailures, ...counts } = restoreResult;
 							clearPreparedDaemonUpdateRestartManifest(options.socketPath, options.agentDir);
 							statusWriter.update({
 								counts,
+								resumeFailures,
 								...(restoreFailures.length > 0 ? { failures: restoreFailures } : {}),
 							});
 						} catch {
@@ -1444,6 +1473,7 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 
 		let counts: DaemonUpdateRestartCounts = { total: 0, restored: 0, resumed: 0, failed: 0 };
 		let failures: DaemonUpdateRestartFailure[] = [];
+		let resumeFailures: DaemonUpdateRestartFailure[] = [];
 		if (manifest) {
 			const restoreResult = await restoreDaemonUpdateRestart(
 				options.socketPath,
@@ -1458,16 +1488,20 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 				failed: restoreResult.failed,
 			};
 			failures = restoreResult.failures;
+			resumeFailures = restoreResult.resumeFailures;
 			clearPreparedDaemonUpdateRestartManifest(options.socketPath, options.agentDir);
 		}
 		statusWriter.update({
 			phase: "complete",
 			counts,
 			...(failures.length > 0 ? { failures } : {}),
+			...(resumeFailures.length > 0 ? { resumeFailures } : {}),
 			message:
 				counts.failed > 0
 					? `Restarted the daemon with ${counts.failed} session restore failure${counts.failed === 1 ? "" : "s"}`
-					: "Restarted the daemon after the update",
+					: resumeFailures.length > 0
+						? `Restarted the daemon with ${resumeFailures.length} session resume failure${resumeFailures.length === 1 ? "" : "s"}`
+						: "Restarted the daemon after the update",
 		});
 	} catch (error: unknown) {
 		statusWriter.update({ phase: "failed", message: formatUnknownError(error) });

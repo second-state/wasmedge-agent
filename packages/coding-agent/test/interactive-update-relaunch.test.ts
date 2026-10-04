@@ -287,6 +287,23 @@ describe("buildUpdateChildArgs", () => {
 });
 
 describe("buildDaemonUpdateRestartReport", () => {
+	it.each(["complete", "failed"] as const)("reports resume failures after a %s restart", (phase) => {
+		const report = buildDaemonUpdateRestartReport({
+			version: 1,
+			requestId: "resume-request",
+			socketPath: "/tmp/update.sock",
+			phase,
+			coordinator: { pid: process.pid },
+			counts: { total: 2, restored: 2, resumed: 1, failed: 0 },
+			resumeFailures: [{ sessionFile: "/tmp/paused.jsonl", message: "prompt: not accepted" }],
+			startedAt: "2026-10-04T00:00:00.000Z",
+			updatedAt: "2026-10-04T00:00:01.000Z",
+		});
+		expect(report.info).toEqual(["Restored 2 daemon sessions", "Resumed 1 interrupted session"]);
+		expect(report.warnings).toContain("Could not resume /tmp/paused.jsonl: prompt: not accepted");
+		expect(report.warnings.join("\n")).not.toContain("could not be restored");
+	});
+
 	it("reports recovery results when the daemon restart fails", () => {
 		const report = buildDaemonUpdateRestartReport({
 			version: 1,

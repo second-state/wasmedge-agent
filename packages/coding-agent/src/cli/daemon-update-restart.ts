@@ -34,6 +34,7 @@ export interface DaemonUpdateRestartCounts {
 	total: number;
 	restored: number;
 	resumed: number;
+	/** Sessions that could not be restored; resume failures are reported separately. */
 	failed: number;
 }
 
@@ -59,6 +60,7 @@ export interface DaemonUpdateRestartStatus {
 	successor?: DaemonUpdateRestartProcessIdentity;
 	counts: DaemonUpdateRestartCounts;
 	failures?: DaemonUpdateRestartFailure[];
+	resumeFailures?: DaemonUpdateRestartFailure[];
 	message?: string;
 	startedAt: string;
 	updatedAt: string;
@@ -141,6 +143,9 @@ export function buildDaemonUpdateRestartReport(status: DaemonUpdateRestartStatus
 	for (const failure of status.failures ?? []) {
 		report.warnings.push(`Could not restore ${failure.sessionFile}: ${failure.message}`);
 	}
+	for (const failure of status.resumeFailures ?? []) {
+		report.warnings.push(`Could not resume ${failure.sessionFile}: ${failure.message}`);
+	}
 	return report;
 }
 
@@ -221,6 +226,7 @@ function isDaemonUpdateRestartStatus(value: unknown): value is DaemonUpdateResta
 		(status.successor === undefined || isProcessIdentity(status.successor)) &&
 		isCounts(status.counts) &&
 		(status.failures === undefined || isFailures(status.failures)) &&
+		(status.resumeFailures === undefined || isFailures(status.resumeFailures)) &&
 		(status.message === undefined || typeof status.message === "string") &&
 		typeof status.startedAt === "string" &&
 		typeof status.updatedAt === "string" &&
@@ -280,6 +286,7 @@ export class DaemonUpdateRestartStatusWriter {
 			failures: update.failures
 				? update.failures.map((failure) => ({ ...failure }))
 				: this.status.failures?.map((failure) => ({ ...failure })),
+			resumeFailures: (update.resumeFailures ?? this.status.resumeFailures)?.map((failure) => ({ ...failure })),
 			updatedAt: now,
 			heartbeatAt: now,
 		};
@@ -291,6 +298,7 @@ export class DaemonUpdateRestartStatusWriter {
 			...this.status,
 			counts: { ...this.status.counts },
 			failures: this.status.failures?.map((failure) => ({ ...failure })),
+			resumeFailures: this.status.resumeFailures?.map((failure) => ({ ...failure })),
 		};
 	}
 

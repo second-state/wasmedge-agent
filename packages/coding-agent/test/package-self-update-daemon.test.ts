@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as DaemonUpdateRestartModule from "../src/cli/daemon-update-restart.js";
 import {
 	acquireDaemonUpdateRestartCoordinator,
+	buildDaemonUpdateRestartReport,
 	type DaemonUpdateRestartStatus,
 	DaemonUpdateRestartStatusWriter,
+	readDaemonUpdateRestartStatus,
 	waitForActiveDaemonUpdateRestartCoordinator,
 } from "../src/cli/daemon-update-restart.js";
 import {
@@ -158,6 +160,7 @@ const mockState = vi.hoisted(() => ({
 	helloWaitFailures: 0,
 	restoreActionFailures: 0,
 	restoreNextTurnFailures: 0,
+	resumeQueueFailures: 0,
 	socketPath: "",
 	successorProcessStartId: "replacement-start" as string | undefined,
 	successorSocketPath: undefined as string | undefined,
@@ -394,6 +397,10 @@ vi.mock("../src/modes/daemon/daemon-client.js", () => ({
 				mockState.promptFailures--;
 				return { success: false, error: "prompt failed" };
 			}
+			if (request.type === "resume_queue" && mockState.resumeQueueFailures > 0) {
+				mockState.resumeQueueFailures--;
+				return { success: false, error: "queue resume failed" };
+			}
 			return { success: true };
 		}
 
@@ -513,6 +520,7 @@ describe("self-update daemon restart", () => {
 		mockState.requestPayloads = [];
 		mockState.restoreActionFailures = 0;
 		mockState.restoreNextTurnFailures = 0;
+		mockState.resumeQueueFailures = 0;
 		mockState.spawnExitCodes = [];
 		mockState.shutdownResult = true;
 		mkdirSync(agentDir, { recursive: true });
@@ -1024,18 +1032,42 @@ describe("self-update daemon restart", () => {
 			activeStatus.update({
 				phase: "complete",
 				counts: { total: 1, restored: 1, resumed: 0, failed: 0 },
+				resumeFailures: [{ sessionFile: "session.jsonl", message: "prompt rejected" }],
 				message: "active coordinator completed",
 			});
 
 			await expect(loser).resolves.toMatchObject({
 				phase: "complete",
 				counts: { total: 1, restored: 1, resumed: 0, failed: 0 },
+				resumeFailures: [{ sessionFile: "session.jsonl", message: "prompt rejected" }],
 				message: "active coordinator completed",
 			});
 			expect(mockState.calls).not.toContain("probe-daemon");
 		} finally {
 			await activeLease.release();
 		}
+	});
+
+	it("keeps resume failure snapshots independent and validates persisted status", () => {
+		const statusPath = join(agentDir, "resume-status.json");
+		const writer = new DaemonUpdateRestartStatusWriter(statusPath, "resume", mockState.socketPath);
+		const failures = [{ sessionFile: "session.jsonl", message: "prompt rejected" }];
+		writer.update({ resumeFailures: failures });
+		failures[0].message = "changed input";
+		const snapshot = writer.current();
+		if (!snapshot.resumeFailures?.[0]) throw new Error("Missing resume failure");
+		snapshot.resumeFailures[0].message = "changed snapshot";
+		writer.touch();
+		expect(readDaemonUpdateRestartStatus(statusPath)?.resumeFailures).toEqual([
+			{ sessionFile: "session.jsonl", message: "prompt rejected" },
+		]);
+		writer.update({ resumeFailures: [] });
+		expect(readDaemonUpdateRestartStatus(statusPath)?.resumeFailures).toEqual([]);
+		writeFileSync(
+			statusPath,
+			JSON.stringify({ ...writer.current(), resumeFailures: [{ sessionFile: "missing-message" }] }),
+		);
+		expect(readDaemonUpdateRestartStatus(statusPath)).toBeUndefined();
 	});
 
 	it("returns a terminal status written immediately before coordinator exit", async () => {
@@ -1422,6 +1454,129 @@ describe("self-update daemon restart", () => {
 		}
 	});
 
+	it.each([
+		["prompt", false, "prompt: prompt failed"],
+		["prompt", true, "prompt: prompt failed"],
+		["restore_actions", false, "restore_actions: restore failed"],
+		["restore_actions", true, "restore_actions: restore_actions failed"],
+		["resume_queue", false, "resume_queue: queue resume failed"],
+		["resume_queue", true, "resume_queue: resume_queue failed"],
+	] as const)("persists a resume failure for %s (throws=%s)", async (command, throws, message) => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest();
+		const session = mockState.prepareManifest.sessions[0];
+		if (!session) throw new Error("Missing test session");
+		if (command === "prompt") session.queue.actions.actions = [];
+		if (command === "restore_actions") session.hadAcceptedPromptInFlight = false;
+		if (throws) mockState.requestThrowTypes = [command];
+		else if (command === "prompt") mockState.promptFailures = 1;
+		else if (command === "restore_actions") mockState.restoreActionFailures = 1;
+		else mockState.resumeQueueFailures = 1;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			const expected = {
+				phase: "complete",
+				counts: { total: 1, restored: 1, resumed: 0, failed: 0 },
+				resumeFailures: [{ sessionFile: session.sessionFile, message }],
+				message: "Restarted the daemon with 1 session resume failure",
+			};
+			expect(mockState.lastCoordinatorStatus).toMatchObject(expected);
+			const persisted = readDaemonUpdateRestartStatus(join(agentDir, "update-restarts", "test-status.json"));
+			expect(persisted).toMatchObject(expected);
+			if (!persisted) throw new Error("Missing restart status");
+			expect(buildDaemonUpdateRestartReport(persisted).warnings).toContain(
+				`Could not resume ${session.sessionFile}: ${message}`,
+			);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("continues restoring later sessions after a resume rejection", async () => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest();
+		const session = mockState.prepareManifest.sessions[0];
+		if (!session) throw new Error("Missing test session");
+		session.queue.actions.actions = [];
+		mockState.prepareManifest.sessions.push({
+			...session,
+			activeSessionId: "second",
+			sessionId: "second",
+			sessionFile: join(projectDir, "second.jsonl"),
+		});
+		mockState.promptFailures = 1;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			expect(mockState.lastCoordinatorStatus).toMatchObject({
+				counts: { total: 2, restored: 2, resumed: 1, failed: 0 },
+				resumeFailures: [{ sessionFile: session.sessionFile, message: "prompt: prompt failed" }],
+			});
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("retains both continuation and queue rejection reasons", async () => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest();
+		const action = mockState.prepareManifest.sessions[0]?.queue.actions.actions[0];
+		if (!action) throw new Error("Missing test action");
+		action.payload.acceptedBeforeCompletion = false;
+		mockState.promptFailures = 1;
+		mockState.resumeQueueFailures = 1;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			expect(mockState.lastCoordinatorStatus?.resumeFailures).toEqual([
+				{
+					sessionFile: mockState.prepareManifest.sessions[0].sessionFile,
+					message: "prompt: prompt failed; resume_queue: queue resume failed",
+				},
+			]);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it.each([false, true])(
+		"reports missing resumable work only when resume was requested (%s)",
+		async (shouldResume) => {
+			mockState.prepareManifest = createAcceptedRecoveryManifest();
+			const session = mockState.prepareManifest.sessions[0];
+			if (!session) throw new Error("Missing test session");
+			session.queue.actions.actions = [];
+			session.hadAcceptedPromptInFlight = false;
+			session.shouldResume = shouldResume;
+			await performUpdateAndRunCoordinator();
+			expect(mockState.lastCoordinatorStatus?.resumeFailures).toEqual(
+				shouldResume
+					? [{ sessionFile: session.sessionFile, message: "No queued work or interrupted turn to resume" }]
+					: [],
+			);
+		},
+	);
+
+	it("retains resume failures during fallback restoration after a failed shutdown", async () => {
+		mockState.prepareManifest = createAcceptedRecoveryManifest();
+		mockState.shutdownResult = false;
+		mockState.resumeQueueFailures = 1;
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await performUpdateAndRunCoordinator();
+			expect(mockState.lastCoordinatorStatus).toMatchObject({
+				phase: "failed",
+				counts: { total: 1, restored: 1, resumed: 0, failed: 0 },
+				resumeFailures: [
+					{
+						sessionFile: mockState.prepareManifest.sessions[0].sessionFile,
+						message: "resume_queue: queue resume failed",
+					},
+				],
+			});
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
 	it("does not replay a continuation after restoring an accepted turn", async () => {
 		mockState.prepareManifest = createAcceptedRecoveryManifest();
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1774,6 +1929,8 @@ describe("self-update daemon restart", () => {
 			await expect(performUpdateAndRunCoordinator()).resolves.toBeUndefined();
 			expect(mockState.requestPayloads.some((request) => request.type === "restore_actions")).toBe(true);
 			expect(mockState.requestPayloads.some((request) => request.type === "resume_queue")).toBe(true);
+			expect(mockState.lastCoordinatorStatus?.counts).toEqual({ total: 1, restored: 1, resumed: 1, failed: 0 });
+			expect(mockState.lastCoordinatorStatus?.resumeFailures).toEqual([]);
 		} finally {
 			errorSpy.mockRestore();
 			logSpy.mockRestore();
