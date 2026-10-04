@@ -6767,7 +6767,10 @@ export class AgentSession {
 		const listing = provisioner.listState();
 		const stateDetail =
 			listing.stateKeys.length > 0 ? ` state keys: ${listing.stateKeys.join(", ")}.` : " no state keys yet.";
-		const libDetail = listing.libFunctions.length > 0 ? ` agent_lib API: ${listing.libFunctions.join(", ")}.` : "";
+		const libDetail =
+			listing.libFunctions.length > 0
+				? ` agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`
+				: "";
 		const content = [
 			"<rust_state>",
 			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${libDetail}`,
@@ -6807,7 +6810,8 @@ export class AgentSession {
 		lines.push("Your persistent workspace was restored from your previous session.");
 		if (listing.stateKeys.length > 0) lines.push(`state keys: ${listing.stateKeys.join(", ")}.`);
 		if (listing.blobNames.length > 0) lines.push(`state blobs: ${listing.blobNames.join(", ")}.`);
-		if (listing.libFunctions.length > 0) lines.push(`agent_lib API: ${listing.libFunctions.join(", ")}.`);
+		if (listing.libFunctions.length > 0)
+			lines.push(`agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`);
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{

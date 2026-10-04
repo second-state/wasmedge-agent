@@ -18,6 +18,7 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { listLibraryFunctions } from "./library-api.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
 
@@ -189,11 +190,12 @@ function regenerateHelpersModRs(workspaceDir: string, declared: LibFile[]): void
 export interface PersistentStateListing {
 	stateKeys: string[];
 	blobNames: string[];
+	/** Source-discovered public free functions, relative to agent_lib. Not a complete API inventory. */
 	libFunctions: string[];
 }
 
 /** Host-side view of guest-persistent state for compaction/resume notices
- * (DESIGN.md §2.8). Light regex scan; rustdoc JSON is the Phase 2 upgrade. */
+ * (DESIGN.md §2.8). Source scan; rustdoc JSON is the Phase 2 upgrade. */
 export function listPersistentState(workspaceDir: string): PersistentStateListing {
 	const listing: PersistentStateListing = { stateKeys: [], blobNames: [], libFunctions: [] };
 	const statePath = join(workspaceDir, "state", "state.json");
@@ -210,18 +212,7 @@ export function listPersistentState(workspaceDir: string): PersistentStateListin
 			.filter((name) => !name.endsWith(".tmp"))
 			.sort();
 	}
-	const helpersDir = join(workspaceDir, "agent_lib", "src", "helpers");
-	if (existsSync(helpersDir)) {
-		const pubFn = /pub fn ([a-zA-Z0-9_]+)\s*(?:<[^>]*>)?\(/g;
-		for (const name of readdirSync(helpersDir).filter((f) => f.endsWith(".rs"))) {
-			const text = readFileSync(join(helpersDir, name), "utf-8");
-			for (const match of text.matchAll(pubFn)) {
-				const module = name === "mod.rs" ? "helpers" : `helpers::${name.slice(0, -3)}`;
-				listing.libFunctions.push(`${module}::${match[1]}`);
-			}
-		}
-		listing.libFunctions.sort();
-	}
+	listing.libFunctions = listLibraryFunctions(join(workspaceDir, "agent_lib", "src"));
 	return listing;
 }
 
