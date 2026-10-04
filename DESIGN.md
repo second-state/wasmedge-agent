@@ -640,16 +640,18 @@ wasmedge-agent/
 
 指標（全部可從 session JSONL 離線萃取，`bench/analyze.ts`）：
 
-| 指標 | 來源 | Phase 1 放行閾值 |
+| 指標 | 來源 | Phase 1 目標／驗收方式 |
 |---|---|---|
 | 任務成功率 | check.sh | ≥ baseline − 15pp |
-| 每任務 token（in/out 分列） | usage entries | ≤ 2.0 × baseline |
+| 每任務 token（in/out 分列） | usage entries | ≤ 2.0 × baseline（D20 採 output tokens） |
 | 每任務 cell 數與 compile-error cell 佔比 | tool results | 觀測值（無閾值；預期 error 佔比 20–40%） |
-| 每 cell 端到端延遲 p50/p95 | details.durationMs | p50 ≤ 1s |
-| 修錯收斂：compile error 後至成功的平均輪數 | 序列分析 | ≤ 2 |
+| 每 cell 端到端延遲 p50/p95 | details.durationMs | 觀測／調校目標：p50 ≤ 1s |
+| 修錯收斂：compile error 後至成功的平均輪數 | 序列分析 | 觀測／調校目標：≤ 2，另列未收斂錯誤 |
 | 質性：state/agent_lib 使用率、每 cell 重算率 | 人工複盤 trajectory | 報告記錄 |
 
 **Exit 判準（D20 已確認）**（→ Phase 1 GO）：成功率與 token 閾值同時達標於 ≥2 家模型；未達標 → 回修 prompt/prelude 一輪（≤1 週）再測；仍未達 → 升級決策（範圍收窄為 systems-agent 場景或轉選項 C 重新評估）。模型組合依 D21：Claude sonnet 級 + opus/fable 級 + 開源權重一家。
+
+**D20 整體摘要（2026-10-04）**：analyzer 除逐模型判定，另對 F 與每個 B prompt variant 分別輸出整體結果；同一模型的 repetitions 不重複計數，也不混用不同 treatment 的通過模型。該 treatment 或 A 中已記錄的模型都必須有完整、可比較的兩組資料，且跨模型 task IDs、versions、相對比重一致；任一缺漏／不一致即不下整體 verdict。資料完整且至少兩個不同 model IDs 同時通過成功率與 output-token 閾值才是 GO，完整但通過數不足為 NO-GO；模型總數不足兩個仍屬資料不足。這是已記錄選集的閾值摘要，未驗證 D21 的完整模型組合、12 tasks／3 repetitions、model aliases、provider settings 或 toolchain；亦無法找回完全未記錄的模型／runs。Latency 與 recovery 仍為觀測／調校目標，不加入 D20 放行閘。
 
 ---
 

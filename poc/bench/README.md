@@ -129,6 +129,25 @@ treatment pass-rate ≥ A − 15pp and median output tokens ≤ 2.0 × A. A zero
 baseline median permits only a zero treatment median; it does not waive the
 token threshold.
 
+The `D20 overall` summary evaluates each treatment separately: F, B/example,
+and B/noexample never pool passing models. GO requires at least two distinct
+model IDs to each meet **both** thresholds. Repeated runs of one model count
+as one model. Once all comparisons are complete, fewer than two passing
+models yields NO-GO; fewer than two recorded models yields no verdict.
+
+For each treatment, the model set includes every model recorded in A or that
+treatment. Missing counterparts and incomplete evidence withhold the overall
+verdict, even if two other models pass. All models must use the same task
+IDs, versions, and relative task weights; proportional repetition counts
+are allowed. Per-model results and CSV metrics remain available separately.
+
+This summarizes the recorded selection, not the completeness of the full
+D21 experiment: it does not require all 12 tasks, three repetitions, or the
+open-weight model. Model IDs are compared literally; provider aliases and
+model families are not resolved. The summary cannot recover wholly absent
+models/runs or verify provider settings and toolchain versions. Latency and
+recovery remain reported observations, outside the D20 pass/token gate.
+
 The summary lists distinct `tasks` separately from `runs` (registered
 repetitions, including unstarted ones). Before applying the D20 thresholds,
 each treatment condition must have the same task IDs and the same share of runs per task as its
