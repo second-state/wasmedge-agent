@@ -67,6 +67,18 @@ export class CellRunner {
 		const ws = this.opts.workspaceDir;
 		this.checkHarnessMounts();
 		ensureStateDir(ws);
+		try {
+			await this.opts.validateSkills?.(signal, remainingMs());
+		} catch (error) {
+			return this.result(signal.aborted ? interruptedStatus() : "error", {
+				started,
+				compileMs: 0,
+				runMs: 0,
+				libApplied: false,
+				libReverted: false,
+				stderr: truncate(`cell did not run: ${error instanceof Error ? error.message : String(error)}`),
+			});
+		}
 
 		let applied: AppliedLib | undefined;
 		let libApplied = false;

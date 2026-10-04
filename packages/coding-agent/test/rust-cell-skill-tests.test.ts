@@ -157,6 +157,23 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		await expect(testRustSkill(reference, f.options)).rejects.toThrow(/at least one passing/);
 	});
 
+	it("rejects live source edits while the snapshot tests are running", { timeout: 180_000 }, async () => {
+		const f = fixture("pub fn value() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(value(), 42); }");
+		const original = cellProcess.runProcess;
+		const processes = vi.spyOn(cellProcess, "runProcess").mockImplementation(async (bin, args, options) => {
+			const result = await original(bin, args, options);
+			if (bin === toolchain!.wasmedgeBin) {
+				writeFileSync(join(f.cratePath, "src/lib.rs"), "pub fn value() -> u32 { 43 }");
+			}
+			return result;
+		});
+		try {
+			await expect(testRustSkill(reference, f.options)).rejects.toThrow("changed during testing");
+		} finally {
+			processes.mockRestore();
+		}
+	});
+
 	it("bounds hanging tests and propagates cancellation", { timeout: 180_000 }, async () => {
 		const f = fixture("#[test] fn hangs() { loop { std::hint::black_box(1); } }");
 		await expect(testRustSkill(reference, { ...f.options, timeoutMs: 10_000 })).rejects.toThrow(/timed out/);

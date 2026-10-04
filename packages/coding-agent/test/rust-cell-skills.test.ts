@@ -3,7 +3,16 @@
  * mounts real crates and proves cells call them (and that one broken skill
  * cannot brick the workspace). */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readlinkSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -87,6 +96,36 @@ describe("syncRustSkills (unit)", () => {
 		expect(readFileSync(join(workspace, "agent_lib", "src", "skills", "mod.rs"), "utf-8")).not.toContain("alpha");
 		expect(existsSync(join(workspace, "skills", "alpha"))).toBe(false);
 	});
+
+	it("detects source, test, fixture and symlink target edits while ignoring build output", () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-unit-"));
+		tempDirs.push(root);
+		const workspace = writeFakeWorkspace(root);
+		const skill = writeSkillCrate(root, "alpha", "pub fn run() {}\n");
+		syncRustSkills(workspace, [skill]);
+		for (const path of ["src/lib.rs", "src/nested/module.rs", "tests/check.rs", "fixtures/input.json"]) {
+			const file = join(skill.cratePath, path);
+			mkdirSync(join(file, ".."), { recursive: true });
+			writeFileSync(file, "changed");
+			expect(syncRustSkills(workspace, [skill]).changed, path).toBe(true);
+			expect(syncRustSkills(workspace, [skill]).changed).toBe(false);
+			rmSync(file);
+			expect(syncRustSkills(workspace, [skill]).changed).toBe(true);
+		}
+		const target = join(root, "shared.rs");
+		writeFileSync(target, "first");
+		symlinkSync(target, join(skill.cratePath, "src/shared.rs"));
+		syncRustSkills(workspace, [skill]);
+		writeFileSync(target, "second");
+		expect(syncRustSkills(workspace, [skill]).changed).toBe(true);
+		for (const ignored of ["target", ".git"]) {
+			mkdirSync(join(skill.cratePath, ignored));
+			writeFileSync(join(skill.cratePath, ignored, "output"), "ignored");
+		}
+		expect(syncRustSkills(workspace, [skill]).changed).toBe(false);
+		symlinkSync(skill.cratePath, join(skill.cratePath, "src/cycle"));
+		expect(() => syncRustSkills(workspace, [skill])).toThrow("symlink cycle");
+	});
 });
 
 let toolchain: ToolchainInfo | undefined;
@@ -101,6 +140,24 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 	const tempDirs: string[] = [];
 	afterAll(() => {
 		for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("reprobes source-only changes and does not reuse an unprobed mount", { timeout: 300_000 }, () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-source-"));
+		tempDirs.push(root);
+		const workspace = ensureWorkspaceAt(join(root, "workspace"));
+		const skill = writeSkillCrate(root, "editable", "pub fn value() -> u32 { 42 }\n");
+		const options = { cargoBin: toolchain!.cargoBin };
+		expect(syncRustSkills(workspace, [skill], options).mounted).toEqual(["editable"]);
+		writeFileSync(join(skill.cratePath, "src/lib.rs"), "not Rust\n");
+		const broken = syncRustSkills(workspace, [skill], options);
+		expect(broken.mounted).toEqual([]);
+		expect(broken.failed.map((failure) => failure.name)).toEqual(["editable"]);
+		syncRustSkills(workspace, [skill]);
+		expect(syncRustSkills(workspace, [skill], options).mounted).toEqual([]);
+		writeFileSync(join(skill.cratePath, "src/lib.rs"), "pub fn value() -> u32 { 43 }\n");
+		expect(syncRustSkills(workspace, [skill], options).mounted).toEqual(["editable"]);
+		expect(syncRustSkills(workspace, [skill], options).changed).toBe(false);
 	});
 
 	it("compiles a child skill snapshot even after its shared source breaks", { timeout: 300_000 }, async () => {

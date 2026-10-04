@@ -65,6 +65,8 @@ export interface RunnerOptions extends CellResourceLimits {
 	globalHarnessDir?: string;
 	/** Omitted for ephemeral sessions. */
 	history?: WorkspaceHistory;
+	/** Revalidate changed registered skills inside the cell deadline, before edits. */
+	validateSkills?: (signal: AbortSignal, timeoutMs: number) => Promise<void>;
 }
 
 export interface PerCallOptions {

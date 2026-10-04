@@ -18,6 +18,7 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -257,16 +258,8 @@ const SKILLS_MOD_HEADER =
 function skillsFingerprint(skills: RustSkillMount[]): string {
 	const entries = [...skills]
 		.sort((a, b) => a.crateName.localeCompare(b.crateName))
-		.map((skill) => {
-			let manifest = "";
-			try {
-				manifest = readFileSync(skill.cargoTomlPath, "utf-8");
-			} catch {
-				// Missing manifest hashes as empty; the probe build will report it.
-			}
-			return `${skill.crateName}\n${skill.cratePath}\n${manifest}`;
-		});
-	return createHash("sha256").update(entries.join("\n---\n")).digest("hex");
+		.map((skill) => [skill.crateName, skill.cratePath, skillSourceFingerprint(skill.cratePath)]);
+	return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
 /** Cargo requires members to live lexically below the workspace root, so
@@ -360,7 +353,7 @@ export function syncRustSkills(
 	options?: { cargoBin?: string },
 ): SyncRustSkillsResult {
 	const hashPath = join(workspaceDir, SKILLS_HASH_FILE);
-	const fingerprint = skillsFingerprint(skills);
+	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(skills)}`;
 	const previous = existsSync(hashPath) ? readFileSync(hashPath, "utf-8").trim() : undefined;
 	if (previous === fingerprint) {
 		return { mounted: skills.map((skill) => skill.crateName), failed: [], changed: false };
@@ -389,7 +382,7 @@ export function syncRustSkills(
 		}
 	}
 
-	writeFileSync(hashPath, `${skillsFingerprint(active)}\n`);
+	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(active)}\n`);
 	return { mounted: active.map((skill) => skill.crateName), failed, changed: true };
 }
 

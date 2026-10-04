@@ -1,0 +1,102 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import * as skillTests from "../src/core/rust-cell/skill-tests.js";
+import { SkillValidation } from "../src/core/rust-cell/skill-validation.js";
+
+const reference = { type: "rust", use: "agent_lib::skills::example" };
+const tempDirs: string[] = [];
+afterEach(() => {
+	vi.restoreAllMocks();
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function fixture() {
+	const workspaceDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+	tempDirs.push(workspaceDir);
+	const crate = join(workspaceDir, "skills/example");
+	mkdirSync(join(crate, "src"), { recursive: true });
+	writeFileSync(join(crate, "Cargo.toml"), "[package]\nname = 'example'\n");
+	const source = join(crate, "src/lib.rs");
+	writeFileSync(source, "pub fn value() -> u32 { 42 }");
+	const options = { workspaceDir, cargoBin: "cargo", wasmedgeBin: "wasmedge", timeoutMs: 30_000 };
+	return { source, options, gate: new SkillValidation(options) };
+}
+
+describe("skill source revalidation", () => {
+	it("caches successful tests but retests changed sources and dependency context", async () => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).not.toHaveBeenCalled();
+		await f.gate.test(reference);
+		await f.gate.revalidate([reference, reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(1);
+		writeFileSync(f.source, "pub fn value() -> u32 { 43 }");
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(2);
+		writeFileSync(join(f.options.workspaceDir, "Cargo.lock"), "new dependency revision");
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(3);
+		const resumed = new SkillValidation(f.options);
+		await resumed.revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(4);
+	});
+
+	it("does not cache failures, cancellation, or edits made during testing", async () => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.test(reference);
+		writeFileSync(f.source, "changed");
+		tests.mockRejectedValueOnce(new Error("assertion failed"));
+		await expect(f.gate.revalidate([], signal, 30_000)).rejects.toThrow("assertion failed");
+		tests.mockImplementationOnce(async () => {
+			writeFileSync(f.source, "changed during test");
+		});
+		await expect(f.gate.revalidate([], signal, 30_000)).rejects.toThrow("changed during testing");
+		const abort = new AbortController();
+		tests.mockImplementationOnce(async () => {
+			abort.abort(new Error("cancelled"));
+		});
+		await expect(f.gate.revalidate([], abort.signal, 30_000)).rejects.toThrow("cancelled");
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(5);
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(5);
+	});
+
+	it("blocks cells before source edits and reports cancellation within the cell budget", async () => {
+		const f = fixture();
+		mkdirSync(join(f.options.workspaceDir, "cell/src"), { recursive: true });
+		const main = join(f.options.workspaceDir, "cell/src/main.rs");
+		writeFileSync(main, "previous cell");
+		const validateSkills = vi.fn().mockRejectedValue(new Error("skill tests failed"));
+		const runner = new CellRunner({
+			...f.options,
+			cwd: f.options.workspaceDir,
+			cellTimeoutMs: 30_000,
+			validateSkills,
+		});
+		const input = { code: "replacement", lib: [{ path: "src/lib.rs", content: "replacement" }] };
+		const result = await runner.execute(input);
+		expect(result).toMatchObject({ status: "error", compileMs: 0, runMs: 0, libApplied: false });
+		expect(result.stderr).toContain("skill tests failed");
+		expect(readFileSync(main, "utf8")).toBe("previous cell");
+		expect(validateSkills.mock.calls[0][1]).toBeLessThanOrEqual(30_000);
+		const abort = new AbortController();
+		abort.abort();
+		expect(await runner.execute(input, { signal: abort.signal })).toMatchObject({ status: "aborted", runMs: 0 });
+		const timed = new CellRunner({
+			...f.options,
+			cwd: f.options.workspaceDir,
+			cellTimeoutMs: 10,
+			validateSkills: (signal) =>
+				new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })),
+		});
+		expect(await timed.execute(input)).toMatchObject({ status: "timeout", runMs: 0, libApplied: false });
+	});
+});

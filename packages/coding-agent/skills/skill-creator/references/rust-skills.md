@@ -181,9 +181,14 @@ building, and execution; cancellation prevents applying the proposal. Guest
 requests additionally share the calling cell's remaining budget, and closing
 the bridge or ending the cell cancels its in-flight test.
 
-This checks the source snapshot at registration time. Editing the mounted
-source later does not automatically retest it. Ordinary cell/library edits
-and host-side manual harness file edits do not pass through this gate. Guest
+Passing tests are cached by source/dependency fingerprint within the runtime.
+After source, tests, fixtures, or workspace dependency inputs change, previously
+tested or harness-registered mounted skills must pass again before the next cell.
+Reload/resume discards the cache and rechecks registered skills. A failed or
+interrupted check prevents the cell and its source edits; repair the skill with
+host file tools and retry. Ordinary cell/library edits remain compile-only.
+The fingerprint excludes build output and does not lock concurrent host edits
+or cover arbitrary external build inputs. Guest
 harness CRUD requires the host bridge; harness stores are not preopened, and
 writable mount roots must be separate from those stores. Passing tests does
 not establish coverage or task correctness.

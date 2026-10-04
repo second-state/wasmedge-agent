@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
+import { loadHarnessState } from "../refinement/refinement.js";
 import { BridgeServer } from "./bridge-server.js";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { CellRunner } from "./cell-runner.js";
@@ -20,7 +21,7 @@ import {
 	preludeConfigurationHash,
 } from "./prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
-import { testRustSkill } from "./skill-tests.js";
+import { SkillValidation } from "./skill-validation.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
 import {
 	listPersistentState,
@@ -108,6 +109,7 @@ export class RustCellProvisioner {
 	private toolchainInfo: ToolchainInfo | undefined;
 	private workspace: string | undefined;
 	private bridgeServer: BridgeServer | undefined;
+	private skillValidation: SkillValidation | undefined;
 
 	constructor(options: RustCellProvisionerOptions) {
 		validateCellResourceLimits(options);
@@ -133,15 +135,7 @@ export class RustCellProvisioner {
 	async testSkill(reference: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
 		await this.ensure();
-		await testRustSkill(reference, {
-			workspaceDir: this.workspace!,
-			cargoBin: this.toolchainInfo!.cargoBin,
-			wasmedgeBin: this.toolchainInfo!.wasmedgeBin,
-			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
-			cellGasLimit: this.options.cellGasLimit,
-			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
-			signal,
-		});
+		await this.skillValidation!.test(reference, signal);
 	}
 
 	ensure(onProgress?: (message: string) => void): Promise<CellRunner> {
@@ -237,6 +231,14 @@ export class RustCellProvisioner {
 				onDiagnostic: this.options.onDiagnostic,
 			});
 		}
+		this.skillValidation = new SkillValidation({
+			workspaceDir: this.workspace,
+			cargoBin: this.toolchainInfo.cargoBin,
+			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
+			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+			cellGasLimit: this.options.cellGasLimit,
+			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
+		});
 		return new CellRunner({
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,
@@ -250,6 +252,12 @@ export class RustCellProvisioner {
 			harnessDir: this.options.harnessDir,
 			globalHarnessDir: this.options.globalHarnessDir,
 			history,
+			validateSkills: (signal, timeoutMs) => {
+				const references = [this.options.harnessDir, this.options.globalHarnessDir].flatMap((dir) =>
+					dir ? Object.values(loadHarnessState(dir).entries.skill).map((entry) => entry.reference) : [],
+				);
+				return this.skillValidation!.revalidate(references, signal, timeoutMs);
+			},
 		});
 	}
 
