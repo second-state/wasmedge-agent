@@ -353,11 +353,11 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 ```
 <rust_state_restored>
-Your persistent workspace was restored. state keys: {keys}. agent_lib public API: {fns}.
+Your persistent workspace was restored. state keys: {keys}. agent_lib functions (source scan): {fns}.
 </rust_state_restored>
 ```
 
-（`{fns}` 由 host 對 `agent_lib/src` 做輕量掃描：`pub fn` 簽名列表；Phase 2 換 rustdoc JSON。）
+（`{fns}` 由 host 從 `agent_lib/src/lib.rs` 沿公開模組宣告做來源掃描，列出相對於 `agent_lib` 的公開自由函式路徑，包含 async／const／unsafe 函式及巢狀、inline modules。通知標示為 source scan；不是完整 API 內省或編譯驗證。不列出 impl／trait 方法、re-exports、macro 產物，以及帶 cfg／cfg_attr／path 屬性的項目；Phase 2 換 rustdoc JSON。）
 
 ### 2.9 Rich output 與串流
 

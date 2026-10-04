@@ -1008,8 +1008,23 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForType(successor, "ready", 60_000);
 		const successorStartId = getProcessStartId(successor.child.pid!);
 		client.close();
+		const unrelatedPaths = await createPaths();
+		const unrelated = spawnSupervisor(unrelatedPaths);
+		await waitForType(unrelated, "booted");
+		unrelated.child.send({ type: "go" });
+		await waitForType(unrelated, "ready", 60_000);
+		const unrelatedStartId = getProcessStartId(unrelated.child.pid!);
+		// Simulate the host's Linux-first discovery on every platform, with only
+		// our canary in its output so a regression cannot reach real user daemons.
+		const hostBin = join(paths.agentDir, "host-bin");
+		mkdirSync(hostBin);
+		writeFileSync(join(hostBin, "ss"), "#!/bin/sh\nprintf '%s\\n' \"$ENG_4603_HOST_SS_LISTENER\"\n", {
+			mode: 0o700,
+		});
 		const systemLsofPath = spawnSync("which", ["lsof"], { encoding: "utf8" }).stdout.trim();
 		if (!systemLsofPath) throw new Error("Could not locate lsof for the shutdown regression");
+		// Force the PID-scoped lsof fallback; host ss would discover other suites' daemons.
+		writeFileSync(join(paths.agentDir, "ss"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
 		const lsofPath = join(paths.agentDir, "lsof");
 		writeFileSync(lsofPath, '#!/bin/sh\nexec "$ENG_4603_SYSTEM_LSOF" -nP -F pn -U -a -p "$ENG_4603_LSOF_PIDS"\n', {
 			mode: 0o700,
@@ -1022,7 +1037,8 @@ describe("ENG-4603 worker recovery convergence", () => {
 		const lsofEnvironment = {
 			ENG_4603_LSOF_PIDS: `${predecessor.child.pid},${successor.child.pid},${workerPid}`,
 			ENG_4603_SYSTEM_LSOF: systemLsofPath,
-			PATH: `${paths.agentDir}:${process.env.PATH ?? ""}`,
+			ENG_4603_HOST_SS_LISTENER: `u_str LISTEN 0 128 ${unrelatedPaths.socketPath} 1 * 0 users:(("${APP_NAME}",pid=${unrelated.child.pid},fd=1))`,
+			PATH: `${paths.agentDir}:${hostBin}:${process.env.PATH ?? ""}`,
 			WASMEDGE_AGENT_TEMPLATE_DIR: fakeTemplateDir,
 		};
 		const listenersBeforeShutdown = spawnSync(lsofPath, [], {
@@ -1033,6 +1049,7 @@ describe("ENG-4603 worker recovery convergence", () => {
 		expect(listenersBeforeShutdown).toContain(`p${successor.child.pid}`);
 
 		const shutdown = await runCli(paths, ["shutdown", "--force", "--json"], 60_000, lsofEnvironment);
+		expect(exactProcessIsAlive(unrelated.child.pid!, unrelatedStartId), shutdown.stdout).toBe(true);
 		expect(shutdown.code).toBe(0);
 		const shutdownResult = JSON.parse(shutdown.stdout) as { stopped: unknown[]; failed: unknown[] };
 		const survivingIdentities = [
@@ -1084,5 +1101,12 @@ describe("ENG-4603 worker recovery convergence", () => {
 		expect(doctorHuman.code).toBe(0);
 		expect(doctorHuman.stdout).toContain("Runtime:");
 		expect(doctorHuman.stdout.endsWith("Background services:\nNo background services found.\n")).toBe(true);
+		expect(exactProcessIsAlive(unrelated.child.pid!, unrelatedStartId)).toBe(true);
+		const unrelatedClient = await connectEventually(unrelatedPaths.socketPath);
+		try {
+			expect((await unrelatedClient.request({ type: "list" }, 5000)).success).toBe(true);
+		} finally {
+			unrelatedClient.close();
+		}
 	}, 150_000);
 });
