@@ -310,8 +310,16 @@ function taskVersions(metrics: RunMetrics[]): Map<string, string> | null {
 }
 
 const byCondition = new Map<string, RunMetrics[]>();
+function conditionFor(metrics: RunMetrics): string {
+	return `${metrics.group}${metrics.group === "B" ? `/${metrics.variant}` : ""}`;
+}
+
+function isTreatment(condition: string): boolean {
+	return condition === "F" || condition.startsWith("B/");
+}
+
 for (const m of runs) {
-	const key = `${m.model} | ${m.group}${m.group === "B" ? `/${m.variant}` : ""}`;
+	const key = `${m.model} | ${conditionFor(m)}`;
 	byCondition.set(key, [...(byCondition.get(key) ?? []), m]);
 }
 const aggs = new Map<string, Agg>();
@@ -390,53 +398,99 @@ for (const [key, a] of [...aggs.entries()].sort()) {
 	);
 }
 
+function sameTaskCoverage(a: Agg, b: Agg): boolean {
+	// Compare relative task weights so D17 prompt splits can use fewer repetitions.
+	return (
+		a.taskCounts !== null && b.taskCounts !== null &&
+		a.taskCounts.size === b.taskCounts.size &&
+		[...a.taskCounts].every(([task, count]) => count * b.runs === (b.taskCounts?.get(task) ?? 0) * a.runs)
+	);
+}
+
+function sameTaskVersions(a: Agg, b: Agg): boolean {
+	return (
+		a.taskVersions !== null && b.taskVersions !== null &&
+		a.taskVersions.size === b.taskVersions.size &&
+		[...a.taskVersions].every(([task, hash]) => b.taskVersions?.get(task) === hash)
+	);
+}
+
+interface GateResult {
+	verdict: "GO" | "NO-GO" | null;
+	message: string;
+}
+
+function noVerdict(reason: string): GateResult {
+	return { verdict: null, message: `${reason} — no verdict` };
+}
+
+function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
+	if (!a) return noVerdict("baseline incomplete");
+	if (!b) return noVerdict("treatment incomplete");
+	if (a.driverIncompleteRuns || b.driverIncompleteRuns) return noVerdict("driver runs incomplete");
+	if (!a.taskCounts || !b.taskCounts) return noVerdict("task IDs incomplete");
+	if (!sameTaskCoverage(a, b)) return noVerdict("task coverage differs");
+	if (!a.taskVersions || !b.taskVersions) return noVerdict("task versions incomplete or inconsistent");
+	if (!sameTaskVersions(a, b)) return noVerdict("task versions differ");
+	if (a.passRate === null || b.passRate === null) return noVerdict("checks incomplete");
+	if (a.tokensOutMedian === null || b.tokensOutMedian === null) return noVerdict("output usage incomplete");
+	const passOk = b.passRate >= a.passRate - 0.15;
+	const tokOk = b.tokensOutMedian <= 2.0 * a.tokensOutMedian;
+	const verdict = passOk && tokOk ? "GO" : "NO-GO";
+	return {
+		verdict,
+		message: `pass ${Math.round(b.passRate * 100)}% vs A ${Math.round(a.passRate * 100)}% ${passOk ? "OK" : "MISS"}; tokensOut ${b.tokensOutMedian} vs A ${a.tokensOutMedian} ${tokOk ? "OK" : "MISS"} → ${verdict}`,
+	};
+}
+
 // D20 gate: compare each B/F condition against the same-model A condition.
 console.log("\nD20 gate (per model): pass ≥ A−15pp, median output tokens ≤ 2.0×A");
 for (const [key, b] of aggs) {
 	const [model, condition] = key.split(" | ");
-	if (condition !== "F" && !condition.startsWith("B/")) continue;
-	const a = aggs.get(`${model} | A`);
-	if (!a) {
-		console.log(`  ${key}: baseline incomplete — no verdict`);
+	if (!isTreatment(condition)) continue;
+	console.log(`  ${key}: ${d20Gate(aggs.get(`${model} | A`), b).message}`);
+}
+
+console.log("\nD20 overall (per treatment): at least 2 distinct model IDs must meet both thresholds");
+console.log("All recorded models need complete comparisons on the same task versions and relative task weights.");
+const treatments = [...new Set(runs.map(conditionFor).filter(isTreatment))].sort();
+if (treatments.length === 0) console.log("  no treatment conditions — no verdict");
+for (const condition of treatments) {
+	if (!["F", "B/example", "B/noexample"].includes(condition)) {
+		console.log(`  ${condition}: treatment variant incomplete or invalid — no verdict`);
 		continue;
 	}
-	if (a.driverIncompleteRuns || b.driverIncompleteRuns) {
-		console.log(`  ${key}: driver runs incomplete — no verdict`);
+	// Include baseline-only models so absent treatment records cannot disappear
+	// from the overall decision. B variants and F never pool their passing models.
+	const records = runs.filter((run) => run.group === "A" || conditionFor(run) === condition);
+	if (records.some(({ model }) =>
+		typeof model !== "string" || !model.trim() || model !== model.trim() || model.includes(" | "),
+	)) {
+		console.log(`  ${condition}: model IDs incomplete or invalid — no verdict`);
 		continue;
 	}
-	const baselineTasks = a.taskCounts;
-	const treatmentTasks = b.taskCounts;
-	if (!baselineTasks || !treatmentTasks) {
-		console.log(`  ${key}: task IDs incomplete — no verdict`);
-		continue;
+	const models = [...new Set(records.map((run) => run.model))].sort();
+	const comparisons = models.map((model) => ({
+		model,
+		baseline: aggs.get(`${model} | A`),
+		result: d20Gate(aggs.get(`${model} | A`), aggs.get(`${model} | ${condition}`)),
+	}));
+	const passing = comparisons.filter(({ result }) => result.verdict === "GO").length;
+	const incomplete = comparisons.filter(({ result }) => result.verdict === null);
+	const counts = `${passing}/${models.length} models meet both thresholds`;
+	if (incomplete.length > 0) {
+		console.log(`  ${condition}: ${counts}; ${incomplete.length} incomplete — no verdict`);
+		for (const { model, result } of incomplete) console.log(`    ${model}: ${result.message}`);
+	} else if (models.length < 2) {
+		console.log(`  ${condition}: ${counts}; at least 2 models required — no verdict`);
+	} else {
+		const first = comparisons[0].baseline!;
+		if (comparisons.some(({ baseline }) => !sameTaskCoverage(first, baseline!))) {
+			console.log(`  ${condition}: ${counts}; task coverage differs across models — no verdict`);
+		} else if (comparisons.some(({ baseline }) => !sameTaskVersions(first, baseline!))) {
+			console.log(`  ${condition}: ${counts}; task versions differ across models — no verdict`);
+		} else {
+			console.log(`  ${condition}: ${counts} → ${passing >= 2 ? "GO" : "NO-GO"}`);
+		}
 	}
-	// Compare relative task weights so D17 prompt splits can use fewer repetitions.
-	if (
-		baselineTasks.size !== treatmentTasks.size ||
-		[...baselineTasks].some(([task, count]) => count * b.runs !== (treatmentTasks.get(task) ?? 0) * a.runs)
-	) {
-		console.log(`  ${key}: task coverage differs — no verdict`);
-		continue;
-	}
-	if (!a.taskVersions || !b.taskVersions) {
-		console.log(`  ${key}: task versions incomplete or inconsistent — no verdict`);
-		continue;
-	}
-	if ([...a.taskVersions].some(([task, hash]) => b.taskVersions?.get(task) !== hash)) {
-		console.log(`  ${key}: task versions differ — no verdict`);
-		continue;
-	}
-	if (a.passRate === null || b.passRate === null) {
-		console.log(`  ${key}: checks incomplete — no verdict`);
-		continue;
-	}
-	if (a.tokensOutMedian === null || b.tokensOutMedian === null) {
-		console.log(`  ${key}: output usage incomplete — no verdict`);
-		continue;
-	}
-	const passOk = b.passRate >= a.passRate - 0.15;
-	const tokOk = b.tokensOutMedian <= 2.0 * a.tokensOutMedian;
-	console.log(
-		`  ${key}: pass ${Math.round(b.passRate * 100)}% vs A ${Math.round(a.passRate * 100)}% ${passOk ? "OK" : "MISS"}; tokensOut ${b.tokensOutMedian} vs A ${a.tokensOutMedian} ${tokOk ? "OK" : "MISS"} → ${passOk && tokOk ? "GO" : "NO-GO"}`,
-	);
 }

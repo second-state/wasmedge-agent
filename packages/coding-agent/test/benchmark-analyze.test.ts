@@ -139,6 +139,166 @@ function summary(stdout: string, condition: string) {
 	};
 }
 
+function overall(stdout: string) {
+	const section = stdout.split("\nD20 overall (per treatment):")[1];
+	expect(section, "missing overall D20 summary").toBeDefined();
+	return section!;
+}
+
+describe("overall D20 gate", () => {
+	it.each(["B", "F"])("requires two distinct models, not repeated runs of %s", (group) => {
+		const f = fixture();
+		for (let rep = 0; rep < 3; rep++) {
+			f.add({ tokensOut: 100 });
+			f.add({ group, tokensOut: 100 });
+		}
+		expect(overall(f.run().stdout)).toContain(
+			"1/1 models meet both thresholds; at least 2 models required — no verdict",
+		);
+	});
+
+	it.each(["B", "F"])("reports GO for two complete passing models in %s", (group) => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			f.add({ model, tokensOut: 100 });
+			f.add({ model, group, tokensOut: 200 });
+		}
+		expect(overall(f.run().stdout)).toContain(
+			`${group}${group === "B" ? "/example" : ""}: 2/2 models meet both thresholds → GO`,
+		);
+	});
+
+	it.each([0, 1, 2, 3])("counts models meeting both thresholds together: %s of 3", (passing) => {
+		const f = fixture();
+		for (let index = 0; index < 3; index++) {
+			const model = `model-${index}`;
+			f.add({ model, tokensOut: 100 });
+			f.add({ model, group: "F", tokensOut: index < passing ? 100 : 201 });
+		}
+		expect(overall(f.run().stdout)).toContain(
+			`F: ${passing}/3 models meet both thresholds → ${passing >= 2 ? "GO" : "NO-GO"}`,
+		);
+	});
+
+	it("does not combine a pass-rate-only model with a token-only model", () => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			f.add({ model, tokensOut: 100 });
+			f.add({ model, group: "F", tokensOut: model === "model-a" ? 201 : 100, pass: model === "model-a" });
+		}
+		expect(overall(f.run().stdout)).toContain("F: 0/2 models meet both thresholds → NO-GO");
+	});
+
+	it("keeps F and both B variants separate even when each has a different passing model", () => {
+		const f = fixture();
+		for (const [index, model] of ["model-a", "model-b", "model-c"].entries()) {
+			f.add({ model, tokensOut: 100 });
+			for (const [condition, [group, variant]] of [
+				["F", ""],
+				["B", "example"],
+				["B", "noexample"],
+			].entries()) {
+				f.add({ model, group, variant, tokensOut: index === condition ? 100 : 201 });
+			}
+		}
+		const output = overall(f.run().stdout);
+		for (const condition of ["F", "B/example", "B/noexample"]) {
+			expect(output).toContain(`${condition}: 1/3 models meet both thresholds → NO-GO`);
+		}
+		expect(output).not.toContain("→ GO");
+	});
+
+	it.each(["baseline", "treatment", "planned", "session", "usage", "check", "version"])(
+		"withholds the overall verdict when a third model has incomplete %s evidence",
+		(problem) => {
+			const f = fixture();
+			for (const model of ["model-a", "model-b"]) {
+				f.add({ model, tokensOut: 100 });
+				f.add({ model, group: "F", tokensOut: 100 });
+			}
+			if (problem !== "baseline") f.add({ model: "model-c", tokensOut: 100 });
+			if (problem !== "treatment") {
+				const { sessionFile, metaPath } = f.add({ model: "model-c", group: "F", tokensOut: 100 });
+				const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+				if (problem === "planned") meta.driverStatus = "planned";
+				if (problem === "check") delete meta.checkPass;
+				if (problem === "version") delete meta.taskHash;
+				writeFileSync(metaPath, JSON.stringify(meta));
+				if (problem === "session") rmSync(sessionFile);
+				if (problem === "usage") writeMessages(sessionFile, [{ role: "assistant" }]);
+			}
+			const output = overall(f.run().stdout);
+			expect(output).toContain("F: 2/3 models meet both thresholds; 1 incomplete — no verdict");
+			expect(output).toContain("model-c:");
+			expect(output).not.toMatch(/→ (GO|NO-GO)/);
+		},
+	);
+
+	it.each(["coverage", "weight", "version"])("requires matching task %s across models", (difference) => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			for (const group of ["A", "F"]) {
+				f.add({ model, group, task: "logs", tokensOut: 100 });
+				f.add({
+					model,
+					group,
+					task: difference === "coverage" && model === "model-b" ? "other" : "rename",
+					taskHash: `sha256:${(difference === "version" && model === "model-b" ? "b" : "a").repeat(64)}`,
+					tokensOut: 100,
+				});
+				if (difference === "weight" && model === "model-b") f.add({ model, group, task: "logs", tokensOut: 100 });
+			}
+		}
+		expect(overall(f.run().stdout)).toContain(
+			`F: 2/2 models meet both thresholds; task ${difference === "version" ? "versions differ" : "coverage differs"} across models — no verdict`,
+		);
+	});
+
+	it("allows proportional repetition counts across models and conditions", () => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			for (const group of ["A", "F"]) {
+				const reps = (model === "model-a" ? 2 : 1) * (group === "A" ? 3 : 1);
+				for (let rep = 0; rep < reps; rep++) {
+					for (const task of ["logs", "rename"]) f.add({ model, group, task, tokensOut: 100 });
+				}
+			}
+		}
+		expect(overall(f.run().stdout)).toContain("F: 2/2 models meet both thresholds → GO");
+	});
+
+	it.each([undefined, null, 42, "", " ", " model-a", "model | alias"])(
+		"rejects invalid model identity %s",
+		(model) => {
+			const f = fixture();
+			for (const group of ["A", "F"]) {
+				f.add({ model: "model-a", group, tokensOut: 100 });
+				const { metaPath } = f.add({ group, tokensOut: 100 });
+				const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+				writeFileSync(metaPath, JSON.stringify({ ...meta, model }));
+			}
+			expect(overall(f.run().stdout)).toContain("F: model IDs incomplete or invalid — no verdict");
+		},
+	);
+
+	it.each([false, true])("reports no verdict without treatments (baseline present: %s)", (baseline) => {
+		const f = fixture();
+		if (baseline) f.add({ tokensOut: 100 });
+		expect(overall(f.run().stdout)).toContain("no treatment conditions — no verdict");
+	});
+
+	it.each([undefined, null, "", "unknown"])("withholds an overall B verdict for variant %s", (variant) => {
+		const f = fixture();
+		for (const model of ["model-a", "model-b"]) {
+			f.add({ model, tokensOut: 100 });
+			const { metaPath } = f.add({ model, group: "B", tokensOut: 100 });
+			const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+			writeFileSync(metaPath, JSON.stringify({ ...meta, variant }));
+		}
+		expect(overall(f.run().stdout)).toContain("treatment variant incomplete or invalid — no verdict");
+	});
+});
+
 describe("offline benchmark analyzer", () => {
 	it.each(["B", "F"])("withholds the %s verdict for different task versions", (group) => {
 		const f = fixture();
@@ -742,5 +902,6 @@ describe("offline benchmark analyzer", () => {
 		expect(stdout).toContain(
 			"  gateway/anthropic/claude-sonnet-4-6 | F: task versions incomplete or inconsistent — no verdict",
 		);
+		expect(overall(stdout)).toContain("F: 0/2 models meet both thresholds; 2 incomplete — no verdict");
 	});
 });
