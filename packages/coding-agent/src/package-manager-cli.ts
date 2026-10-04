@@ -28,6 +28,7 @@ import {
 	launchDaemonUpdateRestartCoordinator,
 	waitForActiveDaemonUpdateRestartCoordinator,
 } from "./cli/daemon-update-restart.js";
+import { requestUpdateRestore } from "./cli/daemon-update-restore.js";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -1033,7 +1034,8 @@ async function restoreNextTurnMessages(
 	if (messages.length === 0) {
 		return true;
 	}
-	const response = await client.request(
+	const response = await requestUpdateRestore(
+		client,
 		{ type: "restore_next_turn", activeSessionId, messages: [...messages] },
 		30000,
 	);
@@ -1102,7 +1104,8 @@ async function restoreDaemonUpdateRestartSession(
 	restoredActiveSessionIds.set(session.activeSessionId, activeSessionId);
 	if (session.activeSessionId === restartOriginActiveSessionId) {
 		try {
-			const noticeResponse = await client.request(
+			const noticeResponse = await requestUpdateRestore(
+				client,
 				{
 					type: "append_custom_message",
 					activeSessionId,
@@ -1146,7 +1149,8 @@ async function restoreDaemonUpdateRestartSession(
 	let operation = "restore_actions";
 	try {
 		if (session.queue.actions.actions.length > 0) {
-			const response = await client.request(
+			const response = await requestUpdateRestore(
+				client,
 				{ type: "restore_actions", activeSessionId, snapshot: session.queue.actions },
 				30000,
 			);
@@ -1169,7 +1173,8 @@ async function restoreDaemonUpdateRestartSession(
 			);
 		if (needsContinuationPrompt && !restoredAcceptedTurn) {
 			operation = "prompt";
-			const promptResponse = await client.request(
+			const promptResponse = await requestUpdateRestore(
+				client,
 				{
 					type: "prompt",
 					activeSessionId,
@@ -1187,7 +1192,7 @@ async function restoreDaemonUpdateRestartSession(
 		}
 		if (!resumedSession && restoredQueuedWork) {
 			operation = "resume_queue";
-			const response = await client.request({ type: "resume_queue", activeSessionId }, 30000);
+			const response = await requestUpdateRestore(client, { type: "resume_queue", activeSessionId }, 30000);
 			if (response.success) {
 				resumedSession = true;
 			} else {

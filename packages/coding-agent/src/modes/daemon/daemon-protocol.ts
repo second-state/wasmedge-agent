@@ -764,6 +764,8 @@ export type DaemonResponse =
 	  };
 
 export type DaemonErrorInfo =
+	// The supervisor has not dispatched the command to the unavailable target worker.
+	| { code: "worker_unavailable" }
 	| { code: "missing_session_cwd"; issue: SessionCwdIssue }
 	| { code: "session_import_file_not_found"; filePath: string }
 	| { code: "session_already_active"; sessionPath: string; activeSessionId?: string }

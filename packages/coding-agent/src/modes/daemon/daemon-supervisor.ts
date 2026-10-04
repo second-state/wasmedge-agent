@@ -3289,7 +3289,17 @@ export class DaemonSupervisor {
 		timeoutMs = WORKER_REQUEST_TIMEOUT_MS,
 	): Promise<DaemonResponse> {
 		if (!worker.client || worker.descriptor.lifecycle !== "ready") {
-			throw new Error(`Session worker is ${worker.descriptor.lifecycle}`);
+			const state = worker.descriptor.lifecycle === "ready" ? "disconnected" : worker.descriptor.lifecycle;
+			const error = new Error(`Session worker is ${state}`);
+			if (
+				worker.descriptor.lifecycle !== "failed" &&
+				!this.shuttingDown &&
+				!worker.intentionalStop &&
+				worker.descriptor.stopRequestedAt === undefined
+			) {
+				return failure(command.id, command.type, error, { code: "worker_unavailable" });
+			}
+			throw error;
 		}
 		const response = await worker.client.request(withoutCommandId(command), timeoutMs);
 		if (command.type === "get_state" && response.success && isSessionSummary(response.data)) {
