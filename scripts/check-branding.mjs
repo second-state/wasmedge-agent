@@ -576,8 +576,8 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "packages/coding-agent/test/benchmark-run.test.ts",
-		allow: [/"prime-agent\.daemon"/, /\["prime-agent", "wasmedge-agent"\]/],
-		reason: "the benchmark fixture sends the preserved protocol wire value and checks that upstream's shared socket directory is untouched (rule R1); only the wire literal and the endpoint-name pair are exempt",
+		allow: [/"prime-agent\.daemon"/, /\["prime-agent", "wasmedge-agent"\]/, /"\.prime\/agent\/models\.json"/],
+		reason: "the benchmark fixture sends the preserved protocol wire value, checks that upstream's shared socket directory is untouched, and tests the seed config fallback to upstream's models.json (rule R1); only these exact literals are exempt",
 	},
 	{
 		glob: "packages/coding-agent/src/core/messages.ts",
