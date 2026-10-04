@@ -65,6 +65,8 @@ if (process.argv.includes("daemon")) {
   if (mode === "observe-plan") {
     const runs = join(agentDir, "../..");
     writeFileSync(${JSON.stringify(join(root, "plan-at-start.json"))}, JSON.stringify(readdirSync(runs).map((id) => JSON.parse(readFileSync(join(runs, id, "meta.json"), "utf-8")))));
+    const plans = join(runs, "../plans");
+    writeFileSync(${JSON.stringify(join(root, "manifest-at-start.json"))}, readFileSync(join(plans, readdirSync(plans)[0])));
   }
   if (mode === "daemon-fail") process.exit(2);
   const ready = mode === "slow-ready" ? new Promise((resolve) => setTimeout(() => { record("ready"); resolve(); }, 2_200)) : Promise.resolve();
@@ -161,6 +163,7 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	return {
 		fake,
 		temp,
+		plansDir: join(bench, "results/plans"),
 		configPath: join(home, ".wasmedge-agent/models.json"),
 		legacyConfigPath: join(home, ".prime/agent/models.json"),
 		taskDir: task,
@@ -172,6 +175,9 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 		},
 		planAtStart() {
 			return JSON.parse(readFileSync(join(root, "plan-at-start.json"), "utf-8"));
+		},
+		manifestAtStart() {
+			return JSON.parse(readFileSync(join(root, "manifest-at-start.json"), "utf-8"));
 		},
 		hasEvents() {
 			return existsSync(join(root, "daemon-events.jsonl"));
@@ -226,7 +232,31 @@ describe("offline benchmark driver", () => {
 		expect(f.run(1, "F").status).toBe(0);
 		expect(new Set(f.metas().map((meta) => meta.taskHash)).size).toBe(1);
 		expect(new Set(f.metas().map((meta) => meta.providerConfigHash)).size).toBe(1);
+		expect(new Set(f.metas().map((meta) => meta.planId)).size).toBe(2);
+		expect(readdirSync(f.plansDir)).toHaveLength(2);
 		expect(f.analyze().stdout).toContain("fixture-model | F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+	});
+	it("detects missing model records using the driver's saved inventory", () => {
+		const f = fixture();
+		const result = f.run(1, "A,F", ["--models", "model-a,model-b,model-c"]);
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		expect(f.analyze().stdout).toContain("F: 3/3 models meet both thresholds → GO");
+		for (const meta of f.metas().filter((meta) => meta.model === "model-c")) {
+			rmSync(meta.runDir, { recursive: true });
+		}
+		const { stdout, csv } = f.analyze();
+		expect(stdout).toContain("Run inventory: 4/6 planned records match");
+		expect(stdout).toContain("F: run inventory incomplete or inconsistent — no verdict");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+		expect(csv.split("\n")).toHaveLength(5);
+	});
+	it("does not launch an agent when the inventory cannot be saved", () => {
+		const f = fixture();
+		mkdirSync(dirname(f.plansDir), { recursive: true });
+		writeFileSync(f.plansDir, "not a directory");
+		expect(f.run().status).toBe(1);
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "planned", startedAt: null });
 	});
 	it("uses the same planned provider config after the seed changes during a run", () => {
 		const f = fixture({ mode: "edit-provider-source", turns: ["first", "second"] });
@@ -437,7 +467,16 @@ describe("offline benchmark driver", () => {
 		const result = f.run(3, "A,B,F", ["--models", "provider-one/shared,provider-two/shared", "--variant", "split"]);
 		expect(result.signal).toBe("SIGKILL");
 		const before = f.planAtStart();
+		const manifest = f.manifestAtStart();
 		const metas = f.metas();
+		expect(manifest).toMatchObject({ version: 1, planId: metas[0].planId });
+		expect(Number.isFinite(Date.parse(manifest.plannedAt))).toBe(true);
+		expect(manifest.runs).toHaveLength(36);
+		expect(new Set(metas.map((meta) => meta.planId)).size).toBe(1);
+		for (const slot of manifest.runs) {
+			expect(before.find((meta: { runId: string }) => meta.runId === slot.runId)).toMatchObject(slot);
+		}
+		expect(readdirSync(f.plansDir)).toEqual([`${manifest.planId}.json`]);
 		expect(before).toHaveLength(36);
 		expect(metas).toHaveLength(36);
 		expect(new Set(metas.map((meta) => meta.runId)).size).toBe(36);
@@ -496,6 +535,7 @@ describe("offline benchmark driver", () => {
 		expect(f.hasEvents()).toBe(false);
 		expect(f.metas()).toHaveLength(1);
 		expect(f.metas()[0]).toMatchObject({ driverStatus: "planned", startedAt: null, checkPass: null });
+		expect(f.analyze().stdout).toContain("missing or invalid plan for run");
 	});
 	it.each([
 		["--reps", "0"],

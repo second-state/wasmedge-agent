@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
+const PLANS_DIR = join(HERE, "results", "plans");
 
 type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
 type DriverStatus = "legacy" | "planned" | "running" | "completed" | "error" | "invalid";
@@ -24,6 +25,7 @@ interface CompileRecovery {
 
 interface RunMetrics {
 	runId: string;
+	planId: string | null;
 	task: string;
 	taskHash: string | null;
 	providerConfigHash: string | null;
@@ -197,15 +199,26 @@ function findMetaFiles(dir: string, depth = 0): string[] {
 	return out;
 }
 
+const inventoryIssues: string[] = [];
+const inventoryRecords: { path: string; meta: Record<string, unknown> }[] = [];
 const runs: RunMetrics[] = [];
-if (!existsSync(RUNS_DIR)) {
+if (!existsSync(RUNS_DIR) && !existsSync(PLANS_DIR)) {
 	console.error(`no runs at ${RUNS_DIR}`);
 	process.exit(1);
 }
-for (const metaPath of findMetaFiles(RUNS_DIR)) {
-	const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+for (const metaPath of existsSync(RUNS_DIR) ? findMetaFiles(RUNS_DIR) : []) {
+	let meta;
+	try {
+		meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+		if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("invalid metadata");
+	} catch {
+		inventoryIssues.push(`unreadable or invalid run record: ${metaPath}`);
+		continue;
+	}
+	inventoryRecords.push({ path: metaPath, meta });
 	const m: RunMetrics = {
 		runId: meta.runId,
+		planId: typeof meta.planId === "string" ? meta.planId : null,
 		task: meta.task,
 		taskHash: typeof meta.taskHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.taskHash) ? meta.taskHash : null,
 		providerConfigHash: typeof meta.providerConfigHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.providerConfigHash) ? meta.providerConfigHash : null,
@@ -238,13 +251,79 @@ for (const metaPath of findMetaFiles(RUNS_DIR)) {
 	runs.push(m);
 }
 
+// Plans are locally recorded inventories, not tamper-proof attestations.
+const slotFields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"] as const;
+const expectedRuns = new Map<string, { planId: string; slot: Record<string, unknown> }>();
+const planIds = new Set<string>();
+function validSlot(slot: unknown): slot is Record<string, unknown> {
+	return isRecord(slot) &&
+		["runId", "task", "model", "variant"].every((key) => typeof slot[key] === "string" && slot[key].trim().length > 0) &&
+		["taskHash", "providerConfigHash"].every((key) => typeof slot[key] === "string" && /^sha256:[a-f0-9]{64}$/.test(slot[key])) &&
+		typeof slot.group === "string" && ["A", "B", "F"].includes(slot.group) &&
+		typeof slot.rep === "number" && Number.isSafeInteger(slot.rep) && slot.rep > 0;
+}
+for (const name of existsSync(PLANS_DIR) ? readdirSync(PLANS_DIR).sort() : []) {
+	if (!name.endsWith(".json")) continue;
+	let plan: unknown;
+	try {
+		plan = JSON.parse(readFileSync(join(PLANS_DIR, name), "utf-8"));
+	} catch {
+		inventoryIssues.push(`unreadable or invalid plan: ${name}`);
+		continue;
+	}
+	if (!isRecord(plan) || plan.version !== 1 || typeof plan.planId !== "string" || !plan.planId ||
+		name !== `${plan.planId}.json` || !Array.isArray(plan.runs) || !plan.runs.length || !plan.runs.every(validSlot)) {
+		inventoryIssues.push(`invalid plan: ${name}`);
+		continue;
+	}
+	planIds.add(plan.planId);
+	const slots = new Set<string>();
+	for (const slot of plan.runs) {
+		const runId = String(slot.runId);
+		const key = JSON.stringify([slot.task, slot.model, slot.group, slot.variant, slot.rep]);
+		if (slots.has(key)) inventoryIssues.push(`duplicate planned slot: ${name} / ${runId}`);
+		slots.add(key);
+		if (expectedRuns.has(runId)) inventoryIssues.push(`duplicate planned run ID: ${runId}`);
+		else expectedRuns.set(runId, { planId: plan.planId, slot });
+	}
+}
+const recordsById = new Map<unknown, typeof inventoryRecords>();
+for (const record of inventoryRecords) {
+	const { runId, planId } = record.meta;
+	recordsById.set(runId, [...(recordsById.get(runId) ?? []), record]);
+	if (planId !== undefined && (typeof planId !== "string" || !planIds.has(planId))) {
+		inventoryIssues.push(`missing or invalid plan for run: ${record.path}`);
+	} else if (planId !== undefined && !expectedRuns.has(String(runId))) {
+		inventoryIssues.push(`unplanned run record: ${record.path}`);
+	}
+}
+for (const [runId, records] of recordsById) {
+	if (records.length > 1) inventoryIssues.push(`duplicate run record: ${String(runId)}`);
+}
+let matchedRuns = 0;
+for (const [runId, { planId, slot }] of expectedRuns) {
+	const records = recordsById.get(runId) ?? [];
+	if (!records.length) inventoryIssues.push(`missing run record: ${planId} / ${runId}`);
+	else if (records.length === 1) {
+		const meta = records[0].meta;
+		if (meta.planId !== planId || slotFields.some((key) => meta[key] !== slot[key])) {
+			inventoryIssues.push(`run record differs from plan: ${planId} / ${runId}`);
+		} else matchedRuns += 1;
+	}
+}
+console.log(`Run inventory: ${matchedRuns}/${expectedRuns.size} planned records match; ${inventoryRecords.filter(({ meta }) => meta.planId === undefined).length} legacy records without a plan.`);
+if (inventoryIssues.length) {
+	console.log("Run inventory incomplete or inconsistent; aggregates describe discovered records only. All D20 verdicts are withheld.");
+	for (const issue of inventoryIssues) console.log(`  ${issue}`);
+}
+
 // Per-run CSV
 const csvPath =
 	process.argv.includes("--csv") && process.argv[process.argv.indexOf("--csv") + 1]
 		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
 		: join(HERE, "results", "bench.csv");
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -273,6 +352,7 @@ const rows = runs.map((m) => {
 		m.driverStatus,
 		m.taskHash,
 		m.providerConfigHash,
+		m.planId,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -366,7 +446,7 @@ for (const [key, ms] of byCondition) {
 }
 
 console.log("med = sample median; cell p50/p95 = sorted[floor(n × p / 100)], capped at the last value.");
-console.log("tasks = distinct task IDs; runs = registered repetitions, including planned runs that have not started.");
+console.log("tasks = distinct task IDs; runs = discovered records, including planned runs that have not started; missing records appear under Run inventory.");
 console.log("n/a = unavailable: missing or invalid evidence for that metric, or no samples (blank in CSV).");
 console.log("condition                                                    runs  tasks  pass%  tokOut(med)  tokIn(med)  cells(med)  cErr%  cellP50  driverIncomplete");
 for (const [key, a] of [...aggs.entries()].sort()) {
@@ -430,6 +510,7 @@ function noVerdict(reason: string): GateResult {
 }
 
 function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
+	if (inventoryIssues.length) return noVerdict("run inventory incomplete or inconsistent");
 	if (!a) return noVerdict("baseline incomplete");
 	if (!b) return noVerdict("treatment incomplete");
 	if (a.driverIncompleteRuns || b.driverIncompleteRuns) return noVerdict("driver runs incomplete");
@@ -464,6 +545,10 @@ console.log("Each model needs matching models.json fingerprints across baseline 
 const treatments = [...new Set(runs.map(conditionFor).filter(isTreatment))].sort();
 if (treatments.length === 0) console.log("  no treatment conditions — no verdict");
 for (const condition of treatments) {
+	if (inventoryIssues.length) {
+		console.log(`  ${condition}: run inventory incomplete or inconsistent — no verdict`);
+		continue;
+	}
 	if (!["F", "B/example", "B/noexample"].includes(condition)) {
 		console.log(`  ${condition}: treatment variant incomplete or invalid — no verdict`);
 		continue;
