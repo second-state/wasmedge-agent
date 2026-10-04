@@ -1028,22 +1028,23 @@ function readCreatedActiveSessionId(value: unknown): string {
 async function restoreNextTurnMessages(
 	client: DaemonClient,
 	activeSessionId: string,
-	sessionFile: string,
 	messages: readonly CustomMessage[],
-): Promise<boolean> {
+): Promise<void> {
 	if (messages.length === 0) {
-		return true;
+		return;
 	}
-	const response = await requestUpdateRestore(
-		client,
-		{ type: "restore_next_turn", activeSessionId, messages: [...messages] },
-		30000,
-	);
-	if (!response.success) {
-		console.error(chalk.yellow(`Warning: could not restore pending context for ${sessionFile}: ${response.error}`));
-		return false;
+	try {
+		const response = await requestUpdateRestore(
+			client,
+			{ type: "restore_next_turn", activeSessionId, messages: [...messages] },
+			30000,
+		);
+		if (!response.success) {
+			throw new Error(response.error);
+		}
+	} catch (error: unknown) {
+		throw new Error(`restore_next_turn: ${formatUnknownError(error)}`, { cause: error });
 	}
-	return true;
 }
 
 interface RestoreDaemonUpdateRestartSessionResult {
@@ -1133,7 +1134,7 @@ async function restoreDaemonUpdateRestartSession(
 			);
 		}
 	}
-	await restoreNextTurnMessages(client, activeSessionId, session.sessionFile, session.queue.nextTurn);
+	await restoreNextTurnMessages(client, activeSessionId, session.queue.nextTurn);
 	if (!session.shouldResume) return { restored: true, resumed: false };
 
 	const needsContinuationPrompt =
