@@ -66,6 +66,12 @@ relative to `agent_lib`, including nested and inline modules. A workspace with
 only public types still receives a restore notice. Listings reflect current
 source files, including applied or reverted library edits.
 
+Both notices include saved state keys and blob names, without their contents.
+Compaction reads an existing workspace from disk even before the first Rust cell
+after resume or runtime reload. This does not initialize the toolchain, upgrade
+the workspace, or start WasmEdge. A workspace is recognized by its `Cargo.toml`;
+a new session without one receives no compaction state notice.
+
 These notices are labeled **source scan**. They do not compile the library or
 report fields, variants, signatures, associated items, re-exports, or generated
 API. Items with `cfg`, `cfg_attr`, or custom `path` attributes are omitted rather

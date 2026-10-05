@@ -6767,11 +6767,11 @@ export class AgentSession {
 	// auto-compaction resume, which never injects nextTurn messages.
 	private async _notifyWorkspaceStateAfterCompaction(): Promise<void> {
 		const provisioner = this._rustCellProvisioner;
-		// No runtime means no persistent state to remind about.
-		if (!provisioner?.hasRunner) return;
+		if (!provisioner?.hasWorkspace) return;
 		const listing = provisioner.listState();
 		const stateDetail =
 			listing.stateKeys.length > 0 ? ` state keys: ${listing.stateKeys.join(", ")}.` : " no state keys yet.";
+		const blobDetail = listing.blobNames.length > 0 ? ` state blobs: ${listing.blobNames.join(", ")}.` : "";
 		const libDetail =
 			listing.libFunctions.length > 0
 				? ` agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`
@@ -6781,7 +6781,7 @@ export class AgentSession {
 			: "";
 		const content = [
 			"<rust_state>",
-			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${libDetail}${typeDetail}`,
+			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${blobDetail}${libDetail}${typeDetail}`,
 			"</rust_state>",
 		].join("\n");
 		const message = {

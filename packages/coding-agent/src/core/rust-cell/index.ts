@@ -132,6 +132,16 @@ export class RustCellProvisioner {
 		return this.runner !== undefined;
 	}
 
+	/** An on-disk workspace can be listed before runtime/toolchain initialization. */
+	get hasWorkspace(): boolean {
+		return this.existingWorkspaceDir !== undefined;
+	}
+
+	private get existingWorkspaceDir(): string | undefined {
+		const dir = this.workspace ?? this.options.workspaceDir;
+		return dir && existsSync(join(dir, "Cargo.toml")) ? dir : undefined;
+	}
+
 	get workspaceDir(): string | undefined {
 		return this.workspace;
 	}
@@ -279,10 +289,11 @@ export class RustCellProvisioner {
 		void this.ensure().catch(() => {});
 	}
 
-	/** State listing for compaction/resume notices; empty when never started. */
+	/** Read current state without provisioning; restored workspaces need no runner. */
 	listState(): PersistentStateListing {
-		if (!this.workspace) return { stateKeys: [], blobNames: [], libFunctions: [], libTypes: [] };
-		return listPersistentState(this.workspace);
+		const workspace = this.existingWorkspaceDir;
+		if (!workspace) return { stateKeys: [], blobNames: [], libFunctions: [], libTypes: [] };
+		return listPersistentState(workspace);
 	}
 
 	async dispose(): Promise<void> {
