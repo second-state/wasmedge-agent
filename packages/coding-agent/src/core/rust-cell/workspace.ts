@@ -279,7 +279,9 @@ function writeSkillSymlinks(workspaceDir: string, skills: RustSkillMount[]): voi
 	mkdirSync(mountDir, { recursive: true });
 	const wanted = new Set(skills.map((skill) => skill.crateName));
 	for (const entry of readdirSync(mountDir)) {
-		if (!wanted.has(entry)) rmSync(join(mountDir, entry), { recursive: true, force: true });
+		const path = join(mountDir, entry);
+		// Inherited directories are the child's source copies, not disposable mounts.
+		if (!wanted.has(entry) && lstatSync(path).isSymbolicLink()) rmSync(path);
 	}
 	for (const skill of skills) {
 		const link = join(mountDir, skill.crateName);

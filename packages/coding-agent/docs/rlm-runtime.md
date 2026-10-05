@@ -107,6 +107,13 @@ On provisioning, `.workspace-version` records the installed template's content a
 
 Upgrades retain helpers, skill sources, state/blobs, the last cell source, unrelated files, and Git history. Unmodified library defaults follow the template; locally changed or deleted library files remain local overrides. Workspaces predating the marker retain their existing library sources conservatively because their original defaults are unknown. An incompatible library or retained cell blocks the upgrade with compiler diagnostics and leaves the original workspace intact. The next provisioning attempt can retry; an abandoned upgrade journal recovers an interrupted directory switch. Provisioning rejects a live upgrade owner and malformed version metadata. This assumes one active runtime owns a session workspace.
 
+Upgrade staging uses the same skill compile probes as normal startup before
+validating the retained cell. Unused skills rejected by the probes are unmounted
+and diagnosed; if the retained cell or library still depends on one, validation
+fails and the original workspace stays in place. Unmounting removes symlinks
+and generated Cargo/re-export entries but preserves inherited skill source
+directories, so they can be repaired and remounted on reload.
+
 The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest, source, test, and fixture changes use the separate `.skills-hash` synchronization mechanism to repeat mount probes on reload. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
 
 ## Delegation Flow
