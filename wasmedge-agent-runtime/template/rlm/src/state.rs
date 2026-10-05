@@ -145,7 +145,7 @@ pub fn get_blob(name: &str) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// All blob names, sorted.
+/// All regular blob files, sorted, including names ending in `.tmp`.
 pub fn list_blobs() -> Result<Vec<String>> {
     let dir = blobs_dir();
     let entries = match fs::read_dir(&dir) {
@@ -158,9 +158,7 @@ pub fn list_blobs() -> Result<Vec<String>> {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             if let Some(name) = entry.file_name().to_str() {
-                if !name.ends_with(".tmp") {
-                    names.push(name.to_string());
-                }
+                names.push(name.to_string());
             }
         }
     }
@@ -209,8 +207,11 @@ mod tests {
     fn blobs() {
         with_temp_state("blobs", || {
             put_blob("data.bin", b"hello").unwrap();
+            put_blob("draft.tmp", b"saved draft").unwrap();
+            put_blob(".tmp", b"saved blob").unwrap();
             assert_eq!(get_blob("data.bin").unwrap(), Some(b"hello".to_vec()));
-            assert_eq!(list_blobs().unwrap(), vec!["data.bin".to_string()]);
+            assert_eq!(get_blob("draft.tmp").unwrap().unwrap(), b"saved draft");
+            assert_eq!(list_blobs().unwrap(), vec![".tmp", "data.bin", "draft.tmp"]);
             assert!(put_blob("../escape", b"x").is_err());
         });
     }
@@ -272,7 +273,7 @@ mod tests {
                 b"saved blob"
             );
             assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 3);
-            assert_eq!(list_blobs().unwrap(), vec!["data"]);
+            assert_eq!(list_blobs().unwrap(), vec![".rlm-write-1.tmp", "data"]);
         });
     }
 
@@ -286,6 +287,7 @@ mod tests {
                 b"replacement"
             );
             assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 1);
+            assert_eq!(list_blobs().unwrap(), vec![".rlm-write-0.tmp"]);
         });
     }
 

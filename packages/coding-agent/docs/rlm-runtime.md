@@ -83,9 +83,11 @@ State inventory is best-effort: missing stores are empty, while unreadable store
 or a `state.json` that is not a valid JSON object produce explicit warnings.
 Resume and compaction still deliver the readable inventory, even when only
 warnings remain. Restore warnings are also visible in the TUI without expanding
-the notice. Blob listings match `rlm::state::list_blobs`: regular files only,
-excluding symlinks, directories, and `.tmp` files. Listing does not repair or
-overwrite saved data.
+the notice. Blob listings match `rlm::state::list_blobs`: all regular files,
+including valid names ending in `.tmp`. Symlinks and directories, including
+interrupted-write staging directories, are omitted. Legacy `.tmp` files may be
+leftover writes or saved blobs; both are listed because the name cannot tell
+them apart. Listing does not repair, delete, or overwrite saved data.
 
 These notices are labeled **source scan**. They do not compile the library or
 report fields, variants, signatures, associated items, re-exports, or generated

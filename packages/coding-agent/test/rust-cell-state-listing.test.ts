@@ -71,15 +71,18 @@ describe("persistent workspace listing", () => {
 		});
 	});
 
-	it("lists regular blob files like the guest, excluding directories, symlinks and temporary files", () => {
+	it("lists all regular blob files, including tmp names, but omits directories and symlinks", () => {
 		const dir = workspace();
 		write(dir, "state/blobs/z.bin", "z");
 		write(dir, "state/blobs/a.bin", "a");
 		write(dir, "state/blobs/pending.tmp", "pending");
+		write(dir, "state/blobs/.tmp", "saved blob");
+		write(dir, "state/blobs/.rlm-write-1.tmp", "saved blob");
+		write(dir, "state/blobs/.rlm-write-0.tmp/value", "interrupted write");
 		write(dir, "state/blobs/nested/file", "nested");
 		symlinkSync("a.bin", join(dir, "state/blobs/link.bin"));
 		symlinkSync("missing", join(dir, "state/blobs/dangling.bin"));
-		expect(listPersistentState(dir).blobNames).toEqual(["a.bin", "z.bin"]);
+		expect(listPersistentState(dir).blobNames).toEqual([".rlm-write-1.tmp", ".tmp", "a.bin", "pending.tmp", "z.bin"]);
 	});
 
 	it("follows public file and inline modules from the crate root", () => {
@@ -207,7 +210,7 @@ pub mod inner_cfg;
 		write(dir, "state/blobs/pending.tmp", "pending");
 		expect(listPersistentState(dir)).toEqual({
 			stateKeys: ["a", "z"],
-			blobNames: ["a", "z"],
+			blobNames: ["a", "pending.tmp", "z"],
 			libFunctions: ["helpers::ok"],
 			libTypes: [],
 		});

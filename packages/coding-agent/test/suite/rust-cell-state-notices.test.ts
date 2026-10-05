@@ -55,6 +55,37 @@ describe("Rust workspace state notices", () => {
 		);
 	});
 
+	it("restores a workspace whose only saved item is a tmp-named blob", async () => {
+		const { artifacts, workspace: dir } = workspace("");
+		mkdirSync(join(dir, "state/blobs/.rlm-write-0.tmp"), { recursive: true });
+		writeFileSync(join(dir, "state/blobs/.rlm-write-0.tmp/value"), "interrupted write");
+		writeFileSync(join(dir, "state/blobs/draft.tmp"), "saved blob content");
+		const ensure = vi.spyOn(RustCellProvisioner.prototype, "ensure");
+		const artifactDir = vi.spyOn(SessionManager.prototype, "getSessionArtifactDir").mockReturnValue(artifacts);
+		const harness = await createHarness();
+		harnesses.push(harness);
+		artifactDir.mockRestore();
+		let received = "";
+		harness.setResponses([
+			(context) => {
+				received = context.messages.map(getMessageText).join("\n");
+				return fauxAssistantMessage("reusing the saved blob");
+			},
+		]);
+		await harness.session.prompt("continue");
+		expect(received).toContain("<rust_state_restored>");
+		expect(received).toContain("state blobs: draft.tmp.");
+		expect(received).not.toMatch(/saved blob content|interrupted write|\.rlm-write-0/);
+		expect(ensure).not.toHaveBeenCalled();
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom_message",
+				customType: "rust_state_restored",
+				content: expect.stringContaining("state blobs: draft.tmp."),
+			}),
+		);
+	});
+
 	async function compactionHarness(artifacts?: string): Promise<Harness> {
 		const artifactDir = vi.spyOn(SessionManager.prototype, "getSessionArtifactDir").mockReturnValue(artifacts);
 		const harness = await createHarness({
@@ -87,7 +118,9 @@ describe("Rust workspace state notices", () => {
 		mkdirSync(join(dir, "state/blobs"), { recursive: true });
 		writeFileSync(join(dir, "state/state.json"), JSON.stringify({ progress: "saved state value" }));
 		writeFileSync(join(dir, "state/blobs/results.bin"), "saved blob content");
-		writeFileSync(join(dir, "state/blobs/pending.tmp"), "incomplete blob");
+		writeFileSync(join(dir, "state/blobs/pending.tmp"), "saved tmp blob content");
+		mkdirSync(join(dir, "state/blobs/.rlm-write-0.tmp"));
+		writeFileSync(join(dir, "state/blobs/.rlm-write-0.tmp/value"), "interrupted write");
 		await harness.session.compact();
 		const notice = "agent_lib types (source scan): Current.";
 		const entry = harness.sessionManager
@@ -95,7 +128,7 @@ describe("Rust workspace state notices", () => {
 			.find((entry) => entry.type === "custom_message" && entry.customType === "rust_state");
 		expect(entry).toMatchObject({ content: expect.stringContaining(notice) });
 		expect(entry).toMatchObject({ content: expect.stringContaining("state keys: progress.") });
-		expect(entry).toMatchObject({ content: expect.stringContaining("state blobs: results.bin.") });
+		expect(entry).toMatchObject({ content: expect.stringContaining("state blobs: pending.tmp, results.bin.") });
 		let received = "";
 		harness.setResponses([
 			(context) => {
@@ -106,9 +139,11 @@ describe("Rust workspace state notices", () => {
 		await harness.session.prompt("continue");
 		expect(received).toContain(notice);
 		expect(received).toContain("state keys: progress.");
-		expect(received).toContain("state blobs: results.bin.");
+		expect(received).toContain("state blobs: pending.tmp, results.bin.");
 		expect(received).not.toContain("types (source scan): Old");
-		expect(received).not.toMatch(/saved state value|saved blob content|pending\.tmp/);
+		expect(received).not.toMatch(
+			/saved state value|saved blob content|saved tmp blob content|interrupted write|\.rlm-write-0/,
+		);
 		expect(ensure).not.toHaveBeenCalled();
 	});
 

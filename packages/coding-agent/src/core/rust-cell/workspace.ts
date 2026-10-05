@@ -219,7 +219,7 @@ export function listPersistentState(workspaceDir: string): PersistentStateListin
 	const blobsDir = join(workspaceDir, "state", "blobs");
 	try {
 		listing.blobNames = readdirSync(blobsDir, { withFileTypes: true })
-			.filter((entry) => entry.isFile() && !entry.name.endsWith(".tmp"))
+			.filter((entry) => entry.isFile())
 			.map((entry) => entry.name)
 			.sort();
 	} catch (error) {
