@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,7 +78,15 @@ function parseArgs(argv: string[]) {
 		groups: ["A", "B"] as ("A" | "B" | "F")[],
 		reps: 1,
 		variant: "example" as "example" | "noexample" | "split",
+		planOnly: false,
+		resumePlan: null as string | null,
 	};
+	if (argv.includes("--resume-plan")) {
+		if (argv.length !== 2 || argv[0] !== "--resume-plan" || !isFileName(argv[1])) {
+			throw new Error("use --resume-plan <planId> without run-selection options or --plan-only");
+		}
+		return { ...opts, resumePlan: argv[1] };
+	}
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const next = () => {
@@ -91,6 +99,7 @@ function parseArgs(argv: string[]) {
 		else if (arg === "--groups") opts.groups = next().split(",") as ("A" | "B" | "F")[];
 		else if (arg === "--reps") opts.reps = Number(next());
 		else if (arg === "--variant") opts.variant = next() as typeof opts.variant;
+		else if (arg === "--plan-only" && !opts.planOnly) opts.planOnly = true;
 		else throw new Error(`unknown arg: ${arg}`);
 	}
 	if (opts.tasks.length === 0) {
@@ -611,88 +620,192 @@ function persistMeta(meta: RunMeta): void {
 	renameSync(`${path}.tmp`, path);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-const opts = parseArgs(process.argv.slice(2));
-// Validate the full selection and persist every slot before any agent can run.
-const tasks = opts.tasks.map((id) => loadTask(id));
-const providerConfig = loadProviderConfig();
-console.log(
-	`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
-);
-mkdirSync(join(RESULTS_DIR, "runs"), { recursive: true });
+function isFileName(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value !== "." && value !== ".." &&
+		!value.startsWith("--") && !/[\\/\0]/.test(value);
+}
 
-const plan: { task: TaskSpec; meta: RunMeta }[] = [];
-const planId = randomUUID();
-for (const task of tasks) {
-	for (const model of opts.models) {
-		for (const group of opts.groups) {
-			for (let rep = 1; rep <= opts.reps; rep++) {
-				// D17 split: alternate prompt variants across reps for group B.
-				const variant =
-					group === "A" || group === "F"
-						? group === "F"
-							? "builtin"
-							: "n/a"
-						: opts.variant === "split"
-							? rep % 2 === 1
-								? "example"
-								: "noexample"
-							: opts.variant;
-				plan.push(planRun(task, group, model, variant, rep, providerConfig, planId));
+function readRecord(path: string): Record<string, unknown> {
+	try {
+		if (!lstatSync(path).isFile()) throw new Error("not a regular file");
+		const record: unknown = JSON.parse(readFileSync(path, "utf-8"));
+		if (isRecord(record)) return record;
+	} catch {
+		// Do not include JSON parse errors, which can expose stored content.
+	}
+	throw new Error(`invalid or missing benchmark record: ${path}`);
+}
+
+function lockPlan(planId: string): () => void {
+	const locksDir = join(RESULTS_DIR, "locks");
+	mkdirSync(locksDir, { recursive: true, mode: 0o700 });
+	const path = join(locksDir, `${planId}.lock`);
+	const owner = JSON.stringify({ pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString(), token: randomUUID() });
+	try {
+		writeFileSync(path, owner, { flag: "wx", mode: 0o600 });
+	} catch (error) {
+		if (isRecord(error) && error.code === "EEXIST") {
+			throw new Error(`benchmark plan is locked: ${path}; inspect the owner and any leftover processes before removing a stale lock`);
+		}
+		throw error;
+	}
+	return () => {
+		// Do not remove a replacement lock if an operator removed ours while active.
+		if (existsSync(path) && readFileSync(path, "utf-8") === owner) rmSync(path);
+	};
+}
+
+function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
+	const manifest = readRecord(join(RESULTS_DIR, "plans", `${planId}.json`));
+	if (manifest.version !== 1 || manifest.planId !== planId || !Array.isArray(manifest.runs) || !manifest.runs.length) {
+		throw new Error(`invalid benchmark plan: ${planId}`);
+	}
+	if (manifest.executionLockVersion !== 1) {
+		throw new Error(`benchmark plan predates execution locking and cannot be resumed: ${planId}`);
+	}
+	const ids = new Set<string>();
+	const slots = new Set<string>();
+	const pending: { task: TaskSpec; meta: RunMeta }[] = [];
+	const fields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"] as const;
+	for (const slot of manifest.runs) {
+		if (!isRecord(slot) || !isFileName(slot.runId) ||
+			!["task", "model"].every((key) => typeof slot[key] === "string" && slot[key].trim()) ||
+			!["taskHash", "providerConfigHash"].every((key) => typeof slot[key] === "string" && /^sha256:[a-f0-9]{64}$/.test(slot[key])) ||
+			typeof slot.rep !== "number" || !Number.isSafeInteger(slot.rep) || slot.rep < 1 || typeof slot.variant !== "string" ||
+			!(slot.group === "A" && slot.variant === "n/a" || slot.group === "F" && slot.variant === "builtin" ||
+				slot.group === "B" && ["example", "noexample"].includes(slot.variant))) {
+			throw new Error(`invalid slot in benchmark plan: ${planId}`);
+		}
+		const key = JSON.stringify([slot.task, slot.model, slot.group, slot.variant, slot.rep]);
+		if (ids.has(slot.runId) || slots.has(key)) throw new Error(`duplicate slot in benchmark plan: ${slot.runId}`);
+		ids.add(slot.runId);
+		slots.add(key);
+		const runDir = join(RESULTS_DIR, "runs", slot.runId);
+		if (!lstatSync(runDir).isDirectory()) throw new Error(`invalid benchmark run directory: ${runDir}`);
+		const record = readRecord(join(runDir, "meta.json"));
+		if (record.planId !== planId || record.runDir !== runDir || fields.some((key) => record[key] !== slot[key]) ||
+			typeof record.driverStatus !== "string" || !["planned", "running", "completed", "error"].includes(record.driverStatus)) {
+			throw new Error(`run record differs from benchmark plan: ${slot.runId}`);
+		}
+		if (record.driverStatus !== "planned") {
+			console.log(`skip ${slot.runId}: ${record.driverStatus} (not retried)`);
+			if (record.driverStatus !== "completed") process.exitCode = 1;
+			continue;
+		}
+		if (!["startedAt", "wallMs", "driverError", "daemonSocket", "daemonPid", "sessionFile", "checkPass"].every((key) => record[key] === null) ||
+			!Array.isArray(record.turnExitCodes) || record.turnExitCodes.length !== 0 || record.timedOut !== false || record.checkOutput !== "" ||
+			readdirSync(runDir).some((name) => !["meta.json", "task", "models.json"].includes(name))) {
+			throw new Error(`planned benchmark run contains execution evidence: ${slot.runId}`);
+		}
+		const meta = record as unknown as RunMeta;
+		verifyTask(meta);
+		verifyProviderConfig(meta);
+		const task = loadTask(meta.task, join(runDir, "task"));
+		if (meta.category !== task.category) throw new Error(`task category differs from snapshot: ${slot.runId}`);
+		pending.push({ task, meta });
+	}
+	return pending;
+}
+
+function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task: TaskSpec; meta: RunMeta }[] {
+	// Validate the full selection and persist every slot before any agent can run.
+	const tasks = opts.tasks.map((id) => loadTask(id));
+	const providerConfig = loadProviderConfig();
+	console.log(
+		`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
+	);
+	mkdirSync(join(RESULTS_DIR, "runs"), { recursive: true });
+
+	const plan: { task: TaskSpec; meta: RunMeta }[] = [];
+	for (const task of tasks) {
+		for (const model of opts.models) {
+			for (const group of opts.groups) {
+				for (let rep = 1; rep <= opts.reps; rep++) {
+					// D17 split: alternate prompt variants across reps for group B.
+					const variant =
+						group === "A" || group === "F"
+							? group === "F"
+								? "builtin"
+								: "n/a"
+							: opts.variant === "split"
+								? rep % 2 === 1
+									? "example"
+									: "noexample"
+								: opts.variant;
+					plan.push(planRun(task, group, model, variant, rep, providerConfig, planId));
+				}
 			}
 		}
 	}
+	// Keep the expected inventory outside individual run directories so deleted
+	// records cannot silently shrink the comparison after execution.
+	const plansDir = join(RESULTS_DIR, "plans");
+	mkdirSync(plansDir, { recursive: true });
+	const planPath = join(plansDir, `${planId}.json`);
+	writeFileSync(`${planPath}.tmp`, JSON.stringify({
+		version: 1,
+		executionLockVersion: 1,
+		planId,
+		plannedAt: new Date().toISOString(),
+		runs: plan.map(({ meta }) => ({
+			runId: meta.runId,
+			task: meta.task,
+			taskHash: meta.taskHash,
+			providerConfigHash: meta.providerConfigHash,
+			model: meta.model,
+			group: meta.group,
+			variant: meta.variant,
+			rep: meta.rep,
+		})),
+	}, null, 2), { flag: "wx", mode: 0o600 });
+	renameSync(`${planPath}.tmp`, planPath);
+	return plan;
 }
-// Keep the expected inventory outside individual run directories so deleted
-// records cannot silently shrink the comparison after execution.
-const plansDir = join(RESULTS_DIR, "plans");
-mkdirSync(plansDir, { recursive: true });
-const planPath = join(plansDir, `${planId}.json`);
-writeFileSync(`${planPath}.tmp`, JSON.stringify({
-	version: 1,
-	planId,
-	plannedAt: new Date().toISOString(),
-	runs: plan.map(({ meta }) => ({
-		runId: meta.runId,
-		task: meta.task,
-		taskHash: meta.taskHash,
-		providerConfigHash: meta.providerConfigHash,
-		model: meta.model,
-		group: meta.group,
-		variant: meta.variant,
-		rep: meta.rep,
-	})),
-}, null, 2), { flag: "wx", mode: 0o600 });
-renameSync(`${planPath}.tmp`, planPath);
-const failures: string[] = [];
-let done = 0;
-for (const { task, meta } of plan) {
-	const label = `${task.id} ${meta.group} ${shortModel(meta.model)} ${meta.variant} r${meta.rep}`;
-	process.stdout.write(`→ ${label} ... `);
-	try {
-		await runOne(task, meta);
-		if (meta.driverStatus === "error") {
-			console.log(`DRIVER-ERROR: ${meta.driverError}`);
-			failures.push(label);
-			process.exitCode = 1;
-			continue;
+
+const opts = parseArgs(process.argv.slice(2));
+const planId = opts.resumePlan ?? randomUUID();
+const unlock = lockPlan(planId);
+try {
+	const plan = opts.resumePlan ? resumePlan(planId) : createPlan(opts, planId);
+	console.log(`plan: ${planId}; ${plan.length} run(s) ${opts.planOnly ? "saved without execution" : "to execute"}`);
+	if (!opts.planOnly) {
+		const failures: string[] = [];
+		let done = 0;
+		for (const { task, meta } of plan) {
+			const label = `${task.id} ${meta.group} ${shortModel(meta.model)} ${meta.variant} r${meta.rep}`;
+			process.stdout.write(`→ ${label} ... `);
+			try {
+				await runOne(task, meta);
+				if (meta.driverStatus === "error") {
+					console.log(`DRIVER-ERROR: ${meta.driverError}`);
+					failures.push(label);
+					process.exitCode = 1;
+					continue;
+				}
+				done += 1;
+				const status = meta.timedOut
+					? "TIMEOUT"
+					: meta.checkPass === null
+						? "no-check"
+						: meta.checkPass
+							? "PASS"
+							: "FAIL";
+				console.log(`${status} (${Math.round((meta.wallMs ?? 0) / 1000)}s)`);
+				if (status === "FAIL" || status === "TIMEOUT") failures.push(label);
+			} catch (err) {
+				console.log(`DRIVER-ERROR: ${err instanceof Error ? err.message : err}`);
+				failures.push(label);
+				process.exitCode = 1;
+			}
 		}
-		done += 1;
-		const status = meta.timedOut
-			? "TIMEOUT"
-			: meta.checkPass === null
-				? "no-check"
-				: meta.checkPass
-					? "PASS"
-					: "FAIL";
-		console.log(`${status} (${Math.round((meta.wallMs ?? 0) / 1000)}s)`);
-		if (status === "FAIL" || status === "TIMEOUT") failures.push(label);
-	} catch (err) {
-		console.log(`DRIVER-ERROR: ${err instanceof Error ? err.message : err}`);
-		failures.push(label);
-		process.exitCode = 1;
+		console.log(`\n${done} run(s) complete. ${failures.length} failure(s).`);
+		if (failures.length > 0) for (const f of failures) console.log(`  failed: ${f}`);
+		console.log(`analyze with: node poc/bench/analyze.ts`);
 	}
+} finally {
+	unlock();
 }
-console.log(`\n${done} run(s) complete. ${failures.length} failure(s).`);
-if (failures.length > 0) for (const f of failures) console.log(`  failed: ${f}`);
-console.log(`analyze with: node poc/bench/analyze.ts`);
