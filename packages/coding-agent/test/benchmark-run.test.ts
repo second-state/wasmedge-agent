@@ -43,7 +43,7 @@ function fixture({ mode = "ok", config = true, turns = ["first"], check = "exit 
 	const home = join(root, "home");
 	const temp = join(root, "tmp");
 	for (const dir of [task, join(home, ".wasmedge-agent"), temp]) mkdirSync(dir, { recursive: true });
-	for (const name of ["run.ts", "analyze.ts", "launchers.ts"])
+	for (const name of ["run.ts", "analyze.ts", "launchers.ts", "source-inputs.ts"])
 		copyFileSync(join(repo, "poc/bench", name), join(bench, name));
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
 	writeFileSync(join(task, "task.json"), JSON.stringify({ category: "fixture", turns, timeoutMs }));
@@ -63,9 +63,14 @@ const agentDir = process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;
 const marker = ${JSON.stringify(join(root, "first-attempt"))};
 const events = ${JSON.stringify(join(root, "daemon-events.jsonl"))};
 const socketPath = process.argv[process.argv.indexOf("--daemon-socket") + 1];
+const editSource = () => {
+  const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
+  appendFileSync(join(meta.sourceInputs[0].path, "main.ts"), "changed");
+};
 const record = (event) => appendFileSync(events, JSON.stringify({ event, socketPath, pid: process.pid }) + "\\n");
 if (process.argv.includes("daemon")) {
   record("start");
+  if (mode === "edit-source-on-start") editSource();
   if (mode === "edit-launcher-on-start") {
     const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
     appendFileSync(meta.launcherPath, "\\n");
@@ -99,6 +104,7 @@ if (process.argv.includes("daemon")) {
   else server.listen(socketPath);
 } else {
 record("turn");
+if (mode === "edit-source-turn") editSource();
 console.log("fixture turn");
 if (mode === "edit-launcher-turn") {
   const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
@@ -178,7 +184,12 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 		TEMP: temp,
 		BENCH_PRIME_AGENT: fake,
 	};
+	const sourceDir = join(root, "agent-source");
+	mkdirSync(sourceDir);
+	writeFileSync(join(sourceDir, "main.ts"), "original");
 	return {
+		sourceDir,
+		sourceManifest: join(root, "inputs.json"),
 		fake,
 		fork: join(realpathSync(root), "wasmedge-agent.sh"),
 		env,
@@ -759,6 +770,165 @@ describe("offline benchmark driver", () => {
 	});
 });
 
+function sourceArgs(
+	f: ReturnType<typeof fixture>,
+	groups: Record<string, unknown> = { A: ["agent-source"], B: ["agent-source"], F: ["agent-source"] },
+) {
+	writeFileSync(f.sourceManifest, JSON.stringify(groups));
+	return ["--source-inputs", f.sourceManifest];
+}
+
+describe("benchmark declared source inputs", () => {
+	it("saves file and directory pins with the inventory and uses saved inputs on resume", () => {
+		const f = fixture();
+		const args = sourceArgs(f, { A: ["agent-source", "fake-agent.mjs"] });
+		expect(f.run(1, "A", [...args, "--plan-only"]).status).toBe(0);
+		const meta = f.metas()[0];
+		const plan = JSON.parse(readFileSync(join(f.plansDir, `${meta.planId}.json`), "utf-8"));
+		expect(plan.sourcePinVersion).toBe(1);
+		expect(plan.runs[0].sourceInputs).toEqual(meta.sourceInputs);
+		expect(meta.sourceInputs).toHaveLength(2);
+		expect(meta.sourceInputs[0]).toEqual({
+			path: f.sourceDir,
+			realPath: realpathSync(f.sourceDir),
+			hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+		});
+		expect(f.hasEvents()).toBe(false);
+		rmSync(f.sourceManifest);
+		const result = f.resume(meta.planId);
+		expect(result.status, result.stderr).toBe(0);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "completed", checkPass: true });
+		expect(f.analyze().stdout).toContain("Declared source-input pins: 1/1 records");
+	});
+
+	it.each(["bytes", "addition", "removal", "mode", "nested symlink", "root target", "missing"])(
+		"rejects changed %s in a later pending group before any run starts",
+		(change) => {
+			const f = fixture();
+			const alias = join(f.temp, "source-link");
+			symlinkSync(f.sourceDir, alias);
+			const args = sourceArgs(f, { A: [f.fake], F: [alias] });
+			expect(f.run(1, "A,F", [...args, "--plan-only"]).status).toBe(0);
+			const input = join(f.sourceDir, "main.ts");
+			if (change === "bytes") writeFileSync(input, "updated");
+			if (change === "addition") writeFileSync(join(f.sourceDir, "extra.ts"), "extra");
+			if (change === "removal") rmSync(input);
+			if (change === "mode") chmodSync(input, 0o755);
+			if (change === "nested symlink") symlinkSync(f.fake, join(f.sourceDir, "nested"));
+			if (change === "root target") {
+				rmSync(alias);
+				symlinkSync(f.fake, alias);
+			}
+			if (change === "missing") rmSync(f.sourceDir, { recursive: true });
+			const result = f.resume(f.metas()[0].planId);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain("benchmark source inputs changed or are unavailable");
+			expect(f.metas().every((meta) => meta.driverStatus === "planned")).toBe(true);
+			expect(f.hasEvents()).toBe(false);
+		},
+	);
+
+	it.each(["edit-source-on-start", "edit-source-turn"])("stops turns and later runs after %s", (mode) => {
+		const f = fixture({ mode, turns: ["first", "second"] });
+		const result = f.run(2, "F", sourceArgs(f));
+		expect(result.status).not.toBe(0);
+		for (const meta of f.metas()) {
+			expect(meta).toMatchObject({ driverStatus: "error", checkPass: null });
+			expect(meta.driverError).toContain("benchmark source inputs changed or are unavailable");
+		}
+		expect(f.events().map((event) => event.event)).toEqual(
+			mode === "edit-source-on-start" ? ["start", "stop"] : ["start", "turn", "stop"],
+		);
+	});
+
+	it("invalidates a successful acceptance check that changes declared source", () => {
+		const f = fixture({
+			check: `node - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const meta = JSON.parse(fs.readFileSync(path.join(process.env.PROJECT_DIR, "../meta.json")));
+fs.appendFileSync(path.join(meta.sourceInputs[0].path, "main.ts"), "changed");
+JS`,
+		});
+		expect(f.run(1, "A", sourceArgs(f)).status).not.toBe(0);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "error", checkPass: null });
+	});
+
+	it("keeps completed evidence analyzable and skippable after sources are removed", () => {
+		const f = fixture();
+		expect(f.run(1, "A", sourceArgs(f)).status).toBe(0);
+		rmSync(f.sourceDir, { recursive: true });
+		expect(f.resume(f.metas()[0].planId).status).toBe(0);
+		expect(f.analyze().stdout).toContain("Declared source-input pins: 1/1 records");
+		expect(f.events().filter((event) => event.event === "turn")).toHaveLength(1);
+	});
+
+	it.each([
+		{},
+		{ A: [] },
+		{ A: [null] },
+		{ A: ["missing"] },
+		{ Z: ["agent-source"] },
+		{ A: ["agent-source", "./agent-source"] },
+	])("rejects invalid source declarations before registering runs: %j", (groups) => {
+		const f = fixture();
+		expect(f.run(1, "A", sourceArgs(f, groups)).status).not.toBe(0);
+		expect(f.metas()).toHaveLength(0);
+		expect(f.hasEvents()).toBe(false);
+	});
+
+	it.each([".", "poc", "poc/bench/results", "poc/bench/results/locks"])(
+		"rejects source/result overlap: %s",
+		(input) => {
+			const f = fixture();
+			const result = f.run(1, "A", sourceArgs(f, { A: [input] }));
+			expect(result.stderr).toContain("source input overlaps the results directory");
+			expect(f.metas()).toHaveLength(0);
+			expect(f.hasEvents()).toBe(false);
+		},
+	);
+
+	it.each(["metadata", "missing pin", "missing version", "unknown version"])(
+		"rejects inconsistent saved source evidence: %s",
+		(change) => {
+			const f = fixture();
+			expect(f.run(1, "A", [...sourceArgs(f), "--plan-only"]).status).toBe(0);
+			const meta = f.metas()[0];
+			const planPath = join(f.plansDir, `${meta.planId}.json`);
+			const plan = JSON.parse(readFileSync(planPath, "utf-8"));
+			if (change === "metadata") {
+				meta.sourceInputs[0].hash = `sha256:${"0".repeat(64)}`;
+				writeFileSync(join(meta.runDir, "meta.json"), JSON.stringify(meta));
+			}
+			if (change === "missing pin") delete plan.runs[0].sourceInputs;
+			if (change === "missing version") delete plan.sourcePinVersion;
+			if (change === "unknown version") plan.sourcePinVersion = 9;
+			writeFileSync(planPath, JSON.stringify(plan));
+			expect(f.resume(meta.planId).status).not.toBe(0);
+			expect(f.hasEvents()).toBe(false);
+			expect(f.analyze().stdout).toContain("All D20 verdicts are withheld");
+		},
+	);
+
+	it("detects source drift across separate invocations even with identical launchers", () => {
+		const f = fixture();
+		const args = sourceArgs(f);
+		expect(f.run(1, "A,F", args).status).toBe(0);
+		writeFileSync(join(f.sourceDir, "main.ts"), "updated");
+		expect(f.run(1, "F", args).status).toBe(0);
+		const result = f.analyze();
+		expect(result.stdout).toContain("source-input fingerprints incomplete or inconsistent — no verdict");
+		expect(
+			new Set(
+				f
+					.metas()
+					.filter((meta) => meta.group === "F")
+					.map((meta) => meta.launcherHash),
+			).size,
+		).toBe(1);
+	});
+});
+
 describe("benchmark agent launcher pins", () => {
 	it("records the selected executable path, symlink target, and file bytes for all groups", () => {
 		const f = fixture();
@@ -887,7 +1057,7 @@ JS`,
 		const { stdout, csv } = f.analyze();
 		expect(stdout).toContain("agent launcher fingerprints incomplete or inconsistent — no verdict");
 		expect(stdout).not.toContain("→ GO");
-		expect(csv.split("\n")[0].endsWith(",launcherHash")).toBe(true);
+		expect(csv.split("\n")[0].endsWith(",launcherHash,sourceInputsHash")).toBe(true);
 		for (const meta of f.metas()) expect(csv).toContain(meta.launcherHash);
 	});
 
