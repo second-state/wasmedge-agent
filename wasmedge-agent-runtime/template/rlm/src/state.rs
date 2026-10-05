@@ -49,10 +49,28 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         .parent()
         .with_context(|| format!("{} has no parent directory", path.display()))?;
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
-    Ok(())
+    // A sibling file with a .tmp suffix may itself be a saved blob. Claim a
+    // fresh directory instead, on the same filesystem as the destination.
+    for index in 0..u64::MAX {
+        let staging = dir.join(format!(".rlm-write-{index}.tmp"));
+        if staging == path {
+            continue;
+        }
+        match fs::create_dir(&staging) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("creating {}", staging.display())),
+        }
+        let tmp = staging.join("value");
+        let result = (|| {
+            fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+            fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))
+        })();
+        let _ = fs::remove_file(&tmp);
+        let _ = fs::remove_dir(&staging);
+        return result;
+    }
+    bail!("no temporary directory available for {}", path.display())
 }
 
 fn save_map(map: &Map<String, Value>) -> Result<()> {
@@ -160,7 +178,8 @@ mod tests {
 
     fn with_temp_state<R>(name: &str, f: impl FnOnce() -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("rlm-state-test-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rlm-state-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("RLM_STATE_DIR", &dir);
@@ -177,7 +196,10 @@ mod tests {
             set("count", &42u64).unwrap();
             set("name", &"agent").unwrap();
             assert_eq!(get::<u64>("count").unwrap(), Some(42));
-            assert_eq!(keys().unwrap(), vec!["count".to_string(), "name".to_string()]);
+            assert_eq!(
+                keys().unwrap(),
+                vec!["count".to_string(), "name".to_string()]
+            );
             assert!(remove("count").unwrap());
             assert_eq!(get::<u64>("count").unwrap(), None);
         });
@@ -190,6 +212,116 @@ mod tests {
             assert_eq!(get_blob("data.bin").unwrap(), Some(b"hello".to_vec()));
             assert_eq!(list_blobs().unwrap(), vec!["data.bin".to_string()]);
             assert!(put_blob("../escape", b"x").is_err());
+        });
+    }
+
+    #[test]
+    fn writes_preserve_sibling_tmp_files() {
+        with_temp_state("sibling_tmp", || {
+            put_blob("data.tmp", b"saved blob").unwrap();
+            put_blob("data.bin", b"new blob").unwrap();
+            assert_eq!(get_blob("data.tmp").unwrap().unwrap(), b"saved blob");
+            assert_eq!(get_blob("data.bin").unwrap().unwrap(), b"new blob");
+
+            fs::write(state_dir().join("state.tmp"), b"existing file").unwrap();
+            set("count", &42).unwrap();
+            assert_eq!(get::<u64>("count").unwrap(), Some(42));
+            assert_eq!(
+                fs::read(state_dir().join("state.tmp")).unwrap(),
+                b"existing file"
+            );
+            assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 2);
+            assert_eq!(fs::read_dir(state_dir()).unwrap().count(), 3);
+        });
+    }
+
+    #[test]
+    fn failed_write_preserves_existing_entries_and_cleans_up() {
+        with_temp_state("failed_write", || {
+            put_blob("blocked.tmp", b"saved blob").unwrap();
+            let destination = blobs_dir().join("blocked.bin");
+            fs::create_dir(&destination).unwrap();
+            fs::write(destination.join("keep"), b"keep").unwrap();
+
+            assert!(put_blob("blocked.bin", b"replacement").is_err());
+            assert_eq!(get_blob("blocked.tmp").unwrap().unwrap(), b"saved blob");
+            assert_eq!(fs::read(destination.join("keep")).unwrap(), b"keep");
+            assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 2);
+        });
+    }
+
+    #[test]
+    fn staging_collisions_preserve_existing_files_and_directories() {
+        with_temp_state("staging_collision", || {
+            fs::create_dir_all(blobs_dir().join(".rlm-write-0.tmp")).unwrap();
+            fs::write(
+                blobs_dir().join(".rlm-write-0.tmp/value"),
+                b"interrupted write",
+            )
+            .unwrap();
+            fs::write(blobs_dir().join(".rlm-write-1.tmp"), b"saved blob").unwrap();
+            put_blob("data", b"new blob").unwrap();
+
+            assert_eq!(get_blob("data").unwrap().unwrap(), b"new blob");
+            assert_eq!(
+                fs::read(blobs_dir().join(".rlm-write-0.tmp/value")).unwrap(),
+                b"interrupted write"
+            );
+            assert_eq!(
+                get_blob(".rlm-write-1.tmp").unwrap().unwrap(),
+                b"saved blob"
+            );
+            assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 3);
+            assert_eq!(list_blobs().unwrap(), vec!["data"]);
+        });
+    }
+
+    #[test]
+    fn staging_names_can_be_used_as_blob_names() {
+        with_temp_state("staging_name", || {
+            put_blob(".rlm-write-0.tmp", b"first").unwrap();
+            put_blob(".rlm-write-0.tmp", b"replacement").unwrap();
+            assert_eq!(
+                get_blob(".rlm-write-0.tmp").unwrap().unwrap(),
+                b"replacement"
+            );
+            assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 1);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_symlinks_are_not_followed() {
+        with_temp_state("staging_symlink", || {
+            fs::create_dir_all(blobs_dir()).unwrap();
+            let existing = state_dir().join("existing");
+            fs::create_dir(&existing).unwrap();
+            fs::write(existing.join("value"), b"saved file").unwrap();
+            std::os::unix::fs::symlink(&existing, blobs_dir().join(".rlm-write-0.tmp")).unwrap();
+            put_blob("data", b"new blob").unwrap();
+
+            assert_eq!(get_blob("data").unwrap().unwrap(), b"new blob");
+            assert_eq!(fs::read(existing.join("value")).unwrap(), b"saved file");
+            assert!(fs::symlink_metadata(blobs_dir().join(".rlm-write-0.tmp"))
+                .unwrap()
+                .is_symlink());
+            assert_eq!(fs::read_dir(blobs_dir()).unwrap().count(), 2);
+            assert_eq!(list_blobs().unwrap(), vec!["data"]);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_a_tmp_named_blob_replaces_the_link_not_its_target() {
+        with_temp_state("tmp_symlink", || {
+            put_blob("original", b"saved blob").unwrap();
+            std::os::unix::fs::symlink("original", blobs_dir().join("link.tmp")).unwrap();
+            put_blob("link.tmp", b"replacement").unwrap();
+            assert_eq!(get_blob("original").unwrap().unwrap(), b"saved blob");
+            assert_eq!(get_blob("link.tmp").unwrap().unwrap(), b"replacement");
+            assert!(fs::symlink_metadata(blobs_dir().join("link.tmp"))
+                .unwrap()
+                .is_file());
         });
     }
 }
