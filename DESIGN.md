@@ -504,6 +504,7 @@ emits a diff to the user); write whole files with std::fs when generating them.
 2. `agent_lib/src/skills/mod.rs` 生成 `pub use <crate> as <name>;` re-export。
 3. 變更偵測：skill `Cargo.toml` hash 進 `.workspace-version`（對映 `pyprojectHash` 機制）；skill 依賴需通過 vendored registry 或觸發一次 `deps.add` 流程。
 4. 失敗策略沿用：單一 skill 編譯失敗 → 從 members 移除 + 警告診斷（不可拖垮整個 workspace——對映「install failure only warns」）。
+   整體 probe 失敗後，逐 skill probe 的 members／agent_lib 依賴與 re-export 只保留當前候選；來源掛載保留，供 path dependencies 使用。損壞或缺失的 manifest、無法解析的依賴只淘汰該 skill 與依賴它的 skills，不誤卸載無關的健康 skills。
    Scaffold 升級也先在 staged workspace 執行 skill probe，再編譯保留的 cell／library；未被使用的壞 skill 可卸載，保留的程式若仍依賴它，升級仍失敗並保留原 workspace。卸載會移除 symlink 與 manifest／re-export 掛載；child 繼承的實體來源目錄保留，修復後可於 reload 重新掛載。
 5. 掛載範圍（定案）：發現到的 skills **全部掛載**（對映現制全裝進 venv + 全 pre-import）；bundled skills 預編譯進模板，user/project skills 首次進 session 時編譯一次。
 

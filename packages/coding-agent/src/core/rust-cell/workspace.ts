@@ -332,11 +332,15 @@ function writeSkillsModRs(workspaceDir: string, skills: RustSkillMount[]): void 
 	writeFileSync(modPath, body ? `${SKILLS_MOD_HEADER}\n${body}\n` : SKILLS_MOD_HEADER);
 }
 
-function applySkillMounts(workspaceDir: string, skills: RustSkillMount[]): void {
-	writeSkillSymlinks(workspaceDir, skills);
+function writeSkillConfiguration(workspaceDir: string, skills: RustSkillMount[]): void {
 	writeWorkspaceMembers(workspaceDir, skills);
 	writeAgentLibSkillDeps(workspaceDir, skills);
 	writeSkillsModRs(workspaceDir, skills);
+}
+
+function applySkillMounts(workspaceDir: string, skills: RustSkillMount[]): void {
+	writeSkillSymlinks(workspaceDir, skills);
+	writeSkillConfiguration(workspaceDir, skills);
 }
 
 function probeBuild(workspaceDir: string, cargoBin: string, crate: string): { ok: boolean; message: string } {
@@ -379,6 +383,9 @@ export function syncRustSkills(
 		if (!agentLib.ok) {
 			// Attribute the breakage per skill, then remount only the healthy ones.
 			for (const skill of [...active]) {
+				// Cargo resolves all members even with -p. Keep only this skill in the
+				// generated config, but retain source mounts for its path dependencies.
+				writeSkillConfiguration(workspaceDir, [skill]);
 				const probe = probeBuild(workspaceDir, options.cargoBin, skill.crateName);
 				if (!probe.ok) {
 					failed.push({ name: skill.name, message: probe.message });

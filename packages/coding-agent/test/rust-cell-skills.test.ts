@@ -233,4 +233,68 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 		expect(result.status).toBe("ok");
 		expect(result.stdout).toContain("hello workspace");
 	});
+
+	it(
+		"isolates manifest and dependency failures without breaking healthy path dependencies",
+		{ timeout: 300_000 },
+		async () => {
+			const root = mkdtempSync(join(tmpdir(), "skills-manifest-"));
+			tempDirs.push(root);
+			const workspace = ensureWorkspaceAt(join(root, "workspace"));
+			const helper = writeSkillCrate(root, "healthy_helper", "pub fn value() -> u32 { 21 }\n");
+			const healthy = writeSkillCrate(
+				root,
+				"healthy_consumer",
+				"pub fn value() -> u32 { healthy_helper::value() * 2 }\n",
+			);
+			writeFileSync(
+				healthy.cargoTomlPath,
+				`${readFileSync(healthy.cargoTomlPath, "utf-8")}\n[dependencies]\nhealthy_helper = { path = "../healthy_helper" }\n`,
+			);
+			const broken = writeSkillCrate(root, "broken", "pub fn value() -> u32 { 7 }\n");
+			const dependent = writeSkillCrate(root, "broken_consumer", "pub fn value() -> u32 { broken::value() }\n");
+			writeFileSync(
+				dependent.cargoTomlPath,
+				`${readFileSync(dependent.cargoTomlPath, "utf-8")}\n[dependencies]\nbroken = { path = "../broken" }\n`,
+			);
+			const validManifest = readFileSync(broken.cargoTomlPath, "utf-8");
+			const skills = [healthy, helper, dependent, broken];
+			const options = { cargoBin: toolchain!.cargoBin };
+			const runner = new CellRunner({
+				cwd: root,
+				workspaceDir: workspace,
+				wasmedgeBin: toolchain!.wasmedgeBin,
+				cargoBin: toolchain!.cargoBin,
+				cellTimeoutMs: 240_000,
+			});
+
+			for (const manifest of [
+				"[package\n",
+				undefined,
+				`${validManifest}\n[dependencies]\nabsent = { path = "../absent" }\n`,
+			]) {
+				if (manifest === undefined) rmSync(broken.cargoTomlPath);
+				else writeFileSync(broken.cargoTomlPath, manifest);
+				const sync = syncRustSkills(workspace, skills, options);
+				expect(sync.mounted).toEqual(["healthy_consumer", "healthy_helper"]);
+				expect(sync.failed.map((failure) => failure.name)).toEqual(["broken_consumer", "broken"]);
+				const result = await runner.execute({
+					code: 'fn main() { println!("{}", agent_lib::skills::healthy_consumer::value()); }',
+				});
+				expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+				expect(result.stdout.trim()).toBe("42");
+			}
+
+			writeFileSync(broken.cargoTomlPath, validManifest);
+			const repaired = syncRustSkills(workspace, skills, options);
+			expect(repaired.mounted).toEqual(skills.map((skill) => skill.crateName));
+			expect(repaired.failed).toEqual([]);
+			expect(syncRustSkills(workspace, skills, options).changed).toBe(false);
+			const result = await runner.execute({
+				code: 'fn main() { println!("{}", agent_lib::skills::broken_consumer::value()); }',
+			});
+			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+			expect(result.stdout.trim()).toBe("7");
+		},
+	);
 });
