@@ -10,6 +10,7 @@ cell-as-program mode (group B, `rust` + WasmEdge) versus the ipython baseline
 bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
+├── launchers.ts  # agent entry-point resolution, fingerprints, and validation
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
 └── results/      # gitignored: plans/<planId>.json, locks/<planId>.lock, and runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
 ```
@@ -91,7 +92,7 @@ slot was registered; `startedAt` stays null until that run starts.
 After all run records are registered, the driver atomically publishes a
 separate `results/plans/<planId>.json` before launching the first agent.
 This inventory lists every expected run ID, task, model, group, resolved
-prompt variant, repetition, and task/provider-config fingerprint. Each
+prompt variant, repetition, task/provider-config fingerprints, and agent launcher pin. Each
 run's metadata links to it with `planId`. If saving the inventory fails,
 no agent starts. The inventory is not rewritten as runs progress.
 
@@ -126,6 +127,28 @@ and external tools remain outside the fingerprint. Matching hashes also do
 not prove both agent versions interpret the configuration identically.
 Boundary checks do not prevent host code from modifying and restoring a file
 between checks. This does not provide process or filesystem isolation.
+
+Before registering any run, the driver resolves each selected agent launcher
+to an absolute invocation path and records its symlink target and SHA-256 file
+hash as `launcherPath`, `launcherRealPath`, and `launcherHash` in both the run
+metadata and plan. A/B use `BENCH_PRIME_AGENT` (default `prime-agent`); F uses
+the repository's `wasmedge-agent.sh`. Bare commands use the driver's current
+`PATH`; relative paths and relative PATH entries resolve from the driver's
+working directory. All selected launchers must be readable executable regular
+files, including for `--plan-only`. Planning reads them without executing them.
+
+Daemons and clients run the recorded absolute invocation path. The driver
+checks file content, resolved target, and executable access before setup and
+launch, around each turn, and before/after checking the task. A mismatch is a
+driver error with no acceptance result; later turns do not start. Turn-boundary
+verification overhead is included in `wallMs`.
+
+This pins only the entry-point file, not a transitive installation. A shell
+wrapper's source tree, PoC extension, packages, interpreter, template, Cargo,
+WasmEdge, shared libraries, environment, and provider routing are still external
+inputs. No executable version probe or full runtime snapshot is performed.
+Concurrent changes between checks can escape detection; these are local
+experiment records, not tamper-proof attestations.
 
 The driver changes the record to `running` before run setup, checkpoints
 completed turns, then records `completed` after task checking or
@@ -165,6 +188,10 @@ records, duplicate slots, mismatched paths or fields, changed pending inputs,
 and `planned` records with execution artifacts or nonempty execution fields
 stop the invocation without starting a run. Resume requires the original
 absolute results location; it does not relocate archived sessions.
+Pending launchers must also match their saved path/target/hash and remain
+executable. Resume uses those saved paths, ignoring a changed
+`BENCH_PRIME_AGENT` or PATH lookup for the agent entry point. It does not
+override PATH for interpreters or commands invoked by a wrapper.
 
 Completed runs are skipped, including failed task checks and timeouts.
 `running` and `error` runs are also skipped, preserving all partial evidence;
@@ -183,11 +210,15 @@ processes, confirm they have stopped, then remove only that plan's stale lock
 before resuming. Do not kill a process based only on a saved PID. Older plans
 without the locking marker remain analyzable but cannot be resumed, because
 their original executor did not participate in this lock protocol.
+New plans also record `launcherPinVersion: 1`; plans without this marker remain
+analyzable but cannot resume because their original launcher identity is unknown.
+Completed/running/error slots retain their evidence without inspecting the
+current launcher file; only pending slots can execute and require that file.
 
 The lock and local records are not tamper-proof or a host security boundary.
-Resumed runs use the current executables, toolchains, environment, and provider
-routing; only task/config snapshot bytes are pinned. Use the same external
-environment when continuing an experiment.
+Resumed runs use pinned agent entry points and task/config snapshot bytes,
+but still use current wrapper dependencies, toolchains, environment, and provider
+routing. Use the same external environment when continuing an experiment.
 
 ## Metrics (analyze.ts)
 
@@ -321,6 +352,17 @@ so even those differences conservatively prevent comparison. Different
 models may use different files if each model's baseline and treatment match;
 B variants are still evaluated separately. The analyzer compares recorded
 fingerprints and does not resolve environment-dependent settings.
+
+For records with launcher pins, each condition must use one consistent
+invocation path, resolved target, and file hash across its runs. Baseline and
+treatment launchers can differ. Mixing identities within a condition, or mixing
+pinned and unpinned evidence in a comparison, withholds D20 verdicts. Malformed
+pins or discrepancies between plan and run metadata invalidate the inventory.
+The CSV appends `launcherHash`; paths stay in the plan and run metadata. Analysis
+uses recorded identities without reading today's executable, so archived results
+remain readable after uninstalling it. Legacy-only comparisons keep their prior
+evidence rules and are explicitly reported as not verifying launchers. This
+limitation also applies to legacy evidence checked with `--d21`.
 
 Unavailable metrics are blank in the per-run CSV and `n/a` in the summary.
 The appended `sessionStatus` CSV column distinguishes `ok` (parsed, with at

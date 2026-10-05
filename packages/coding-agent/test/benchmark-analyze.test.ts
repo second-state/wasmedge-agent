@@ -17,6 +17,7 @@ function fixture() {
 	// these offline fixtures never read or overwrite a user's benchmark runs.
 	const analyzer = join(root, "analyze.ts");
 	copyFileSync(join(repo, "poc/bench/analyze.ts"), analyzer);
+	copyFileSync(join(repo, "poc/bench/launchers.ts"), join(root, "launchers.ts"));
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
 	mkdirSync(join(root, "results/runs"), { recursive: true });
 	let nextId = 0;
@@ -28,16 +29,33 @@ function fixture() {
 				const meta = JSON.parse(readFileSync(path, "utf-8"));
 				writeFileSync(path, JSON.stringify({ ...meta, planId }));
 				return Object.fromEntries(
-					["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"].map((key) => [
-						key,
-						meta[key],
-					]),
+					[
+						"runId",
+						"task",
+						"taskHash",
+						"providerConfigHash",
+						"model",
+						"group",
+						"variant",
+						"rep",
+						"launcherPath",
+						"launcherRealPath",
+						"launcherHash",
+					].map((key) => [key, meta[key]]),
 				);
 			});
 			const dir = join(root, "results/plans");
 			mkdirSync(dir, { recursive: true });
 			const path = join(dir, `${planId}.json`);
-			writeFileSync(path, JSON.stringify({ version: 1, planId, runs }));
+			writeFileSync(
+				path,
+				JSON.stringify({
+					version: 1,
+					planId,
+					runs,
+					launcherPinVersion: runs.some((run) => run.launcherHash !== undefined) ? 1 : undefined,
+				}),
+			);
 			return path;
 		},
 		add({
@@ -166,6 +184,105 @@ function overall(stdout: string) {
 	expect(section, "missing overall D20 summary").toBeDefined();
 	return section!;
 }
+
+describe("benchmark launcher evidence", () => {
+	function addPinned(f: ReturnType<typeof fixture>, group: string, override: Record<string, unknown> = {}) {
+		const run = f.add({ group, tokensOut: 100 });
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		writeFileSync(
+			run.metaPath,
+			JSON.stringify({
+				...meta,
+				launcherPath: `/bench/${group}`,
+				launcherRealPath: `/bench/installed/${group}`,
+				launcherHash: `sha256:${(group === "A" ? "a" : "f").repeat(64)}`,
+				...override,
+			}),
+		);
+		return run;
+	}
+
+	it("compares distinct baseline/treatment launchers without accessing current executable files", () => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F");
+		f.registerPlan();
+		const { stdout, csv } = f.run();
+		expect(stdout).toContain("Agent launcher pins: 2/2 records");
+		expect(stdout).toContain("F: pass 100% vs A 100% OK; tokensOut 100 vs A 100 OK → GO");
+		expect(csvRows(csv).map((row) => row.launcherHash)).toEqual([
+			`sha256:${"a".repeat(64)}`,
+			`sha256:${"f".repeat(64)}`,
+		]);
+	});
+
+	it.each([
+		{ launcherPath: "/another/entry" },
+		{ launcherRealPath: "/another/target" },
+		{ launcherHash: `sha256:${"e".repeat(64)}` },
+	])("withholds verdicts for mixed identities within a condition: %j", (override) => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F");
+		addPinned(f, "F", override);
+		f.registerPlan();
+		const { stdout } = f.run();
+		expect(stdout).toContain("Run inventory: 3/3 planned records match");
+		expect(stdout).toContain("agent launcher fingerprints incomplete or inconsistent — no verdict");
+		expect(stdout).not.toContain("→ GO");
+	});
+
+	it.each([false, true])(
+		"withholds comparisons mixing pinned and legacy evidence (same condition: %s)",
+		(sameCondition) => {
+			const f = fixture();
+			f.add({ group: "A", tokensOut: 100 });
+			addPinned(f, "F");
+			if (sameCondition) f.add({ group: "F", tokensOut: 100 });
+			const { stdout } = f.run();
+			expect(stdout).toContain("agent launcher fingerprints incomplete or inconsistent — no verdict");
+			expect(stdout).not.toContain("→ GO");
+		},
+	);
+
+	it.each([{ launcherPath: "relative/path" }, { launcherRealPath: null }, { launcherHash: "unknown" }])(
+		"rejects malformed recorded launcher evidence: %j",
+		(override) => {
+			const f = fixture();
+			addPinned(f, "A");
+			addPinned(f, "F", override);
+			f.registerPlan();
+			const { stdout } = f.run();
+			expect(stdout).toContain("invalid agent launcher pin");
+			expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+		},
+	);
+
+	it.each(["launcherPath", "launcherRealPath", "launcherHash"])("checks %s against the saved inventory", (key) => {
+		const f = fixture();
+		addPinned(f, "A");
+		const run = addPinned(f, "F");
+		f.registerPlan();
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		delete meta[key];
+		writeFileSync(run.metaPath, JSON.stringify(meta));
+		const { stdout } = f.run();
+		expect(stdout).toContain("run record differs from plan");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+	});
+
+	it.each([undefined, 99])("rejects pinned plans without a supported pin version: %s", (launcherPinVersion) => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F");
+		const path = f.registerPlan();
+		const plan = JSON.parse(readFileSync(path, "utf-8"));
+		writeFileSync(path, JSON.stringify({ ...plan, launcherPinVersion }));
+		const { stdout } = f.run();
+		expect(stdout).toContain("invalid agent launcher pins in plan");
+		expect(stdout).not.toMatch(/→ (GO|NO-GO)/);
+	});
+});
 
 describe("benchmark run inventory", () => {
 	it("retains D20 verdicts for complete plans and identifies their CSV records", () => {

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+	appendFileSync,
 	chmodSync,
 	copyFileSync,
 	existsSync,
@@ -7,6 +9,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -40,7 +43,8 @@ function fixture({ mode = "ok", config = true, turns = ["first"], check = "exit 
 	const home = join(root, "home");
 	const temp = join(root, "tmp");
 	for (const dir of [task, join(home, ".wasmedge-agent"), temp]) mkdirSync(dir, { recursive: true });
-	for (const name of ["run.ts", "analyze.ts"]) copyFileSync(join(repo, "poc/bench", name), join(bench, name));
+	for (const name of ["run.ts", "analyze.ts", "launchers.ts"])
+		copyFileSync(join(repo, "poc/bench", name), join(bench, name));
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
 	writeFileSync(join(task, "task.json"), JSON.stringify({ category: "fixture", turns, timeoutMs }));
 	writeFileSync(join(task, "check.sh"), check);
@@ -62,6 +66,10 @@ const socketPath = process.argv[process.argv.indexOf("--daemon-socket") + 1];
 const record = (event) => appendFileSync(events, JSON.stringify({ event, socketPath, pid: process.pid }) + "\\n");
 if (process.argv.includes("daemon")) {
   record("start");
+  if (mode === "edit-launcher-on-start") {
+    const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
+    appendFileSync(meta.launcherPath, "\\n");
+  }
   if (mode === "edit-provider-on-start") writeFileSync(join(agentDir, "models.json"), "{}");
   if (mode === "observe-plan") {
     const runs = join(agentDir, "../..");
@@ -92,6 +100,10 @@ if (process.argv.includes("daemon")) {
 } else {
 record("turn");
 console.log("fixture turn");
+if (mode === "edit-launcher-turn") {
+  const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
+  appendFileSync(meta.launcherPath, "\\n");
+}
 if (mode === "resume-while-running") {
   const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
   const attempt = spawnSync(process.execPath, ["--experimental-strip-types", ${JSON.stringify(join(bench, "run.ts"))}, "--resume-plan", meta.planId], { encoding: "utf-8", timeout: 2000 });
@@ -168,6 +180,8 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	};
 	return {
 		fake,
+		fork: join(realpathSync(root), "wasmedge-agent.sh"),
+		env,
 		temp,
 		plansDir: join(bench, "results/plans"),
 		locksDir: join(bench, "results/locks"),
@@ -643,9 +657,9 @@ describe("offline benchmark driver", () => {
 		expect(f.metas()).toEqual([]);
 		expect(f.hasEvents()).toBe(false);
 	});
-	it("records an executable spawn failure and its log", () => {
+	it("records an interpreter spawn failure and its log", () => {
 		const f = fixture();
-		rmSync(f.fake);
+		writeFileSync(f.fake, "#!/nonexistent-benchmark-interpreter\n");
 		expect(f.run().status).toBe(1);
 		const [meta] = f.metas();
 		expect(meta).toMatchObject({ driverStatus: "error", checkPass: null, turnExitCodes: [], sessionFile: null });
@@ -689,7 +703,7 @@ describe("offline benchmark driver", () => {
 		expect(f.run().status).toBe(1);
 		const [meta] = f.metas();
 		expect(meta).toMatchObject({ driverStatus: "error", checkPass: null, turnExitCodes: [0] });
-		expect(meta.driverError).toContain("ENOENT");
+		expect(meta.driverError).toContain("agent launcher changed or is unavailable");
 		expect(readFileSync(meta.sessionFile, "utf-8")).toContain('"output":100');
 		const { csv, stdout } = f.analyze();
 		expect(csv).toContain(",error");
@@ -742,6 +756,159 @@ describe("offline benchmark driver", () => {
 			checkPass: false,
 			turnExitCodes: [-1],
 		});
+	});
+});
+
+describe("benchmark agent launcher pins", () => {
+	it("records the selected executable path, symlink target, and file bytes for all groups", () => {
+		const f = fixture();
+		const result = f.run(1, "A,B,F", ["--plan-only"]);
+		expect(result.status, result.stderr).toBe(0);
+		for (const meta of f.metas()) {
+			const path = meta.group === "F" ? f.fork : f.fake;
+			expect(meta).toMatchObject({
+				launcherPath: path,
+				launcherRealPath: realpathSync(path),
+				launcherHash: `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`,
+			});
+			const plan = JSON.parse(readFileSync(join(f.plansDir, `${meta.planId}.json`), "utf-8"));
+			expect(plan.launcherPinVersion).toBe(1);
+			expect(plan.runs.find((slot: { runId: string }) => slot.runId === meta.runId)).toMatchObject({
+				launcherPath: meta.launcherPath,
+				launcherRealPath: meta.launcherRealPath,
+				launcherHash: meta.launcherHash,
+			});
+		}
+		expect(f.hasEvents()).toBe(false);
+	});
+
+	it("resolves PATH once and resumes the pinned invocation path instead of the current override", () => {
+		const f = fixture();
+		const entry = join(dirname(f.fake), "bench-agent");
+		symlinkSync(f.fake, entry);
+		mkdirSync(join(f.temp, "bench-agent"));
+		f.env.PATH = `${f.temp}:${dirname(f.fake)}:${f.env.PATH}`;
+		f.env.BENCH_PRIME_AGENT = "bench-agent";
+		expect(f.run(1, "A", ["--plan-only"]).status).toBe(0);
+		const [meta] = f.metas();
+		expect(meta.launcherPath).toBe(entry);
+		expect(meta.launcherRealPath).toBe(realpathSync(f.fake));
+		f.env.BENCH_PRIME_AGENT = "missing-new-override";
+		f.env.PATH = `${dirname(process.execPath)}:/usr/bin:/bin`;
+		const result = f.resume(meta.planId);
+		expect(result.status, result.stderr).toBe(0);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "completed", checkPass: true, launcherPath: entry });
+	});
+
+	it.each(["missing", "not executable", "directory"])("rejects a %s launcher before planning any run", (problem) => {
+		const f = fixture();
+		if (problem === "not executable") chmodSync(f.fork, 0o644);
+		else {
+			rmSync(f.fork);
+			if (problem === "directory") mkdirSync(f.fork);
+		}
+		const result = f.run(1, "A,F", ["--plan-only"]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("agent launcher is missing, unreadable, or not executable");
+		expect(f.metas()).toEqual([]);
+		expect(f.hasEvents()).toBe(false);
+	});
+
+	it.each(["bytes", "target", "permission", "missing"])(
+		"rejects changed %s in a later pending launcher before any execution",
+		(problem) => {
+			const f = fixture();
+			const original = readFileSync(f.fork);
+			expect(f.run(1, "A,F", ["--plan-only"]).status).toBe(0);
+			const before = f.metas();
+			if (problem === "bytes") appendFileSync(f.fork, "\n");
+			if (problem === "permission") chmodSync(f.fork, 0o644);
+			if (problem === "missing") rmSync(f.fork);
+			if (problem === "target") {
+				const replacement = join(f.temp, "replacement.sh");
+				writeFileSync(replacement, original, { mode: 0o755 });
+				rmSync(f.fork);
+				symlinkSync(replacement, f.fork);
+			}
+			const result = f.resume(before[0].planId);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain("agent launcher changed or is unavailable");
+			expect(f.hasEvents()).toBe(false);
+			expect(f.metas()).toEqual(before);
+		},
+	);
+
+	it.each(["A", "B", "F"])("detects changed %s launchers before another client or repetition runs", (group) => {
+		for (const mode of ["edit-launcher-on-start", "edit-launcher-turn"]) {
+			const f = fixture({ mode, turns: ["first", "second"], check: 'touch "$PROJECT_DIR/checked"' });
+			const result = f.run(2, group);
+			expect(result.status, result.stdout + result.stderr).toBe(1);
+			const metas = f.metas();
+			for (const meta of metas) {
+				expect(meta).toMatchObject({ driverStatus: "error", checkPass: null });
+				expect(meta.driverError).toContain("agent launcher changed or is unavailable");
+				expect(existsSync(join(meta.runDir, "project/checked"))).toBe(false);
+			}
+			expect(metas.find((meta) => meta.rep === 2).daemonPid).toBeNull();
+			expect(f.events().map((event) => event.event)).toEqual(
+				mode === "edit-launcher-on-start" ? ["start", "stop"] : ["start", "turn", "stop"],
+			);
+		}
+	});
+
+	it("does not accept task checks that change the launcher", () => {
+		const f = fixture({
+			check: `node <<'JS'
+const fs = require("node:fs");
+const meta = JSON.parse(fs.readFileSync(process.env.PROJECT_DIR + "/../meta.json", "utf-8"));
+fs.appendFileSync(meta.launcherPath, "\\n");
+JS`,
+		});
+		expect(f.run().status).toBe(1);
+		expect(f.metas()[0]).toMatchObject({ driverStatus: "error", checkPass: null });
+		expect(f.metas()[0].driverError).toContain("agent launcher changed or is unavailable");
+	});
+
+	it("retains completed evidence without requiring its launcher to remain installed", () => {
+		const f = fixture();
+		expect(f.run().status).toBe(0);
+		const [meta] = f.metas();
+		rmSync(f.fake);
+		expect(f.resume(meta.planId).status).toBe(0);
+		expect(f.metas()[0]).toEqual(meta);
+		expect(f.analyze().stdout).toContain("Agent launcher pins: 1/1 records");
+	});
+
+	it("withholds comparisons that pool different recorded launchers within a condition", () => {
+		const f = fixture();
+		expect(f.run(1, "A,F").status).toBe(0);
+		appendFileSync(f.fork, "\n");
+		expect(f.run(1, "A,F").status).toBe(0);
+		const { stdout, csv } = f.analyze();
+		expect(stdout).toContain("agent launcher fingerprints incomplete or inconsistent — no verdict");
+		expect(stdout).not.toContain("→ GO");
+		expect(csv.split("\n")[0].endsWith(",launcherHash")).toBe(true);
+		for (const meta of f.metas()) expect(csv).toContain(meta.launcherHash);
+	});
+
+	it("leaves unpinned legacy plans analyzable but does not resume them", () => {
+		const f = fixture();
+		expect(f.run(1, "A", ["--plan-only"]).status).toBe(0);
+		const [meta] = f.metas();
+		const planPath = join(f.plansDir, `${meta.planId}.json`);
+		const plan = JSON.parse(readFileSync(planPath, "utf-8"));
+		delete plan.launcherPinVersion;
+		for (const key of ["launcherPath", "launcherRealPath", "launcherHash"]) {
+			delete meta[key];
+			delete plan.runs[0][key];
+		}
+		writeFileSync(planPath, JSON.stringify(plan));
+		writeFileSync(join(meta.runDir, "meta.json"), JSON.stringify(meta));
+		const result = f.resume(meta.planId);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("no supported agent launcher pin");
+		expect(f.hasEvents()).toBe(false);
+		expect(f.analyze().stdout).toContain("Run inventory: 1/1 planned records match");
 	});
 });
 
