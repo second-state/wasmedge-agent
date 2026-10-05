@@ -353,11 +353,11 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 ```
 <rust_state_restored>
-Your persistent workspace was restored. state keys: {keys}. agent_lib functions (source scan): {fns}.
+Your persistent workspace was restored. state keys: {keys}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
 </rust_state_restored>
 ```
 
-（`{fns}` 由 host 從 `agent_lib/src/lib.rs` 沿公開模組宣告做來源掃描，列出相對於 `agent_lib` 的公開自由函式路徑，包含 async／const／unsafe 函式及巢狀、inline modules。通知標示為 source scan；不是完整 API 內省或編譯驗證。不列出 impl／trait 方法、re-exports、macro 產物，以及帶 cfg／cfg_attr／path 屬性的項目；Phase 2 換 rustdoc JSON。）
+（Host 從 `agent_lib/src/lib.rs` 沿公開模組宣告做來源掃描，列出相對於 `agent_lib` 的路徑。`{fns}` 包含公開自由函式（含 async／const／unsafe）；`{types}` 包含公開 struct／enum／union／type alias／trait（含 unsafe trait）。兩者都涵蓋巢狀、inline modules；resume 與 compaction 通知均標示為 source scan。只列型別名稱，不列欄位、variants、方法或簽名，也不是完整 API 內省或編譯驗證。不解析 re-exports、macro 產物，以及帶 cfg／cfg_attr／path 屬性的項目；Phase 2 rustdoc JSON backend 仍未落實。）
 
 ### 2.9 Rich output 與串流
 
@@ -572,7 +572,7 @@ Host 端 `AgentSession.runRlmChild()` 的 8 步流程（depth 檢查→model 解
 
 ```
 <rust_state>
-Your workspace persisted through compaction. state keys: {keys}. agent_lib API: {fns}.
+Your workspace persisted through compaction. state keys: {keys}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
 </rust_state>
 ```
 
@@ -720,7 +720,7 @@ wasmedge-agent/
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
-- **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
+- **rustdoc JSON 內省（未落實）**：`listPersistentState` 與 skills XML 的 API 列表預計改由 rustdoc JSON 供給。目前 resume／compaction 的 source scan 已列公開函式與型別名稱（§2.8）；不涵蓋完整簽名、associated items 或 re-exports。
 - **Workspace 唯讀模式（已落實，2026-10-05）**：`rustCell.workspaceWritePolicy: "rw" | "ro"`，預設 rw；ro 時以 WasmEdge `:readonly` 掛載 `/workspace`，教義改為產 patch，由既有 host bash 套用；無 bash 時交回 caller。設定經 session／child／SDK／runner 傳遞，修改後 restart 或 `/reload`；無效值拒絕啟動。`/agent/state`、`/scratch` 與宣告式 lib 修改仍可寫。編譯與執行前檢查 state/scratch 不得與 project 重疊（含 symlink root），拒絕含冒號的 host mount 路徑以避免 CLI 解析歧義，沒有 rw fallback。此限制只涵蓋 guest execution；Cargo、bash、host handlers 保留 host 權限，host hard links／並行 filesystem 變更不在保證內。未增加 patch approval gate，也尚未實作 trajectory replay。
 - **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。Project-local `skills.package` scaffold 已落實，reload 與登錄測試仍分開執行；一般 cell 已共用 import 白名單並改用 stdio bridge（§2.7）。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。

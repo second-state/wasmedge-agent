@@ -41,7 +41,7 @@ Each `rust` tool call runs one complete program:
 5. Execution has explicit preopens: the project at `/workspace` (writable by default, read-only with `rustCell.workspaceWritePolicy: "ro"`), persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks library readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
 6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
 
-No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and functions promoted into `agent_lib`, are available to every later cell.
+No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and code promoted into `agent_lib`, are available to every later cell.
 
 Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example.
 
@@ -58,6 +58,18 @@ The host first resolves against the workspace's existing vendor directory offlin
 Discovered Rust skills are mounted into the clone as `skills/<crate>` symlinks and re-exported through `agent_lib::skills`; a skill that fails its probe build is unmounted with a diagnostic instead of breaking cells. See [Skills](skills.md).
 
 Persisted workspaces have their own local Git repository with an initial snapshot and a commit after each successful cell. Commits record the cell source, library and runtime sources, manifests, skill mounts, and `state/` (including blobs); messages contain a sequence number and tool-call ID. Build caches, vendored dependencies, and scratch files are excluded. External skill symlinks record the mount, not the external source contents. Project files and harness stores are outside this repository. Failed cells do not create cell snapshots; an earlier successful dependency addition keeps its own snapshot. Snapshots do not roll back runtime side effects. A Git failure after successful execution is reported separately in the tool result without rerunning the cell. Non-persistent sessions do not initialize Git.
+
+Resume and compaction notices list public free functions and type names found
+by scanning `agent_lib/src/lib.rs` and its public modules. Types include structs,
+enums, unions, type aliases, and traits (including unsafe traits). Paths are
+relative to `agent_lib`, including nested and inline modules. A workspace with
+only public types still receives a restore notice. Listings reflect current
+source files, including applied or reverted library edits.
+
+These notices are labeled **source scan**. They do not compile the library or
+report fields, variants, signatures, associated items, re-exports, or generated
+API. Items with `cfg`, `cfg_attr`, or custom `path` attributes are omitted rather
+than evaluated. Full rustdoc JSON introspection remains planned.
 
 Toolchain resolution:
 

@@ -18,7 +18,7 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cargoEnvironment } from "./cargo-environment.js";
-import { listLibraryFunctions } from "./library-api.js";
+import { listLibraryApi } from "./library-api.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
 
@@ -192,6 +192,8 @@ export interface PersistentStateListing {
 	blobNames: string[];
 	/** Source-discovered public free functions, relative to agent_lib. Not a complete API inventory. */
 	libFunctions: string[];
+	/** Source-discovered public structs, enums, unions, aliases, and traits. Optional for older callers. */
+	libTypes?: string[];
 }
 
 /** Host-side view of guest-persistent state for compaction/resume notices
@@ -212,7 +214,9 @@ export function listPersistentState(workspaceDir: string): PersistentStateListin
 			.filter((name) => !name.endsWith(".tmp"))
 			.sort();
 	}
-	listing.libFunctions = listLibraryFunctions(join(workspaceDir, "agent_lib", "src"));
+	const api = listLibraryApi(join(workspaceDir, "agent_lib", "src"));
+	listing.libFunctions = api.functions;
+	listing.libTypes = api.types;
 	return listing;
 }
 

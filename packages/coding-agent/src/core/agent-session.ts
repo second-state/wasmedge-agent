@@ -6776,9 +6776,12 @@ export class AgentSession {
 			listing.libFunctions.length > 0
 				? ` agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`
 				: "";
+		const typeDetail = listing.libTypes?.length
+			? ` agent_lib types (source scan): ${listing.libTypes.join(", ")}.`
+			: "";
 		const content = [
 			"<rust_state>",
-			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${libDetail}`,
+			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${libDetail}${typeDetail}`,
 			"</rust_state>",
 		].join("\n");
 		const message = {
@@ -6808,7 +6811,12 @@ export class AgentSession {
 	 * Delivered as context before the next turn.
 	 */
 	private _notifyWorkspaceRestored(listing: PersistentStateListing): void {
-		if (listing.stateKeys.length === 0 && listing.libFunctions.length === 0 && listing.blobNames.length === 0) {
+		if (
+			listing.stateKeys.length === 0 &&
+			listing.libFunctions.length === 0 &&
+			!listing.libTypes?.length &&
+			listing.blobNames.length === 0
+		) {
 			return;
 		}
 		const lines = ["<rust_state_restored>"];
@@ -6817,6 +6825,7 @@ export class AgentSession {
 		if (listing.blobNames.length > 0) lines.push(`state blobs: ${listing.blobNames.join(", ")}.`);
 		if (listing.libFunctions.length > 0)
 			lines.push(`agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`);
+		if (listing.libTypes?.length) lines.push(`agent_lib types (source scan): ${listing.libTypes.join(", ")}.`);
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{

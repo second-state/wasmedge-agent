@@ -152,7 +152,91 @@ pub mod inner_cfg;
 			stateKeys: ["a", "z"],
 			blobNames: ["a", "z"],
 			libFunctions: ["helpers::ok"],
+			libTypes: [],
 		});
+	});
+
+	it("lists public type declarations through file and inline modules", () => {
+		const dir = workspace({
+			"lib.rs": "pub mod helpers; pub struct Root;",
+			"helpers/mod.rs": "pub mod types; pub mod nested { pub mod child; pub enum State { Ready } }",
+			"helpers/types.rs": `
+pub struct Record<T> { pub value: T }
+pub struct Pair(pub u32, pub u32);
+pub struct Unit;
+pub enum Choice<T> { Some(T), None }
+pub union Bits { pub int: u32, pub float: f32 }
+pub type Rows<T> = Vec<Vec<T>>;
+pub trait Reader<'a> { type Output; fn read(&self) -> Self::Output; }
+pub unsafe trait Trusted {}
+pub /* comment */ struct r#type;
+pub type 中文 = u32;
+pub fn make() -> Unit { Unit }
+`,
+			"helpers/nested/child.rs": "pub type Id = u64;",
+		});
+		expect(listPersistentState(dir)).toMatchObject({
+			libTypes: [
+				"Root",
+				"helpers::nested::State",
+				"helpers::nested::child::Id",
+				"helpers::types::Bits",
+				"helpers::types::Choice",
+				"helpers::types::Pair",
+				"helpers::types::Reader",
+				"helpers::types::Record",
+				"helpers::types::Rows",
+				"helpers::types::Trusted",
+				"helpers::types::Unit",
+				"helpers::types::r#type",
+				"helpers::types::中文",
+			],
+			libFunctions: ["helpers::types::make"],
+		});
+	});
+
+	it("omits private, restricted, conditional, re-exported, and generated types", () => {
+		const dir = workspace({
+			"helpers/mod.rs": `
+struct Private;
+pub(crate) struct CrateOnly;
+pub(super) type ParentOnly = u32;
+pub(in crate::helpers) trait Restricted {}
+mod hidden { pub struct Hidden; }
+pub use hidden::Hidden as Reexported;
+#[cfg(test)] pub struct TestOnly;
+#[cfg_attr(feature = "hidden", cfg(any()))] pub enum Conditional {}
+#[path = "types.rs"] pub mod custom;
+pub mod inner_cfg;
+pub mod broken;
+macro_rules! declare { () => { pub struct Generated; }; }
+declare! { pub enum Input {} }
+pub fn outer() { pub struct Local; }
+pub trait Visible { type Associated; fn method(); }
+impl Visible for Private { type Associated = u32; fn method() {} }
+// pub struct LineComment;
+/* pub enum BlockComment {} */
+pub const TEXT: &str = "pub struct Literal;";
+#[doc = "pub type Doc = u32;"]
+pub struct Actual;
+`,
+			"helpers/inner_cfg.rs": "#![cfg(any())] pub struct Disabled;",
+			"helpers/types.rs": "pub struct CustomPath;",
+			"helpers/broken.rs": "pub struct Incomplete {",
+			"helpers/orphan.rs": "pub struct Undeclared;",
+		});
+		expect(listPersistentState(dir)).toMatchObject({
+			libTypes: ["helpers::Actual", "helpers::Visible"],
+			libFunctions: ["helpers::outer"],
+		});
+	});
+
+	it("reflects applied and reverted type edits without stale entries", () => {
+		const dir = workspace({ "helpers/mod.rs": "pub struct Previous;" });
+		const applied = applyLib(dir, [{ path: "src/helpers/new.rs", content: "pub enum Added { Ready }" }]);
+		expect(listPersistentState(dir).libTypes).toEqual(["helpers::new::Added"]);
+		revertLib(applied);
+		expect(listPersistentState(dir).libTypes).toEqual(["helpers::Previous"]);
 	});
 
 	it("terminates on cyclic module symlinks", () => {
