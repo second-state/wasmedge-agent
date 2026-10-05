@@ -9,6 +9,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { launcherFields, launcherIdentity } from "./launchers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
@@ -77,6 +78,8 @@ interface RunMetrics {
 	task: string;
 	taskHash: string | null;
 	providerConfigHash: string | null;
+	launcherHash: string | null;
+	launcherIdentity: string | null;
 	category: string;
 	group: string;
 	model: string;
@@ -264,12 +267,18 @@ for (const metaPath of existsSync(RUNS_DIR) ? findMetaFiles(RUNS_DIR) : []) {
 		continue;
 	}
 	inventoryRecords.push({ path: metaPath, meta });
+	const launcher = launcherIdentity(meta);
+	if (launcherFields.some((key) => meta[key] !== undefined) && !launcher) {
+		inventoryIssues.push(`invalid agent launcher pin: ${metaPath}`);
+	}
 	const m: RunMetrics = {
 		runId: meta.runId,
 		planId: typeof meta.planId === "string" ? meta.planId : null,
 		task: meta.task,
 		taskHash: typeof meta.taskHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.taskHash) ? meta.taskHash : null,
 		providerConfigHash: typeof meta.providerConfigHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.providerConfigHash) ? meta.providerConfigHash : null,
+		launcherHash: launcher ? meta.launcherHash : null,
+		launcherIdentity: launcher,
 		category: meta.category,
 		group: meta.group,
 		model: meta.model,
@@ -300,7 +309,7 @@ for (const metaPath of existsSync(RUNS_DIR) ? findMetaFiles(RUNS_DIR) : []) {
 }
 
 // Plans are locally recorded inventories, not tamper-proof attestations.
-const slotFields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"] as const;
+const slotFields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep", ...launcherFields] as const;
 const expectedRuns = new Map<string, { planId: string; slot: Record<string, unknown> }>();
 const planIds = new Set<string>();
 function validSlot(slot: unknown): slot is Record<string, unknown> {
@@ -322,6 +331,13 @@ for (const name of existsSync(PLANS_DIR) ? readdirSync(PLANS_DIR).sort() : []) {
 	if (!isRecord(plan) || plan.version !== 1 || typeof plan.planId !== "string" || !plan.planId ||
 		name !== `${plan.planId}.json` || !Array.isArray(plan.runs) || !plan.runs.length || !plan.runs.every(validSlot)) {
 		inventoryIssues.push(`invalid plan: ${name}`);
+		continue;
+	}
+	if (plan.launcherPinVersion !== undefined && plan.launcherPinVersion !== 1 ||
+		plan.runs.some((slot) => plan.launcherPinVersion === 1
+			? !launcherIdentity(slot)
+			: launcherFields.some((key) => slot[key] !== undefined))) {
+		inventoryIssues.push(`invalid agent launcher pins in plan: ${name}`);
 		continue;
 	}
 	planIds.add(plan.planId);
@@ -360,6 +376,7 @@ for (const [runId, { planId, slot }] of expectedRuns) {
 	}
 }
 console.log(`Run inventory: ${matchedRuns}/${expectedRuns.size} planned records match; ${inventoryRecords.filter(({ meta }) => meta.planId === undefined).length} legacy records without a plan.`);
+console.log(`Agent launcher pins: ${runs.filter((run) => run.launcherIdentity !== null).length}/${runs.length} records. Legacy-only comparisons do not verify launchers; wrapper dependencies and toolchains are not pinned.`);
 if (inventoryIssues.length) {
 	console.log("Run inventory incomplete or inconsistent; aggregates describe discovered records only. All D20 verdicts are withheld.");
 	for (const issue of inventoryIssues) console.log(`  ${issue}`);
@@ -415,7 +432,7 @@ if (d21Profile) {
 // Per-run CSV
 const csvPath = resolve(options.get("--csv") ?? join(HERE, "results", "bench.csv"));
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId,launcherHash";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -445,6 +462,7 @@ const rows = runs.map((m) => {
 		m.taskHash,
 		m.providerConfigHash,
 		m.planId,
+		m.launcherHash,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -456,6 +474,7 @@ interface Agg {
 	taskCounts: Map<string, number> | null;
 	taskVersions: Map<string, string> | null;
 	providerConfigHash: string | null;
+	launcherStatus: "legacy" | "recorded" | "inconsistent";
 	passRate: number | null;
 	tokensOutMedian: number | null;
 	tokensInMedian: number | null;
@@ -525,6 +544,8 @@ for (const [key, ms] of byCondition) {
 		taskCounts: countTasks(ms),
 		taskVersions: taskVersions(ms),
 		providerConfigHash: new Set(ms.map((m) => m.providerConfigHash)).size === 1 ? ms[0].providerConfigHash : null,
+		launcherStatus: new Set(ms.map((m) => m.launcherIdentity)).size !== 1
+			? "inconsistent" : ms[0].launcherIdentity === null ? "legacy" : "recorded",
 		passRate: complete && scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: complete ? median(ms.map((m) => m.tokensOut)) : null,
 		tokensInMedian: complete ? median(ms.map((m) => m.tokensIn)) : null,
@@ -613,6 +634,9 @@ function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
 	if (!sameTaskVersions(a, b)) return noVerdict("task versions differ");
 	if (!a.providerConfigHash || !b.providerConfigHash) return noVerdict("provider config fingerprints incomplete or inconsistent");
 	if (a.providerConfigHash !== b.providerConfigHash) return noVerdict("provider configs differ");
+	if (a.launcherStatus === "inconsistent" || b.launcherStatus === "inconsistent" || a.launcherStatus !== b.launcherStatus) {
+		return noVerdict("agent launcher fingerprints incomplete or inconsistent");
+	}
 	if (a.passRate === null || b.passRate === null) return noVerdict("checks incomplete");
 	if (a.tokensOutMedian === null || b.tokensOutMedian === null) return noVerdict("output usage incomplete");
 	const passOk = b.passRate >= a.passRate - 0.15;

@@ -21,6 +21,7 @@ import { createConnection } from "node:net";
 import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type AgentLauncher, launcherFields, launcherIdentity, resolveAgentLauncher, verifyAgentLauncher } from "./launchers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..");
@@ -45,7 +46,7 @@ interface TaskSpec {
 	timeoutMs?: number;
 }
 
-interface RunMeta {
+interface RunMeta extends AgentLauncher {
 	runId: string;
 	planId: string;
 	task: string;
@@ -436,6 +437,7 @@ function planRun(
 	rep: number,
 	providerConfig: Buffer,
 	planId: string,
+	launcher: AgentLauncher,
 ): { task: TaskSpec; meta: RunMeta } {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
 	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
@@ -447,6 +449,7 @@ function planRun(
 	const taskHash = hashTask(taskDir);
 	const snapshot = loadTask(task.id, taskDir);
 	const meta: RunMeta = {
+		...launcher,
 		runId,
 		planId,
 		task: task.id,
@@ -495,6 +498,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 	try {
 		verifyTask(meta);
 		const providerConfig = verifyProviderConfig(meta);
+		verifyAgentLauncher(meta);
 		mkdirSync(projectDir, { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 
@@ -524,10 +528,11 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		if (group === "B") baseArgs.push("--no-builtin-tools", "-e", EXTENSION_DIR);
 		// F: the fork's own CLI with its built-in rust runtime — no extension,
 		// prompt variant is whatever the fork ships (D17: example is the default).
-		const bin = group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH;
+		const bin = meta.launcherPath;
 
 		const timeoutMs = task.timeoutMs ?? 600_000;
 		verifyProviderConfig(meta, true);
+		verifyAgentLauncher(meta);
 		turnStartedAt = Date.now();
 		daemon = launchDaemon(bin, baseArgs, projectDir, env, join(runDir, "daemon.log"));
 		meta.daemonPid = daemon.child.pid ?? null;
@@ -536,6 +541,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 
 		for (let turn = 0; turn < task.turns.length; turn++) {
 			verifyProviderConfig(meta, true);
+			verifyAgentLauncher(meta);
 			if (daemon.exited) throw new Error("benchmark daemon exited before the next turn");
 			const args = [...baseArgs];
 			if (turn > 0) {
@@ -557,6 +563,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 			meta.sessionFile = findSessionFile(agentDir);
 			persistMeta(meta);
 			verifyProviderConfig(meta, true);
+			verifyAgentLauncher(meta);
 			if (result.timedOut) {
 				break;
 			}
@@ -568,6 +575,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 
 		verifyTask(meta);
 		verifyProviderConfig(meta, true);
+		verifyAgentLauncher(meta);
 		const checkScript = join(taskDir, "check.sh");
 		if (existsSync(checkScript)) {
 			const check = await new Promise<{ code: number | null; out: string }>((res, reject) => {
@@ -587,6 +595,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		}
 		verifyTask(meta);
 		verifyProviderConfig(meta, true);
+		verifyAgentLauncher(meta);
 		meta.sessionFile = findSessionFile(agentDir);
 		meta.driverStatus = "completed";
 	} catch (err) {
@@ -667,12 +676,15 @@ function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
 	if (manifest.executionLockVersion !== 1) {
 		throw new Error(`benchmark plan predates execution locking and cannot be resumed: ${planId}`);
 	}
+	if (manifest.launcherPinVersion !== 1) {
+		throw new Error(`benchmark plan has no supported agent launcher pin and cannot be resumed: ${planId}`);
+	}
 	const ids = new Set<string>();
 	const slots = new Set<string>();
 	const pending: { task: TaskSpec; meta: RunMeta }[] = [];
-	const fields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep"] as const;
+	const fields = ["runId", "task", "taskHash", "providerConfigHash", "model", "group", "variant", "rep", ...launcherFields] as const;
 	for (const slot of manifest.runs) {
-		if (!isRecord(slot) || !isFileName(slot.runId) ||
+		if (!isRecord(slot) || !isFileName(slot.runId) || !launcherIdentity(slot) ||
 			!["task", "model"].every((key) => typeof slot[key] === "string" && slot[key].trim()) ||
 			!["taskHash", "providerConfigHash"].every((key) => typeof slot[key] === "string" && /^sha256:[a-f0-9]{64}$/.test(slot[key])) ||
 			typeof slot.rep !== "number" || !Number.isSafeInteger(slot.rep) || slot.rep < 1 || typeof slot.variant !== "string" ||
@@ -704,6 +716,7 @@ function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
 		const meta = record as unknown as RunMeta;
 		verifyTask(meta);
 		verifyProviderConfig(meta);
+		verifyAgentLauncher(meta);
 		const task = loadTask(meta.task, join(runDir, "task"));
 		if (meta.category !== task.category) throw new Error(`task category differs from snapshot: ${slot.runId}`);
 		pending.push({ task, meta });
@@ -715,6 +728,8 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 	// Validate the full selection and persist every slot before any agent can run.
 	const tasks = opts.tasks.map((id) => loadTask(id));
 	const providerConfig = loadProviderConfig();
+	const launchers = new Map(opts.groups.map((group) =>
+		[group, resolveAgentLauncher(group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH)]));
 	console.log(
 		`bench: ${opts.tasks.length} task(s) × ${opts.groups.join("+")} × ${opts.models.length} model(s) × ${opts.reps} rep(s), variant=${opts.variant}`,
 	);
@@ -736,7 +751,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 									? "example"
 									: "noexample"
 								: opts.variant;
-					plan.push(planRun(task, group, model, variant, rep, providerConfig, planId));
+					plan.push(planRun(task, group, model, variant, rep, providerConfig, planId, launchers.get(group)!));
 				}
 			}
 		}
@@ -749,6 +764,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 	writeFileSync(`${planPath}.tmp`, JSON.stringify({
 		version: 1,
 		executionLockVersion: 1,
+		launcherPinVersion: 1,
 		planId,
 		plannedAt: new Date().toISOString(),
 		runs: plan.map(({ meta }) => ({
@@ -756,6 +772,9 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 			task: meta.task,
 			taskHash: meta.taskHash,
 			providerConfigHash: meta.providerConfigHash,
+			launcherPath: meta.launcherPath,
+			launcherRealPath: meta.launcherRealPath,
+			launcherHash: meta.launcherHash,
 			model: meta.model,
 			group: meta.group,
 			variant: meta.variant,

@@ -31,6 +31,7 @@ function fixture(treatment: Treatment = "F") {
 	roots.push(root);
 	const analyzer = join(root, "analyze.ts");
 	copyFileSync(resolve(__dirname, "../../../poc/bench/analyze.ts"), analyzer);
+	copyFileSync(resolve(__dirname, "../../../poc/bench/launchers.ts"), join(root, "launchers.ts"));
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
 	const runsDir = join(root, "results/runs");
 	const plansDir = join(root, "results/plans");
