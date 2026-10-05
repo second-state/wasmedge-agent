@@ -4,6 +4,7 @@ import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../h
 import type { BridgeServer } from "./bridge-server.js";
 import type { CellResourceLimits } from "./resource-limits.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
+import type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface LibFile {
 	/** Path inside agent_lib/, e.g. "src/helpers/log_parse.rs". */
@@ -45,6 +46,8 @@ export interface CellResult {
 }
 
 export interface RunnerOptions extends CellResourceLimits {
+	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */
+	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Project directory mounted at /workspace. */
 	cwd: string;
 	/** Session workspace directory (the cargo workspace lives here). */

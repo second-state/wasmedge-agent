@@ -39,3 +39,30 @@ export function assertHarnessMountsIsolated(mounts: Record<string, string>, stor
 		}
 	}
 }
+
+/** Readonly project access must not acquire a writable alias through another preopen. */
+export function assertReadonlyWorkspaceMounts(
+	project: string,
+	writableMounts: Record<string, string>,
+	readonlyMounts: Record<string, string>,
+): void {
+	const projectPath = physicalPath(project);
+	for (const [guestPath, hostPath] of Object.entries({
+		"/workspace": project,
+		...writableMounts,
+		...readonlyMounts,
+	})) {
+		// WasmEdge splits --dir on colons; an ambiguous path can change mount rights.
+		if (hostPath.includes(":") || physicalPath(hostPath).includes(":")) {
+			throw new Error(`readonly workspace policy cannot mount ${guestPath}: host paths must not contain colons`);
+		}
+	}
+	for (const [guestPath, hostPath] of Object.entries(writableMounts)) {
+		const mounted = physicalPath(hostPath);
+		if (contains(mounted, projectPath) || contains(projectPath, mounted)) {
+			throw new Error(
+				`writable ${guestPath} overlaps the readonly /workspace; move the project and session storage to separate directories`,
+			);
+		}
+	}
+}

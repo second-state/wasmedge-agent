@@ -38,7 +38,7 @@ Each `rust` tool call runs one complete program:
 2. The cell source is written to `cell/src/main.rs` and compiled with `cargo build --release --offline -p cell`. Compiles across sessions share a concurrency gate (`WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS`).
 3. A failed or interrupted build restores the previous cell source and lib files, including the generated helper module index. Compile errors return the rendered rustc diagnostics. Successful builds retain their source changes even if the cell later panics or times out; runtime side effects are not rolled back.
 4. The host validates the compiled module and rejects imports outside a fixed set of non-network WASI Preview 1 functions, before any cell code executes. Socket/DNS, plugin, unknown, and non-function imports are rejected even if unused. Validation uses the host JavaScript engine without instantiating the module; unsupported Wasm features fail closed. WasmEdge runs the accepted module with `--force-interpreter`, preventing embedded AOT native payloads from replacing the inspected code.
-5. Execution has explicit preopens: the project at `/workspace`, persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
+5. Execution has explicit preopens: the project at `/workspace` (writable by default, read-only with `rustCell.workspaceWritePolicy: "ro"`), persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks library readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
 6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
 
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and functions promoted into `agent_lib`, are available to every later cell.
@@ -224,6 +224,19 @@ Skill `create_skill`, `update_skill`, and `update("skill", ...)` calls require a
 Sandboxed skill tests share the cell import allowlist and interpreter requirement above. Every test artifact is checked before any module executes. Unlike ordinary cells, tests have no bridge connection or credentials. Cargo build scripts/proc macros continue to run on the host.
 
 Before compilation and again before execution, the runner rejects writable `/workspace`, `/agent/state`, or `/scratch` mounts that overlap either configured harness store, including symlinked mount roots, store parents, and existing state-file targets. Keep project directories separate from session/agent storage; using a home directory or a project containing its session storage as `/workspace` can now be rejected. This prevents direct guest file writes through the configured mounts. Host bash, build scripts/proc macros, host-created hard links, and concurrent host filesystem changes remain outside this boundary.
+
+With `rustCell.workspaceWritePolicy: "ro"`, `/workspace` uses WasmEdge's `:readonly`
+preopen. The runner also rejects writable state/scratch mounts overlapping the
+project in either direction, resolving symlink roots and existing ancestors.
+Host mount paths containing colons are rejected to avoid ambiguous CLI parsing.
+These checks run before source edits/build and again before execution; there is
+no fallback to a writable project. Existing harness isolation checks still apply.
+Cells can read/search the project, save state, write scratch files, and submit
+library edits. For project edits the prompt requests a patch, which the existing
+host bash tool can apply (for example, `git apply` in the host project directory).
+Without bash, the prompt asks the model to return the patch to its caller.
+This adds neither a patch approval gate nor trajectory replay; host permissions
+and the filesystem limitations above still apply. See [settings](settings.md#rust-cells).
 
 ## Goal Requests
 

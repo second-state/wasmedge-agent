@@ -8,12 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
-import { assertHarnessMountsIsolated } from "./harness-mounts.js";
+import { assertHarnessMountsIsolated, assertReadonlyWorkspaceMounts } from "./harness-mounts.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
+import { normalizeWorkspaceWritePolicy } from "./workspace-policy.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 // (module (func (export "_start"))) — no imports, memory, or side effects.
@@ -47,7 +48,7 @@ export class CellRunner {
 
 	constructor(opts: RunnerOptions) {
 		this.resourceArgs = wasmedgeResourceArgs(opts);
-		this.opts = opts;
+		this.opts = { ...opts, workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy) };
 	}
 
 	/** Serialize cells (executionMode "sequential" is also enforced host-side). */
@@ -65,7 +66,7 @@ export class CellRunner {
 		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
 		const interruptedStatus = () => (per.signal?.aborted ? "aborted" : "timeout");
 		const ws = this.opts.workspaceDir;
-		this.checkHarnessMounts();
+		this.checkMounts();
 		ensureStateDir(ws);
 		try {
 			await this.opts.validateSkills?.(signal, remainingMs());
@@ -256,19 +257,24 @@ export class CellRunner {
 		return result;
 	}
 
-	private checkHarnessMounts(): void {
+	private checkMounts(): void {
 		const ws = this.opts.workspaceDir;
-		assertHarnessMountsIsolated(
-			{ "/workspace": this.opts.cwd, "/agent/state": join(ws, "state"), "/scratch": join(ws, ".scratch") },
-			[this.opts.harnessDir, this.opts.globalHarnessDir],
-		);
+		const writableMounts = { "/agent/state": join(ws, "state"), "/scratch": join(ws, ".scratch") };
+		assertHarnessMountsIsolated({ "/workspace": this.opts.cwd, ...writableMounts }, [
+			this.opts.harnessDir,
+			this.opts.globalHarnessDir,
+		]);
+		if (this.opts.workspaceWritePolicy === "ro") {
+			assertReadonlyWorkspaceMounts(this.opts.cwd, writableMounts, { "/agent/lib": join(ws, "agent_lib") });
+		}
 	}
 
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
-		this.checkHarnessMounts();
+		this.checkMounts();
 		const args: string[] = ["run", "--force-interpreter", ...this.resourceArgs];
-		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}`);
+		const projectAccess = this.opts.workspaceWritePolicy === "ro" ? ":readonly" : "";
+		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}${projectAccess}`);
 		if (this.mountLibReadonly) {
 			args.push("--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`);
 		}

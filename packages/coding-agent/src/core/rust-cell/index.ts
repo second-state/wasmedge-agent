@@ -31,6 +31,7 @@ import {
 	syncRustSkills,
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
+import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./workspace-policy.js";
 import { withInheritedSkills } from "./workspace-snapshot.js";
 import { prepareVersionedWorkspace, recoverWorkspaceUpgrade } from "./workspace-version.js";
 
@@ -71,8 +72,11 @@ export {
 	type SyncRustSkillsResult,
 	syncRustSkills,
 } from "./workspace.js";
+export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends CellResourceLimits {
+	/** Guest /workspace access; defaults to rw. Fixed until the runtime is rebuilt. */
+	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Project directory mounted at /workspace. */
 	cwd: string;
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
@@ -103,7 +107,7 @@ const DEFAULT_CELL_TIMEOUT_MS = 120_000;
  * workspace clone, runner construction. Failure clears the memo so the next
  * call retries (same contract the kernel provisioner had). */
 export class RustCellProvisioner {
-	private readonly options: RustCellProvisionerOptions;
+	private readonly options: RustCellProvisionerOptions & { workspaceWritePolicy: WorkspaceWritePolicy };
 	private starting: Promise<CellRunner> | undefined;
 	private runner: CellRunner | undefined;
 	private toolchainInfo: ToolchainInfo | undefined;
@@ -113,7 +117,15 @@ export class RustCellProvisioner {
 
 	constructor(options: RustCellProvisionerOptions) {
 		validateCellResourceLimits(options);
-		this.options = { ...options, preludeExtra: normalizePreludeExtra(options.preludeExtra) };
+		this.options = {
+			...options,
+			preludeExtra: normalizePreludeExtra(options.preludeExtra),
+			workspaceWritePolicy: normalizeWorkspaceWritePolicy(options.workspaceWritePolicy),
+		};
+	}
+
+	get workspaceWritePolicy(): WorkspaceWritePolicy {
+		return this.options.workspaceWritePolicy;
 	}
 
 	get hasRunner(): boolean {
@@ -240,6 +252,7 @@ export class RustCellProvisioner {
 			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
 		});
 		return new CellRunner({
+			workspaceWritePolicy: this.workspaceWritePolicy,
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
