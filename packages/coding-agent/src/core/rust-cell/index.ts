@@ -281,7 +281,7 @@ export class RustCellProvisioner {
 
 	/** State listing for compaction/resume notices; empty when never started. */
 	listState(): PersistentStateListing {
-		if (!this.workspace) return { stateKeys: [], blobNames: [], libFunctions: [] };
+		if (!this.workspace) return { stateKeys: [], blobNames: [], libFunctions: [], libTypes: [] };
 		return listPersistentState(this.workspace);
 	}
 

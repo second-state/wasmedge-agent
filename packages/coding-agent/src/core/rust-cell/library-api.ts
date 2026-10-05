@@ -9,6 +9,7 @@ type Token = string | Group;
 
 const IDENTIFIER = /^(?:r#)?[_\p{XID_Start}][\p{XID_Continue}]*$/u;
 const QUALIFIERS = new Set(["async", "const", "unsafe"]);
+const TYPE_ITEMS = new Set(["struct", "enum", "union", "type", "trait"]);
 const UNRESOLVED_ATTRIBUTES = new Set(["cfg", "cfg_attr", "path"]);
 const OPEN_FOR_CLOSE: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 
@@ -79,11 +80,12 @@ function isIdentifier(token: Token | undefined): token is string {
 	return typeof token === "string" && IDENTIFIER.test(token);
 }
 
-/** A source-only inventory of public free functions reachable through ordinary
+/** A source-only inventory of public free functions and types reachable through ordinary
  * public modules. No compiler, macro expansion, cfg evaluation, re-export or
  * associated-item resolution: those require the planned rustdoc backend. */
-export function listLibraryFunctions(sourceDir: string): string[] {
+export function listLibraryApi(sourceDir: string): { functions: string[]; types: string[] } {
 	const functions = new Set<string>();
+	const types = new Set<string>();
 	const ancestors = new Set<string>();
 
 	function scanFile(file: string, moduleDir: string, path: string[]): void {
@@ -133,6 +135,12 @@ export function listLibraryFunctions(sourceDir: string): string[] {
 				continue;
 			}
 
+			const t = header[1] === "unsafe" && header[2] === "trait" ? 2 : 1;
+			if (typeof header[t] === "string" && TYPE_ITEMS.has(header[t] as string) && isIdentifier(header[t + 1])) {
+				types.add([...path, header[t + 1]].join("::"));
+				continue;
+			}
+
 			let f = 1;
 			while (typeof header[f] === "string" && QUALIFIERS.has(header[f] as string)) f++;
 			if (header[f] === "extern") {
@@ -146,5 +154,5 @@ export function listLibraryFunctions(sourceDir: string): string[] {
 	}
 
 	scanFile(join(sourceDir, "lib.rs"), sourceDir, []);
-	return [...functions].sort();
+	return { functions: [...functions].sort(), types: [...types].sort() };
 }
