@@ -33,6 +33,8 @@ describe.skipIf(!available)("persistent state writes in WasmEdge", () => {
 		writeFileSync(join(blobs, "blocked.tmp"), "saved blocked blob");
 		writeFileSync(join(blobs, "data.tmp"), "saved data blob");
 		writeFileSync(join(state, "state.tmp"), "saved state file");
+		mkdirSync(join(blobs, ".rlm-write-0.tmp"));
+		writeFileSync(join(blobs, ".rlm-write-0.tmp", "value"), "interrupted write");
 		const runner = new CellRunner({
 			cwd,
 			workspaceDir: workspace,
@@ -48,10 +50,11 @@ fn main() -> Result<()> {
     assert_eq!(rlm::state::get::<u64>("count")?.unwrap_or(0), ${count - 1});
     rlm::state::set("count", &${count}u64)?;
     rlm::state::put_blob("data.bin", b"value ${count}")?;
+    rlm::state::put_blob("created.tmp", b"saved by guest")?;
     assert_eq!(rlm::state::get_blob("data.tmp")?.unwrap(), b"saved data blob");
     assert!(rlm::state::put_blob("blocked.bin", b"replacement").is_err());
     assert_eq!(rlm::state::get_blob("blocked.tmp")?.unwrap(), b"saved blocked blob");
-    assert_eq!(rlm::state::list_blobs()?, vec!["data.bin"]);
+    assert_eq!(rlm::state::list_blobs()?, vec!["blocked.tmp", "created.tmp", "data.bin", "data.tmp"]);
     assert_eq!(std::fs::read("/agent/state/state.tmp")?, b"saved state file");
     Ok(())
 }`,
@@ -60,9 +63,20 @@ fn main() -> Result<()> {
 			expect(JSON.parse(readFileSync(join(state, "state.json"), "utf-8"))).toEqual({ count });
 			expect(readFileSync(join(blobs, "data.bin"), "utf-8")).toBe(`value ${count}`);
 			expect(readFileSync(join(blobs, "blocked.bin", "keep"), "utf-8")).toBe("keep");
-			expect(readdirSync(blobs).sort()).toEqual(["blocked.bin", "blocked.tmp", "data.bin", "data.tmp"]);
+			expect(readFileSync(join(blobs, ".rlm-write-0.tmp", "value"), "utf-8")).toBe("interrupted write");
+			expect(readdirSync(blobs).sort()).toEqual([
+				".rlm-write-0.tmp",
+				"blocked.bin",
+				"blocked.tmp",
+				"created.tmp",
+				"data.bin",
+				"data.tmp",
+			]);
 			expect(readdirSync(state).sort()).toEqual(["blobs", "state.json", "state.tmp"]);
-			expect(listPersistentState(workspace)).toMatchObject({ stateKeys: ["count"], blobNames: ["data.bin"] });
+			expect(listPersistentState(workspace)).toMatchObject({
+				stateKeys: ["count"],
+				blobNames: ["blocked.tmp", "created.tmp", "data.bin", "data.tmp"],
+			});
 		}
 	});
 });
