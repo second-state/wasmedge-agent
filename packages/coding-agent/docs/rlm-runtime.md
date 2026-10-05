@@ -59,6 +59,13 @@ Discovered Rust skills are mounted into the clone as `skills/<crate>` symlinks a
 
 Persisted workspaces have their own local Git repository with an initial snapshot and a commit after each successful cell. Commits record the cell source, library and runtime sources, manifests, skill mounts, and `state/` (including blobs); messages contain a sequence number and tool-call ID. Build caches, vendored dependencies, and scratch files are excluded. External skill symlinks record the mount, not the external source contents. Project files and harness stores are outside this repository. Failed cells do not create cell snapshots; an earlier successful dependency addition keeps its own snapshot. Snapshots do not roll back runtime side effects. A Git failure after successful execution is reported separately in the tool result without rerunning the cell. Non-persistent sessions do not initialize Git.
 
+State and blob writes stage data in an exclusively created sibling directory,
+then rename the completed file into place. Existing `.tmp` files, directories,
+and symlinks are not reused as staging space. Cleanup is attempted on success or
+an I/O error; process termination can leave a directory that later writes skip
+and inventories omit. This does not make multiple state updates
+transactional or serialize concurrent read-modify-write operations.
+
 Resume and compaction notices list public free functions and type names found
 by scanning `agent_lib/src/lib.rs` and its public modules. Types include structs,
 enums, unions, type aliases, and traits (including unsafe traits). Paths are
