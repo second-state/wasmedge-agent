@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +24,63 @@ describe("persistent workspace listing", () => {
 		mkdirSync(dirname(target), { recursive: true });
 		writeFileSync(target, text);
 	}
+
+	it.each(["[]", '["value"]', '"text"', "null", "42", "true", "{broken"])(
+		"reports unavailable keys for invalid state %s without losing other inventory",
+		(source) => {
+			const dir = workspace({ "lib.rs": "pub struct Saved;" });
+			write(dir, "state/state.json", source);
+			write(dir, "state/blobs/result.bin", "saved blob");
+			const listing = listPersistentState(dir);
+			expect(listing).toMatchObject({ stateKeys: [], blobNames: ["result.bin"], libTypes: ["Saved"] });
+			expect(listing.warnings).toEqual([expect.stringContaining("state keys are unavailable")]);
+			expect(readFileSync(join(dir, "state/state.json"), "utf-8")).toBe(source);
+		},
+	);
+
+	it("treats missing stores and an empty state object as empty without warnings", () => {
+		const dir = workspace();
+		expect(listPersistentState(dir).warnings).toBeUndefined();
+		write(dir, "state/state.json", "{}");
+		expect(listPersistentState(dir)).toMatchObject({ stateKeys: [], blobNames: [] });
+		expect(listPersistentState(dir).warnings).toBeUndefined();
+	});
+
+	it("keeps state and library inventory when the blob store is not a directory", () => {
+		const dir = workspace({ "lib.rs": "pub fn saved() {}" });
+		write(dir, "state/state.json", '{"progress":1}');
+		write(dir, "state/blobs", "not a directory");
+		expect(listPersistentState(dir)).toMatchObject({
+			stateKeys: ["progress"],
+			blobNames: [],
+			libFunctions: ["saved"],
+			warnings: [expect.stringContaining("blob names are unavailable")],
+		});
+		expect(readFileSync(join(dir, "state/blobs"), "utf-8")).toBe("not a directory");
+	});
+
+	it("keeps blob and library inventory when the state file cannot be read", () => {
+		const dir = workspace({ "lib.rs": "pub fn saved() {}" });
+		mkdirSync(join(dir, "state/state.json"), { recursive: true });
+		write(dir, "state/blobs/result.bin", "saved blob");
+		expect(listPersistentState(dir)).toMatchObject({
+			stateKeys: [],
+			blobNames: ["result.bin"],
+			libFunctions: ["saved"],
+			warnings: [expect.stringContaining("state keys are unavailable")],
+		});
+	});
+
+	it("lists regular blob files like the guest, excluding directories, symlinks and temporary files", () => {
+		const dir = workspace();
+		write(dir, "state/blobs/z.bin", "z");
+		write(dir, "state/blobs/a.bin", "a");
+		write(dir, "state/blobs/pending.tmp", "pending");
+		write(dir, "state/blobs/nested/file", "nested");
+		symlinkSync("a.bin", join(dir, "state/blobs/link.bin"));
+		symlinkSync("missing", join(dir, "state/blobs/dangling.bin"));
+		expect(listPersistentState(dir).blobNames).toEqual(["a.bin", "z.bin"]);
+	});
 
 	it("follows public file and inline modules from the crate root", () => {
 		const dir = workspace({

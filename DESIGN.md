@@ -349,6 +349,7 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 - `state.json`：單一 JSON object `{ "<key>": <any JSON> }`；guest 寫入原子（tmp+rename）；單檔軟上限 8 MiB（超過時 `rlm::state::set` 回 `Error::State`，指示改用 blob）。
 - `blobs/<name>`：任意 bytes；`keys()`/`list_blobs()` 供盤點。
 - Host 只讀不寫（compaction 通知、TUI 檢視）；cell 串行執行保證無並發寫者。
+- 通知盤點採 best-effort：不存在的 state／blob store 視為空；讀取失敗或 `state.json` 不是有效 JSON object 時明示警告，保留其他可讀項目，不阻斷 resume／compaction，也不修改原資料。Blob 清單與 guest `list_blobs()` 一致，只列 regular files，略過目錄、symlinks 與 `.tmp`。
 - **無跨 session 還原邏輯**：檔案天然持久。取代 `<ipython_state_restored>` 的是 resume 首輪注入：
 
 ```

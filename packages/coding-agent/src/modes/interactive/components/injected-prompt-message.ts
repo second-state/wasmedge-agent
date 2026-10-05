@@ -111,7 +111,14 @@ export class InjectedPromptMessageComponent extends Container {
 		this.content.clear();
 		this.header.setText(this.headerText());
 		this.content.addChild(this.header);
-		if (this.expanded && this.message.customType !== RUST_STATE_RESTORED_CUSTOM_TYPE) {
+		if (this.message.customType === RUST_STATE_RESTORED_CUSTOM_TYPE) {
+			const details = this.message.details as RustStateRestoredDetails | undefined;
+			for (const warning of details?.warnings ?? []) {
+				this.content.addChild(new Text(theme.fg("warning", warning), 1, 0));
+			}
+			return;
+		}
+		if (this.expanded) {
 			this.content.addChild(
 				new Markdown(readCustomText(this.message), 1, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("customMessageText", text),
