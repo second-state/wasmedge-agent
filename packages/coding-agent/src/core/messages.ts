@@ -185,6 +185,7 @@ export interface HeartbeatPromptDetails {
 
 export interface RustStateRestoredDetails {
 	restored: boolean;
+	warnings?: string[];
 }
 
 export interface BranchSummaryMessage {

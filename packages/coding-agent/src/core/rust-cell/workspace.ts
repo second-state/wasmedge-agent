@@ -194,29 +194,43 @@ export interface PersistentStateListing {
 	libFunctions: string[];
 	/** Source-discovered public structs, enums, unions, aliases, and traits. Optional for older callers. */
 	libTypes?: string[];
+	/** Incomplete state/blob inventory; absent for readable or missing stores. */
+	warnings?: string[];
 }
 
 /** Host-side view of guest-persistent state for compaction/resume notices
  * (DESIGN.md §2.8). Source scan; rustdoc JSON is the Phase 2 upgrade. */
 export function listPersistentState(workspaceDir: string): PersistentStateListing {
 	const listing: PersistentStateListing = { stateKeys: [], blobNames: [], libFunctions: [] };
+	const warnings: string[] = [];
 	const statePath = join(workspaceDir, "state", "state.json");
-	if (existsSync(statePath)) {
-		try {
-			listing.stateKeys = Object.keys(JSON.parse(readFileSync(statePath, "utf-8"))).sort();
-		} catch {
-			// unreadable state file: report no keys rather than failing the notice
+	try {
+		const state: unknown = JSON.parse(readFileSync(statePath, "utf-8"));
+		if (state !== null && typeof state === "object" && !Array.isArray(state)) {
+			listing.stateKeys = Object.keys(state).sort();
+		} else {
+			warnings.push("state.json is not a JSON object; state keys are unavailable.");
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			warnings.push("state.json could not be read or parsed; state keys are unavailable.");
 		}
 	}
 	const blobsDir = join(workspaceDir, "state", "blobs");
-	if (existsSync(blobsDir)) {
-		listing.blobNames = readdirSync(blobsDir)
-			.filter((name) => !name.endsWith(".tmp"))
+	try {
+		listing.blobNames = readdirSync(blobsDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && !entry.name.endsWith(".tmp"))
+			.map((entry) => entry.name)
 			.sort();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			warnings.push("state/blobs could not be read; blob names are unavailable.");
+		}
 	}
 	const api = listLibraryApi(join(workspaceDir, "agent_lib", "src"));
 	listing.libFunctions = api.functions;
 	listing.libTypes = api.types;
+	if (warnings.length > 0) listing.warnings = warnings;
 	return listing;
 }
 

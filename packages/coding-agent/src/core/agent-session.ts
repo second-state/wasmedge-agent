@@ -6770,7 +6770,11 @@ export class AgentSession {
 		if (!provisioner?.hasWorkspace) return;
 		const listing = provisioner.listState();
 		const stateDetail =
-			listing.stateKeys.length > 0 ? ` state keys: ${listing.stateKeys.join(", ")}.` : " no state keys yet.";
+			listing.stateKeys.length > 0
+				? ` state keys: ${listing.stateKeys.join(", ")}.`
+				: listing.warnings?.length
+					? ""
+					: " no state keys yet.";
 		const blobDetail = listing.blobNames.length > 0 ? ` state blobs: ${listing.blobNames.join(", ")}.` : "";
 		const libDetail =
 			listing.libFunctions.length > 0
@@ -6781,7 +6785,8 @@ export class AgentSession {
 			: "";
 		const content = [
 			"<rust_state>",
-			`Your workspace persisted through compaction; rlm::state and agent_lib remain available.${stateDetail}${blobDetail}${libDetail}${typeDetail}`,
+			`Your workspace persisted through compaction.${stateDetail}${blobDetail}${libDetail}${typeDetail}`,
+			...(listing.warnings ?? []).map((warning) => `State inventory warning: ${warning}`),
 			"</rust_state>",
 		].join("\n");
 		const message = {
@@ -6815,7 +6820,8 @@ export class AgentSession {
 			listing.stateKeys.length === 0 &&
 			listing.libFunctions.length === 0 &&
 			!listing.libTypes?.length &&
-			listing.blobNames.length === 0
+			listing.blobNames.length === 0 &&
+			!listing.warnings?.length
 		) {
 			return;
 		}
@@ -6826,13 +6832,14 @@ export class AgentSession {
 		if (listing.libFunctions.length > 0)
 			lines.push(`agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`);
 		if (listing.libTypes?.length) lines.push(`agent_lib types (source scan): ${listing.libTypes.join(", ")}.`);
+		for (const warning of listing.warnings ?? []) lines.push(`State inventory warning: ${warning}`);
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
 			{
 				customType: RUST_STATE_RESTORED_CUSTOM_TYPE,
 				content: lines.join("\n"),
 				display: true,
-				details: { restored: true },
+				details: { restored: true, warnings: listing.warnings },
 			},
 			{ deliverAs: "nextTurn" },
 		).catch(() => {});

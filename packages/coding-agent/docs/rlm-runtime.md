@@ -72,6 +72,14 @@ after resume or runtime reload. This does not initialize the toolchain, upgrade
 the workspace, or start WasmEdge. A workspace is recognized by its `Cargo.toml`;
 a new session without one receives no compaction state notice.
 
+State inventory is best-effort: missing stores are empty, while unreadable stores
+or a `state.json` that is not a valid JSON object produce explicit warnings.
+Resume and compaction still deliver the readable inventory, even when only
+warnings remain. Restore warnings are also visible in the TUI without expanding
+the notice. Blob listings match `rlm::state::list_blobs`: regular files only,
+excluding symlinks, directories, and `.tmp` files. Listing does not repair or
+overwrite saved data.
+
 These notices are labeled **source scan**. They do not compile the library or
 report fields, variants, signatures, associated items, re-exports, or generated
 API. Items with `cfg`, `cfg_attr`, or custom `path` attributes are omitted rather

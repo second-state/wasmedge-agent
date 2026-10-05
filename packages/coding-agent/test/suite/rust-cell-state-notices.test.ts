@@ -122,6 +122,66 @@ describe("Rust workspace state notices", () => {
 		expect(ensure).not.toHaveBeenCalled();
 	});
 
+	it("resumes a workspace with an unreadable blob store even when only warnings remain", async () => {
+		const { artifacts, workspace: dir } = workspace("");
+		mkdirSync(join(dir, "state"));
+		writeFileSync(join(dir, "state/blobs"), "not a directory");
+		const artifactDir = vi.spyOn(SessionManager.prototype, "getSessionArtifactDir").mockReturnValue(artifacts);
+		const harness = await createHarness();
+		harnesses.push(harness);
+		artifactDir.mockRestore();
+		let received = "";
+		harness.setResponses([
+			(context) => {
+				received = context.messages.map(getMessageText).join("\n");
+				return fauxAssistantMessage("ready to repair the store");
+			},
+		]);
+		await harness.session.prompt("continue");
+		expect(received).toContain("<rust_state_restored>");
+		expect(received).toContain("blob names are unavailable");
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom_message",
+				customType: "rust_state_restored",
+				content: expect.stringContaining("blob names are unavailable"),
+				details: { restored: true, warnings: [expect.stringContaining("blob names are unavailable")] },
+			}),
+		);
+	});
+
+	it("compacts and continues with inventory warnings after stored data becomes unreadable", async () => {
+		const { artifacts, workspace: dir } = workspace("pub struct Saved;");
+		const ensure = vi.spyOn(RustCellProvisioner.prototype, "ensure");
+		const harness = await compactionHarness(artifacts);
+		mkdirSync(join(dir, "state"));
+		writeFileSync(join(dir, "state/state.json"), '["invalid state map"]');
+		writeFileSync(join(dir, "state/blobs"), "not a directory");
+		await harness.session.compact();
+		let received = "";
+		harness.setResponses([
+			(context) => {
+				received = context.messages.map(getMessageText).join("\n");
+				return fauxAssistantMessage("continuing with the readable library");
+			},
+		]);
+		await harness.session.prompt("continue");
+		expect(received).toContain("<rust_state>");
+		expect(received).toContain("state keys are unavailable");
+		expect(received).toContain("blob names are unavailable");
+		expect(received).toContain("agent_lib types (source scan): Saved.");
+		expect(received).not.toContain("no state keys yet");
+		expect(received).not.toContain("state keys: 0");
+		expect(ensure).not.toHaveBeenCalled();
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom_message",
+				customType: "rust_state",
+				content: expect.stringContaining("state keys are unavailable"),
+			}),
+		);
+	});
+
 	it("does not send a restore notice for an empty or private-only library", async () => {
 		const { artifacts } = workspace("struct Private;");
 		const artifactDir = vi.spyOn(SessionManager.prototype, "getSessionArtifactDir").mockReturnValue(artifacts);
