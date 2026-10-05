@@ -53,6 +53,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlin
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
+import { spawnSync } from "node:child_process";
 const mode = ${JSON.stringify(mode)};
 const agentDir = process.env.WASMEDGE_AGENT_CODING_AGENT_DIR;
 const marker = ${JSON.stringify(join(root, "first-attempt"))};
@@ -91,6 +92,11 @@ if (process.argv.includes("daemon")) {
 } else {
 record("turn");
 console.log("fixture turn");
+if (mode === "resume-while-running") {
+  const meta = JSON.parse(readFileSync(join(agentDir, "../meta.json"), "utf-8"));
+  const attempt = spawnSync(process.execPath, ["--experimental-strip-types", ${JSON.stringify(join(bench, "run.ts"))}, "--resume-plan", meta.planId], { encoding: "utf-8", timeout: 2000 });
+  writeFileSync(join(agentDir, "resume-attempt.json"), JSON.stringify({ status: attempt.status, stderr: attempt.stderr }));
+}
 if (mode === "no-session" || (mode === "fail-first" && !existsSync(marker))) {
   writeFileSync(marker, "attempted");
   process.exit(0);
@@ -164,6 +170,7 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 		fake,
 		temp,
 		plansDir: join(bench, "results/plans"),
+		locksDir: join(bench, "results/locks"),
 		configPath: join(home, ".wasmedge-agent/models.json"),
 		legacyConfigPath: join(home, ".prime/agent/models.json"),
 		taskDir: task,
@@ -203,6 +210,13 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 					...extraArgs,
 				],
 				{ cwd: root, env, encoding: "utf-8", timeout: mode === "real-daemon" ? 30_000 : 10_000 },
+			);
+		},
+		resume(planId: string, extraArgs: string[] = []) {
+			return spawnSync(
+				process.execPath,
+				["--experimental-strip-types", join(bench, "run.ts"), "--resume-plan", planId, ...extraArgs],
+				{ cwd: root, env, encoding: "utf-8", timeout: 10_000 },
 			);
 		},
 		metas() {
@@ -729,4 +743,192 @@ describe("offline benchmark driver", () => {
 			turnExitCodes: [-1],
 		});
 	});
+});
+
+describe("saved benchmark plans", () => {
+	it("saves the whole plan without starting agents", () => {
+		const f = fixture();
+		const result = f.run(3, "A,B,F", ["--plan-only", "--variant", "split"]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("9 run(s) saved without execution");
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()).toHaveLength(9);
+		for (const meta of f.metas()) {
+			expect(meta).toMatchObject({ driverStatus: "planned", startedAt: null, checkPass: null });
+			expect(readdirSync(meta.runDir).sort()).toEqual(["meta.json", "models.json", "task"]);
+		}
+		expect(readdirSync(f.locksDir)).toEqual([]);
+		expect(f.analyze().stdout).toContain("Run inventory: 9/9 planned records match");
+	});
+
+	it("resumes original slots and snapshots without the source tasks or provider seed", () => {
+		const f = fixture({ turns: ["first", "second"], check: 'test "$(cat "$PROJECT_DIR/input.txt")" = original' });
+		mkdirSync(join(f.taskDir, "fixture"));
+		writeFileSync(join(f.taskDir, "fixture/input.txt"), "original");
+		expect(f.run(1, "A,B,F", ["--plan-only"]).status).toBe(0);
+		const before = f.metas();
+		const planId = before[0].planId;
+		const manifest = readFileSync(join(f.plansDir, `${planId}.json`), "utf-8");
+		rmSync(dirname(f.taskDir), { recursive: true });
+		rmSync(f.configPath);
+		const result = f.resume(planId);
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		expect(readFileSync(join(f.plansDir, `${planId}.json`), "utf-8")).toBe(manifest);
+		expect(f.metas().map((meta) => [meta.runId, meta.plannedAt])).toEqual(
+			before.map((meta) => [meta.runId, meta.plannedAt]),
+		);
+		for (const meta of f.metas())
+			expect(meta).toMatchObject({ driverStatus: "completed", checkPass: true, turnExitCodes: [0, 0] });
+		expect(f.analyze().stdout).toContain("Run inventory: 3/3 planned records match");
+		expect(readdirSync(f.plansDir)).toEqual([`${planId}.json`]);
+		expect(readdirSync(f.locksDir)).toEqual([]);
+	});
+
+	it("does not rerun completed tasks, including failed acceptance checks", () => {
+		const f = fixture({ check: "exit 1" });
+		expect(f.run().status).toBe(0);
+		const [meta] = f.metas();
+		const path = join(meta.runDir, "meta.json");
+		const before = readFileSync(path, "utf-8");
+		const events = f.events();
+		const result = f.resume(meta.planId);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("completed (not retried)");
+		expect(readFileSync(path, "utf-8")).toBe(before);
+		expect(f.events()).toEqual(events);
+	});
+
+	it("continues unstarted slots after interruption without retrying the attempted run", () => {
+		const f = fixture({
+			check: 'if [ ! -f "$PROJECT_DIR/../../../interrupted" ]; then touch "$PROJECT_DIR/../../../interrupted"; kill -KILL "$PPID"; fi\nexit 0',
+		});
+		const interrupted = f.run(2, "A,F");
+		expect(interrupted.signal).toBe("SIGKILL");
+		const attempted = f.metas().find((meta) => meta.driverStatus === "running");
+		const path = join(attempted.runDir, "meta.json");
+		const before = readFileSync(path, "utf-8");
+		expect(f.events().at(-1).event).toBe("stop");
+		const locked = f.resume(attempted.planId);
+		expect(locked.status).toBe(1);
+		expect(locked.stderr).toContain("benchmark plan is locked");
+		// This fixture's driver was killed and its only daemon stopped before checking.
+		rmSync(join(f.locksDir, `${attempted.planId}.lock`));
+		const resumed = f.resume(attempted.planId);
+		expect(resumed.status, resumed.stderr).toBe(1);
+		expect(resumed.stdout).toContain("running (not retried)");
+		expect(readFileSync(path, "utf-8")).toBe(before);
+		expect(f.metas().filter((meta) => meta.driverStatus === "completed")).toHaveLength(3);
+		expect(f.events().filter((event) => event.event === "start")).toHaveLength(4);
+		expect(f.analyze().stdout).toContain("driver runs incomplete — no verdict");
+	});
+
+	it("retains driver errors while executing later unstarted slots", () => {
+		const f = fixture();
+		expect(f.run(2, "A", ["--plan-only"]).status).toBe(0);
+		const [meta] = f.metas();
+		const path = join(meta.runDir, "meta.json");
+		const before = JSON.stringify({ ...meta, driverStatus: "error", driverError: "prior failure" });
+		writeFileSync(path, before);
+		const result = f.resume(meta.planId);
+		expect(result.status, result.stderr).toBe(1);
+		expect(result.stdout).toContain("error (not retried)");
+		expect(readFileSync(path, "utf-8")).toBe(before);
+		expect(f.events().filter((event) => event.event === "start")).toHaveLength(1);
+		expect(f.metas().filter((entry) => entry.driverStatus === "completed")).toHaveLength(1);
+	});
+
+	it("rejects a concurrent executor while the original plan is active", () => {
+		const f = fixture({ mode: "resume-while-running" });
+		expect(f.run().status).toBe(0);
+		const [meta] = f.metas();
+		const result = JSON.parse(readFileSync(join(meta.runDir, "agent-dir/resume-attempt.json"), "utf-8"));
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("benchmark plan is locked");
+		expect(f.events().map((event) => event.event)).toEqual(["start", "turn", "stop"]);
+		expect(readdirSync(f.locksDir)).toEqual([]);
+	});
+
+	it.each([
+		"task snapshot",
+		"provider snapshot",
+		"metadata",
+		"missing record",
+		"duplicate slot",
+		"version",
+		"legacy plan",
+		"path",
+		"state",
+	])("rejects invalid saved evidence before starting any run: %s", (problem) => {
+		const f = fixture();
+		expect(f.run(2, "A", ["--plan-only"]).status).toBe(0);
+		const [first, meta] = f.metas();
+		const firstPath = join(first.runDir, "meta.json");
+		const metaPath = join(meta.runDir, "meta.json");
+		const planPath = join(f.plansDir, `${meta.planId}.json`);
+		if (problem === "task snapshot") writeFileSync(join(meta.runDir, "task/check.sh"), "exit 1");
+		if (problem === "provider snapshot") writeFileSync(join(meta.runDir, "models.json"), '{"secret":"do-not-print"}');
+		if (problem === "metadata") writeFileSync(metaPath, JSON.stringify({ ...meta, model: "different" }));
+		if (problem === "path") writeFileSync(metaPath, JSON.stringify({ ...meta, runDir: f.taskDir }));
+		if (problem === "state") writeFileSync(metaPath, JSON.stringify({ ...meta, driverStatus: "unknown" }));
+		if (problem === "missing record") rmSync(metaPath);
+		if (problem === "duplicate slot" || problem === "version" || problem === "legacy plan") {
+			const plan = JSON.parse(readFileSync(planPath, "utf-8"));
+			if (problem === "version") plan.version = 99;
+			else if (problem === "legacy plan") delete plan.executionLockVersion;
+			else plan.runs.push(plan.runs[0]);
+			writeFileSync(planPath, JSON.stringify(plan));
+		}
+		const before = readFileSync(firstPath, "utf-8");
+		const result = f.resume(meta.planId);
+		expect(result.status).toBe(1);
+		expect(result.stdout + result.stderr).not.toContain("do-not-print");
+		expect(f.hasEvents()).toBe(false);
+		expect(readFileSync(firstPath, "utf-8")).toBe(before);
+		expect(readdirSync(f.locksDir)).toEqual([]);
+	});
+
+	it.each([
+		"project",
+		"agent-dir",
+		"turn-0.log",
+		"meta.json.tmp",
+		"startedAt",
+		"daemonPid",
+		"turnExitCodes",
+		"checkPass",
+	])("does not replay a planned slot containing execution evidence: %s", (evidence) => {
+		const f = fixture();
+		expect(f.run(1, "A", ["--plan-only"]).status).toBe(0);
+		const [meta] = f.metas();
+		if (["project", "agent-dir", "turn-0.log", "meta.json.tmp"].includes(evidence))
+			writeFileSync(join(meta.runDir, evidence), "preserve");
+		else
+			writeFileSync(
+				join(meta.runDir, "meta.json"),
+				JSON.stringify({ ...meta, [evidence]: evidence === "turnExitCodes" ? [0] : 1 }),
+			);
+		const result = f.resume(meta.planId);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("contains execution evidence");
+		expect(f.hasEvents()).toBe(false);
+	});
+
+	it.each(["../escape", "..", "/absolute", "--missing"])("rejects invalid plan IDs: %s", (planId) => {
+		const f = fixture();
+		expect(f.resume(planId).status).toBe(1);
+		expect(f.hasEvents()).toBe(false);
+		expect(f.metas()).toEqual([]);
+	});
+
+	it.each([["--reps", "1"], ["--groups", "F"], ["--plan-only"], ["--resume-plan", "other"]])(
+		"rejects selection overrides when resuming: %j",
+		(...args) => {
+			const f = fixture();
+			expect(f.run(1, "A", ["--plan-only"]).status).toBe(0);
+			const result = f.resume(f.metas()[0].planId, args);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain("without run-selection options");
+			expect(f.hasEvents()).toBe(false);
+		},
+	);
 });

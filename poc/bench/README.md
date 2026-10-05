@@ -11,7 +11,7 @@ bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
-└── results/      # gitignored: plans/<planId>.json and runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
+└── results/      # gitignored: plans/<planId>.json, locks/<planId>.lock, and runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
 ```
 
 ## Tasks (full set, DESIGN.md appendix C)
@@ -143,7 +143,51 @@ nonzero. A completed task's failed check or timeout remains a benchmark
 outcome, distinct from a driver error. Recording requires a writable results
 directory. A failed or interrupted registration may leave only part of the
 plan, but no agent has run yet. Records left without their inventory block
-analyzer verdicts. This does not implement resuming a plan.
+analyzer verdicts.
+
+### Saving and resuming a plan
+
+```bash
+# Save the full selection and snapshots without launching any agents.
+node poc/bench/run.ts --groups A,F --reps 3 --models provider/model --plan-only
+
+# Use the plan ID printed by the driver; do not pass selection overrides.
+node poc/bench/run.ts --resume-plan <planId>
+```
+
+Resume executes only untouched `planned` runs from the saved inventory, in
+their original order. It retains run IDs, repetition/variant assignments,
+`plannedAt`, task snapshots, provider-config snapshots, and the inventory
+itself. The current source tasks and seed `models.json` are not read. Before
+any agent starts, every referenced record must match the plan, and every
+pending run's snapshots must match their fingerprints. Missing/malformed
+records, duplicate slots, mismatched paths or fields, changed pending inputs,
+and `planned` records with execution artifacts or nonempty execution fields
+stop the invocation without starting a run. Resume requires the original
+absolute results location; it does not relocate archived sessions.
+
+Completed runs are skipped, including failed task checks and timeouts.
+`running` and `error` runs are also skipped, preserving all partial evidence;
+they make the resumed invocation exit nonzero even if the remaining planned
+runs succeed. Resume does not retry an attempted run, continue a partial
+conversation, reset metadata, or stop processes left by an interrupted driver.
+Incomplete observations continue to withhold analyzer verdicts.
+
+New plans record `executionLockVersion: 1`. Both initial execution and resume
+hold an exclusive `results/locks/<planId>.lock` containing the owner PID,
+hostname, start time, and ownership token. This prevents cooperating drivers
+from executing the same plan concurrently. Normal completion and caught errors
+release the lock; forced termination can leave it behind. There is no automatic
+stale-lock takeover: inspect the recorded owner and any private benchmark
+processes, confirm they have stopped, then remove only that plan's stale lock
+before resuming. Do not kill a process based only on a saved PID. Older plans
+without the locking marker remain analyzable but cannot be resumed, because
+their original executor did not participate in this lock protocol.
+
+The lock and local records are not tamper-proof or a host security boundary.
+Resumed runs use the current executables, toolchains, environment, and provider
+routing; only task/config snapshot bytes are pinned. Use the same external
+environment when continuing an experiment.
 
 ## Metrics (analyze.ts)
 
