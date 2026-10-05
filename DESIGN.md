@@ -353,7 +353,7 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 ```
 <rust_state_restored>
-Your persistent workspace was restored. state keys: {keys}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
+Your persistent workspace was restored. state keys: {keys}. state blobs: {blobs}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
 </rust_state_restored>
 ```
 
@@ -572,9 +572,11 @@ Host 端 `AgentSession.runRlmChild()` 的 8 步流程（depth 檢查→model 解
 
 ```
 <rust_state>
-Your workspace persisted through compaction. state keys: {keys}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
+Your workspace persisted through compaction. state keys: {keys}. state blobs: {blobs}. agent_lib functions (source scan): {fns}. agent_lib types (source scan): {types}.
 </rust_state>
 ```
+
+Resume／reload 後即使尚未啟動 Rust runtime，compaction 也會直接讀取磁碟上已有 `Cargo.toml` 的 workspace，列出當下 state keys、blob 名稱與 library API；不把 state／blob 值加入通知，也不觸發 toolchain 初始化或 workspace upgrade。尚未建立 workspace 的 session 不發送此通知；child 的初始 seed 不視為已還原的 workspace。
 
 **實作註記（WP5，2026-08-06）**：(1) late-message 機制（`ipython_sent_agent_message` 事件、持久化 entry 重播、TUI 收據補寫）全數刪除——收據於 cell 存活期間由 host 合成進 CellResult（§2.7 註記 3），無晚到路徑。(2) resume 通知 custom type 定名 `rust_state_restored`（WP1 起 AgentSession 已如此發送，本 WP 對齊 renderer 與常數）；compaction 摘要註記改述 rlm::state/blobs/agent_lib 存續。(3) 更名收尾：`Kernel*` 顯示型別→`Cell*`、`_createKernelHostHandlers`→`_createHostRequestHandlers`、`prewarmIpythonKernel`→`prewarmRustWorkspace`（實作自 WP1 即為 toolchain 檢查＋template clone 的 workspace ensure）。(4) goal 續跑/預算/改目標提示、daemon 與更新重啟提示、skills 前言等模型可見字串全面改 rust call form（`rlm::goal::complete()?` 等）。刻意保留：rust-cell/* 與 host-bridge 的世系註解、`includeIpythonExamples` 相容別名、`PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL` 環境變數名（D25 孵化期不動 user-facing env，WP8 一併處理）；`--tools` 對非內建名維持寬容（WP2 定調的 extension allowlist 契約）。
 
