@@ -3,7 +3,7 @@
  * plus each run's session JSONL and emits a per-run CSV and per-condition
  * aggregates, checked against the D20 GO/NO-GO thresholds.
  *
- *   node poc/bench/analyze.ts [--csv results/bench.csv]
+ *   node poc/bench/analyze.ts [--csv results/bench.csv] [--d21 profile.json]
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -13,6 +13,54 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
 const PLANS_DIR = join(HERE, "results", "plans");
+
+interface D21Profile {
+	version: 1;
+	models: { sonnet: string; opus: string; openWeight: string };
+	treatment: "F" | "B/example" | "B/noexample" | "B/split";
+}
+
+const d21Tasks = [
+	"01-log-stats", "02-csv-normalize", "03-fix-bug", "04-multi-turn-state",
+	"05-toolchain-loop", "06-build-cli", "07-todo-scan", "08-rust-rename",
+	"09-helper-accumulation", "10-lint-fix", "11-join-report", "12-repair-config",
+];
+
+function readD21Profile(path: string): D21Profile {
+	try {
+		const profile: unknown = JSON.parse(readFileSync(path, "utf-8"));
+		if (!isRecord(profile) || profile.version !== 1 ||
+			Object.keys(profile).sort().join(",") !== "models,treatment,version" ||
+			!isRecord(profile.models) || Object.keys(profile.models).sort().join(",") !== "openWeight,opus,sonnet" ||
+			!Object.values(profile.models).every((model) =>
+				typeof model === "string" && model.length > 0 && !/[\s|,]/.test(model)) ||
+			new Set(Object.values(profile.models)).size !== 3 ||
+			typeof profile.treatment !== "string" || !["F", "B/example", "B/noexample", "B/split"].includes(profile.treatment)) {
+			throw new Error("expected version 1, three distinct model IDs in sonnet/opus/openWeight, and treatment F or B/example, B/noexample, B/split");
+		}
+		return profile as unknown as D21Profile;
+	} catch (error) {
+		throw new Error(`invalid D21 profile ${path}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+const options = new Map<string, string>();
+let d21Profile: D21Profile | undefined;
+try {
+	for (let i = 2; i < process.argv.length; i += 2) {
+		const flag = process.argv[i];
+		const value = process.argv[i + 1];
+		if (!["--csv", "--d21"].includes(flag) || options.has(flag) || !value || value.startsWith("--")) {
+			throw new Error(`invalid argument ${flag}; usage: analyze.ts [--csv path] [--d21 profile.json]`);
+		}
+		options.set(flag, value);
+	}
+	const profilePath = options.get("--d21");
+	if (profilePath) d21Profile = readD21Profile(profilePath);
+} catch (error) {
+	console.error(error instanceof Error ? error.message : String(error));
+	process.exit(2);
+}
 
 type SessionStatus = "ok" | "missing" | "unreadable" | "invalid" | "empty";
 type DriverStatus = "legacy" | "planned" | "running" | "completed" | "error" | "invalid";
@@ -317,11 +365,55 @@ if (inventoryIssues.length) {
 	for (const issue of inventoryIssues) console.log(`  ${issue}`);
 }
 
+function d21Coverage(profile: D21Profile): string[] {
+	const issues: string[] = [];
+	if (inventoryIssues.length) issues.push("D21 requires a consistent run inventory");
+	const expected = new Map<string, number>();
+	const treatmentGroup = profile.treatment === "F" ? "F" : "B";
+	for (const task of d21Tasks) {
+		for (const model of Object.values(profile.models)) {
+			for (const group of ["A", treatmentGroup]) {
+				for (const rep of [1, 2, 3]) {
+					const variant = group === "A" ? "n/a" : group === "F" ? "builtin" :
+						profile.treatment === "B/split" ? (rep % 2 ? "example" : "noexample") : profile.treatment.slice(2);
+					expected.set(JSON.stringify([task, model, group, variant, rep]), 0);
+				}
+			}
+		}
+	}
+	for (const run of runs) {
+		const key = JSON.stringify([run.task, run.model, run.group, run.variant, run.rep]);
+		const count = expected.get(key);
+		if (count === undefined) issues.push(`unexpected D21 slot: ${key}`);
+		else expected.set(key, count + 1);
+		if (!run.planId || expectedRuns.get(run.runId)?.planId !== run.planId) {
+			issues.push(`D21 run without a matching plan: ${run.runId}`);
+		}
+		if (run.driverStatus !== "completed") issues.push(`D21 run not completed: ${run.runId}`);
+	}
+	for (const [key, count] of expected) {
+		if (count === 0) issues.push(`missing D21 slot: ${key}`);
+		else if (count > 1) issues.push(`duplicate D21 slot: ${key}`);
+	}
+	return issues;
+}
+
+const d21Issues = d21Profile ? d21Coverage(d21Profile) : [];
+if (d21Profile) {
+	console.log("D21 model roles are operator declarations; provider aliases and routing are not verified.");
+	for (const [role, model] of Object.entries(d21Profile.models)) console.log(`  ${role}: ${model}`);
+	if (d21Issues.length) {
+		console.log("D21 coverage: INCOMPLETE — all D20 verdicts are withheld.");
+		for (const issue of d21Issues) console.log(`  ${issue}`);
+	} else {
+		console.log("D21 coverage: COMPLETE (216 slots). D20 evidence and thresholds are checked separately below.");
+	}
+} else {
+	console.log("D21 coverage not checked; use --d21 profile.json to require the full matrix.");
+}
+
 // Per-run CSV
-const csvPath =
-	process.argv.includes("--csv") && process.argv[process.argv.indexOf("--csv") + 1]
-		? resolve(process.argv[process.argv.indexOf("--csv") + 1])
-		: join(HERE, "results", "bench.csv");
+const csvPath = resolve(options.get("--csv") ?? join(HERE, "results", "bench.csv"));
 const header =
 	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId";
 const rows = runs.map((m) => {
@@ -511,6 +603,7 @@ function noVerdict(reason: string): GateResult {
 
 function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
 	if (inventoryIssues.length) return noVerdict("run inventory incomplete or inconsistent");
+	if (d21Issues.length) return noVerdict("D21 matrix incomplete or inconsistent");
 	if (!a) return noVerdict("baseline incomplete");
 	if (!b) return noVerdict("treatment incomplete");
 	if (a.driverIncompleteRuns || b.driverIncompleteRuns) return noVerdict("driver runs incomplete");
@@ -543,10 +636,15 @@ console.log("\nD20 overall (per treatment): at least 2 distinct model IDs must m
 console.log("All recorded models need complete comparisons on the same task versions and relative task weights.");
 console.log("Each model needs matching models.json fingerprints across baseline and treatment; environment-resolved settings are not verified.");
 const treatments = [...new Set(runs.map(conditionFor).filter(isTreatment))].sort();
+const overallVerdicts = new Map<string, "GO" | "NO-GO">();
 if (treatments.length === 0) console.log("  no treatment conditions — no verdict");
 for (const condition of treatments) {
 	if (inventoryIssues.length) {
 		console.log(`  ${condition}: run inventory incomplete or inconsistent — no verdict`);
+		continue;
+	}
+	if (d21Issues.length) {
+		console.log(`  ${condition}: D21 matrix incomplete or inconsistent — no verdict`);
 		continue;
 	}
 	if (!["F", "B/example", "B/noexample"].includes(condition)) {
@@ -583,7 +681,13 @@ for (const condition of treatments) {
 		} else if (comparisons.some(({ baseline }) => !sameTaskVersions(first, baseline!))) {
 			console.log(`  ${condition}: ${counts}; task versions differ across models — no verdict`);
 		} else {
-			console.log(`  ${condition}: ${counts} → ${passing >= 2 ? "GO" : "NO-GO"}`);
+			const verdict = passing >= 2 ? "GO" : "NO-GO";
+			overallVerdicts.set(condition, verdict);
+			console.log(`  ${condition}: ${counts} → ${verdict}`);
 		}
 	}
+}
+if (d21Profile) {
+	const required = d21Profile.treatment === "B/split" ? ["B/example", "B/noexample"] : [d21Profile.treatment];
+	if (d21Issues.length || required.some((condition) => overallVerdicts.get(condition) !== "GO")) process.exitCode = 1;
 }

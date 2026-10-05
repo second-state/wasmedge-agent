@@ -186,13 +186,69 @@ verdict, even if two other models pass. All models must use the same task
 IDs, versions, and relative task weights; proportional repetition counts
 are allowed. Per-model results and CSV metrics remain available separately.
 
-This summarizes the recorded selection, not the completeness of the full
+By default, this summarizes the recorded selection, not the completeness of the full
 D21 experiment: it does not require all 12 tasks, three repetitions, or the
 open-weight model. Model IDs are compared literally; provider aliases and
 model families are not resolved. The summary cannot recover models/runs
 absent from both records and saved plans or verify effective provider settings
 and toolchain versions. Latency and recovery remain reported observations,
 outside the D20 pass/token gate.
+
+### Requiring the D21 matrix
+
+For a full-matrix audit, supply `--d21 path/to/profile.json` with the literal
+model IDs used in the run metadata:
+
+```json
+{
+  "version": 1,
+  "models": {
+    "sonnet": "provider/sonnet-model-id",
+    "opus": "provider/opus-model-id",
+    "openWeight": "provider/open-weight-model-id"
+  },
+  "treatment": "F"
+}
+```
+
+```bash
+node poc/bench/analyze.ts --d21 path/to/profile.json
+```
+
+The three IDs must be distinct. Roles are operator declarations: review the
+provider configuration and model identities when preparing the profile.
+The analyzer does not resolve aliases or verify a provider's actual routing,
+model family, or open-weight status. The profile contains no credentials.
+
+This mode requires exactly the 12 task IDs above × three declared models ×
+baseline A and the selected treatment × repetitions 1, 2, 3: 216 completed,
+inventory-backed runs. All discovered records participate; there is no
+automatic selection of favorable runs. Archive unrelated runs **together
+with their plans** outside `results/runs` and `results/plans` before auditing
+a separate experiment. Multiple driver invocations may fill the matrix, but
+each slot must occur exactly once across all plans. Missing tasks, models,
+or repetitions are detected even if their plans are also absent. Extra slots,
+duplicate slots, unplanned legacy records, incomplete driver runs, or
+inconsistent inventories withhold all D20 verdicts while retaining metrics.
+
+`treatment` accepts `F`, `B/example`, `B/noexample`, or `B/split`. F requires
+the `builtin` variant and A requires `n/a`. B/split follows the driver's D17
+assignment: repetitions 1 and 3 use `example`, repetition 2 uses `noexample`.
+The two B variants still receive separate D20 comparisons; passing models
+are never pooled across variants. A fixed B variant requires all three
+repetitions to use that variant.
+
+`D21 coverage: COMPLETE` confirms the declared matrix and completed driver
+records, not performance or measurement validity. The existing D20 evidence
+checks (including matching task/config hashes and complete check/output usage)
+and thresholds still apply. With `--d21`, exit status is 0 only when coverage
+is complete and every requested treatment variant receives overall D20 GO;
+1 means missing/inconsistent evidence or NO-GO, and 2 means invalid CLI/profile
+input. Without `--d21`, the existing exploratory verdicts and exit behavior
+remain available. Neither mode pins agent binaries, toolchains, or effective
+provider settings, or establishes statistical significance.
+
+### Evidence and metric conventions
 
 The summary lists distinct `tasks` separately from `runs` (discovered
 records, including unstarted ones); missing planned records are listed in
