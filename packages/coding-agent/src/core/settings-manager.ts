@@ -6,6 +6,7 @@ import lockfile from "proper-lockfile";
 import { getAgentDir, getProjectConfigDir } from "../config.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
+import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
 
 const RECENT_MODELS_LIMIT = 20;
 export const DEFAULT_IDLE_EVICTION_MINUTES = 90;
@@ -71,6 +72,7 @@ export interface BundledSkillsSettings {
 }
 
 export interface RustCellSettings extends CellResourceLimits {
+	workspaceWritePolicy?: WorkspaceWritePolicy; // guest /workspace access; default: rw
 	cellTimeoutMs?: number; // per-cell budget (compile + run); default: 120000
 	preludeExtra?: PreludeExtra[];
 }
@@ -942,6 +944,10 @@ export class SettingsManager {
 		};
 		validateCellResourceLimits(limits);
 		return limits;
+	}
+
+	getRustCellWorkspaceWritePolicy(): WorkspaceWritePolicy {
+		return normalizeWorkspaceWritePolicy(this.settings.rustCell?.workspaceWritePolicy);
 	}
 
 	getRustCellPreludeExtra(): PreludeExtra[] {

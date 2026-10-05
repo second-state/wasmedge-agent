@@ -4,6 +4,7 @@
  * default per D17 (M1: inconclusive but cheaper on the primary tier). */
 
 import { CURATED_DEPENDENCIES } from "../rust-cell/dependency-catalog.js";
+import type { WorkspaceWritePolicy } from "../rust-cell/workspace-policy.js";
 
 export const RUST_PRELUDE_LABELS = "serde, serde_json, anyhow, regex, walkdir";
 
@@ -25,7 +26,7 @@ Variables do NOT persist between cells. Persistence has three explicit layers in
    growing the library over re-writing helpers inside cells: cells should read as glue
    over agent_lib calls. If a lib edit fails to build, the files are reverted and the
    cell does not run — extend the library in small, compiling steps.
-3. Large data: files under /agent/state (yours) or /workspace (the project's).
+3. Large data: {PROJECT_STORAGE}
 
 Compile errors are normal feedback, not failures. The tool returns rustc diagnostics;
 fix the program and resubmit the complete cell. Runtime output returns stdout and
@@ -38,10 +39,7 @@ through the project's own environment with the bash tool (e.g. \`npm test\`,
 \`cargo test\`, \`uv run ...\`), and treat failures from that native environment as the
 relevant result.
 
-Use rust cells — not bash — for reading, searching, and editing files: the prelude has
-read_lines, grep, walk, and edit_exact, and results persisted into rlm::state can be
-revisited without re-reading. Reserve bash for the project's own commands, not for
-file exploration. Use rust cells to decide what to run and to analyze what comes back.
+{FILE_OPERATIONS}
 
 Capabilities are ordinary Rust calls returning Result, composable into program logic:
 - \`rlm::msg::send_to_parent("…")?\` replies to your parent when a task calls for an
@@ -75,9 +73,14 @@ calls are harmless. For other crates, ask the user to configure
 rustCell.preludeExtra and reload. Do not work around this by making the sandbox
 impersonate the project environment — the project's own tooling runs via bash.
 
-Editing project files: for targeted edits prefer
-\`edit_exact("/workspace/src/a.rs", old, new)?\` from the prelude (exact-match replace,
-shows a diff to the user); write whole files with \`write_file\` when generating them.`;
+{PROJECT_EDITING}`;
+
+export function readonlyWorkspacePrompt(hasBash = true): string {
+	const apply = hasBash
+		? "Apply the patch with the host bash tool (e.g. git apply from the host project directory), following the existing authorization policy. /workspace is a guest path; use the host working directory in bash."
+		: "Return the patch to the caller for application with an authorized host tool.";
+	return `Guest workspace policy: /workspace is read-only. Use rust cells to read and search project files; generate a unified diff in stdout or a patch file in /scratch instead of calling edit_exact or write_file on /workspace. ${apply} /agent/state and /scratch remain writable, and declared lib edits still compile with the cell. This policy covers guest execution only; Cargo, host bash, and host handlers retain host permissions.`;
+}
 
 const RUST_EXAMPLE = `Example — one call that grows the library and uses it immediately:
   lib: src/helpers/logs.rs
@@ -97,11 +100,37 @@ const RUST_EXAMPLE = `Example — one call that grows the library and uses it im
 export interface RustControlPromptOptions {
 	includeExample?: boolean;
 	preludeExtra?: string[];
+	workspaceWritePolicy?: WorkspaceWritePolicy;
+	hasBash?: boolean;
 }
 
 /** The §3.2 doctrine body, ready to append inside buildRlmPrompt. */
 export function rustControlPromptSection(options: RustControlPromptOptions = {}): string {
-	let core = RUST_CONTROL_PROMPT.replace("{PRELUDE_LABELS}", RUST_PRELUDE_LABELS);
+	const readonly = options.workspaceWritePolicy === "ro";
+	let core = RUST_CONTROL_PROMPT.replace("{PRELUDE_LABELS}", RUST_PRELUDE_LABELS)
+		.replace(
+			"{PROJECT_STORAGE}",
+			readonly
+				? "write your files under /agent/state; /workspace holds read-only project files."
+				: "files under /agent/state (yours) or /workspace (the project's).",
+		)
+		.replace(
+			"{FILE_OPERATIONS}",
+			readonly
+				? "Use rust cells for reading and searching files with read_lines, grep, and walk; persist findings into rlm::state to revisit them without re-reading."
+				: `Use rust cells — not bash — for reading, searching, and editing files: the prelude has
+read_lines, grep, walk, and edit_exact, and results persisted into rlm::state can be
+revisited without re-reading. Reserve bash for the project's own commands, not for
+file exploration. Use rust cells to decide what to run and to analyze what comes back.`,
+		)
+		.replace(
+			"{PROJECT_EDITING}",
+			readonly
+				? readonlyWorkspacePrompt(options.hasBash)
+				: `Editing project files: for targeted edits prefer
+\`edit_exact("/workspace/src/a.rs", old, new)?\` from the prelude (exact-match replace,
+shows a diff to the user); write whole files with \`write_file\` when generating them.`,
+		);
 	if (options.preludeExtra?.length) {
 		core += `\n\nUser-configured crates under agent_lib::prelude::extra: ${options.preludeExtra.join(", ")}. After importing the prelude, use extra::<crate>::... .`;
 	}

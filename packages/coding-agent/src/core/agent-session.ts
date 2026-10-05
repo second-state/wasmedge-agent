@@ -267,6 +267,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
+import { getRustToolWorkspaceWritePolicy } from "./tools/rust.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import { addAssistantUsage, emptyUsage } from "./usage.js";
 import { SERPER_CREDENTIAL_ID, SERPER_ENV_VAR } from "./websearch-credential.js";
@@ -4157,6 +4158,10 @@ export class AgentSession {
 			messagesPath: this.sessionManager.getSessionFile(),
 			selectedTools: validToolNames,
 			preludeExtra: this.settingsManager.getRustCellPreludeExtra().map((crate) => crate.name.replaceAll("-", "_")),
+			workspaceWritePolicy:
+				getRustToolWorkspaceWritePolicy(this._baseToolsOverride?.rust) ??
+				this._rustCellProvisioner?.workspaceWritePolicy ??
+				this.settingsManager.getRustCellWorkspaceWritePolicy(),
 			toolSnippets,
 			promptGuidelines,
 			allowRecursion: this._rlmDepth < this._rlmMaxDepth,
@@ -8439,6 +8444,7 @@ export class AgentSession {
 				workspaceDir: this._rustWorkspaceDir,
 				initialWorkspaceDir: this._rustWorkspaceSeedDir(),
 				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
+				workspaceWritePolicy: this.settingsManager.getRustCellWorkspaceWritePolicy(),
 				preludeExtra: this.settingsManager.getRustCellPreludeExtra(),
 				...this.settingsManager.getRustCellResourceLimits(),
 				hostHandlers: this._createHostRequestHandlers(),

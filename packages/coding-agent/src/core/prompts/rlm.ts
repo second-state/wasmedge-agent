@@ -1,3 +1,4 @@
+import type { WorkspaceWritePolicy } from "../rust-cell/workspace-policy.js";
 import { RUST_PRELUDE_LABELS, rustControlPromptSection } from "./rust-rlm.js";
 
 export interface RlmPromptOptions {
@@ -10,6 +11,7 @@ export interface RlmPromptOptions {
 	parentAgent?: string;
 	activeTools?: string[];
 	preludeExtra?: string[];
+	workspaceWritePolicy?: WorkspaceWritePolicy;
 }
 
 export interface ChildAgentDoctrineOptions {
@@ -113,7 +115,14 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	}
 
 	if (hasRust) {
-		parts.push("", rustControlPromptSection({ preludeExtra: options.preludeExtra }));
+		parts.push(
+			"",
+			rustControlPromptSection({
+				preludeExtra: options.preludeExtra,
+				workspaceWritePolicy: options.workspaceWritePolicy,
+				hasBash: options.activeTools === undefined || activeTools.includes("bash"),
+			}),
+		);
 		if (installedSkills.includes("refine")) {
 			parts.push(
 				"",

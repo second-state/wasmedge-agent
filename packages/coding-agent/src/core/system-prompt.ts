@@ -3,7 +3,9 @@
  */
 
 import { buildChildAgentDoctrine, buildRlmPrompt, buildSubagentGuidance } from "./prompts/index.js";
+import { readonlyWorkspacePrompt } from "./prompts/rust-rlm.js";
 import { formatHarnessStateForPrompt, type HarnessState } from "./refinement/index.js";
+import type { WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
@@ -13,6 +15,8 @@ export interface BuildSystemPromptOptions {
 	selectedTools?: string[];
 	/** User-configured crate names under agent_lib::prelude::extra. */
 	preludeExtra?: string[];
+	/** Effective guest /workspace access policy. */
+	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Optional one-line tool snippets keyed by tool name. Used only for custom prompts. */
 	toolSnippets?: Record<string, string>;
 	/** Additional guideline bullets appended to the system prompt. */
@@ -81,6 +85,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	if (customPrompt) {
 		let prompt = customPrompt;
+		if (hasRust && options.workspaceWritePolicy === "ro") {
+			prompt += `\n\n${readonlyWorkspacePrompt(hasBash)}`;
+		}
 
 		// Append project context files
 		if (contextFiles.length > 0) {
@@ -134,6 +141,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		allowRecursion,
 		depth: options.rlmDepth,
 		preludeExtra: options.preludeExtra,
+		workspaceWritePolicy: options.workspaceWritePolicy,
 		parentAgent: options.rlmParentAgent,
 	});
 

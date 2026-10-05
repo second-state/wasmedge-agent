@@ -717,7 +717,7 @@ wasmedge-agent/
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
 - **rustdoc JSON 內省**：`listPersistentState` 與 skills XML 的 API 列表改由 rustdoc JSON 供給。
-- **Workspace 唯讀模式**：`workspaceWritePolicy: "rw" | "ro"`；ro 時 `/workspace:ro` + 教義改為產 patch 由 host apply（RL replay 前置）。
+- **Workspace 唯讀模式（已落實，2026-10-05）**：`rustCell.workspaceWritePolicy: "rw" | "ro"`，預設 rw；ro 時以 WasmEdge `:readonly` 掛載 `/workspace`，教義改為產 patch，由既有 host bash 套用；無 bash 時交回 caller。設定經 session／child／SDK／runner 傳遞，修改後 restart 或 `/reload`；無效值拒絕啟動。`/agent/state`、`/scratch` 與宣告式 lib 修改仍可寫。編譯與執行前檢查 state/scratch 不得與 project 重疊（含 symlink root），拒絕含冒號的 host mount 路徑以避免 CLI 解析歧義，沒有 rw fallback。此限制只涵蓋 guest execution；Cargo、bash、host handlers 保留 host 權限，host hard links／並行 filesystem 變更不在保證內。未增加 patch approval gate，也尚未實作 trajectory replay。
 - **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。Project-local `skills.package` scaffold 已落實，reload 與登錄測試仍分開執行；一般 cell 已共用 import 白名單並改用 stdio bridge（§2.7）。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。
 
@@ -755,7 +755,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 ```jsonc
 "rustCell": {
   "cellTimeoutMs": 120000,
-  "workspaceWritePolicy": "rw",      // "ro" 於 Phase 2
+  "workspaceWritePolicy": "rw",      // 可選 "ro"，僅限 guest execution
   "preludeExtra": [],                 // 追加 crate（仍過 wasm 相容檢查）
   "cellGasLimit": null,               // T1 已支援，預設不另設上限
   "cellMemoryPageLimit": null         // 每個 linear memory 的 64 KiB 頁數
@@ -769,7 +769,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | # | 決策 | 理由 / 替代案 |
 |---|---|---|
 | D1 | Cell 語言僅 Rust（Phase 0–2） | 聚焦教義與 prelude 品質；`CompilePipeline` 保持 driver 介面（語言→toolchain 命令）以備擴充。替代案「任何 wasm 語言」推遲到 component model 時代 |
-| D2 | `/workspace` 預設可寫 | 與現制行為對齊、PoC 對照公平；ro+patch 模式為 Phase 2 選項（RL 場景再啟用） |
+| D2 ✅ | `/workspace` 預設可寫，ro+patch 可選 | 與現制行為對齊、PoC 對照公平；`rustCell.workspaceWritePolicy: "ro"` 限制 guest 寫入，patch 由既有 host 工具套用（§8.2）。不限制 host pipeline，也不代表 replay 已完成 |
 | D3 | T1 socket 起步 → CLI + stdio 過渡（2026-10-02）→ T2 host functions | 保留同步 guest API 與協議 v1；stdio 先移除 socket 需求，不新增 native binary 部署面（§2.7） |
 | D4 | Bridge 認證用 bearer token（非 HMAC 逐訊息簽章） | 每 session 隨機 64-hex token + active cell ID；現使用每 cell private pipes，token 同時區分 stdout protocol frames |
 | D5 | Workspace git 版本化 + agent_lib guard | Persisted 成功 cells 保存指定範圍快照；失敗 builds 回復先前來源。Commit 成本依檔案量而變，沒有 <10ms 保證；非完整 replay（§2.1） |

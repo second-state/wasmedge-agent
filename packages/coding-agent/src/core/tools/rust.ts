@@ -5,9 +5,10 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
-import type { CellInput, CellResourceLimits, CellResult } from "../rust-cell/index.js";
+import type { CellInput, CellResourceLimits, CellResult, WorkspaceWritePolicy } from "../rust-cell/index.js";
 import { composeToolText, RustCellProvisioner } from "../rust-cell/index.js";
 import type { PreludeExtra } from "../rust-cell/prelude-extra.js";
+import { normalizeWorkspaceWritePolicy } from "../rust-cell/workspace-policy.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const rustSchema = Type.Object({
@@ -38,6 +39,8 @@ export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
 export interface RustToolOptions extends CellResourceLimits {
+	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */
+	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
 	workspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
@@ -63,6 +66,7 @@ export function createRustToolDefinition(
 		options?.provisioner ??
 		new RustCellProvisioner({
 			cwd,
+			workspaceWritePolicy: options?.workspaceWritePolicy,
 			workspaceDir: options?.workspaceDir,
 			cellTimeoutMs: options?.cellTimeoutMs,
 			preludeExtra: options?.preludeExtra,
@@ -79,7 +83,10 @@ export function createRustToolDefinition(
 			"cells. Persistent layers instead: rlm::state (key-value), the agent_lib crate " +
 			"(extend it by passing lib files alongside your code), and files. Project imports, " +
 			"tests, scripts, CLIs, and dependency checks must run through the project's own " +
-			"environment via the bash tool.",
+			"environment via the bash tool." +
+			(provisioner.workspaceWritePolicy === "ro"
+				? " /workspace is read-only for guest execution. Produce a patch for host-side application; /agent/state and /scratch remain writable. Cargo and host tools retain host permissions."
+				: ""),
 		promptSnippet: "rust - sandboxed Rust cells with explicit persistence (rlm::state, agent_lib)",
 		// Cells share one workspace and one target dir — never two cells at once.
 		executionMode: "sequential",
@@ -132,6 +139,18 @@ export function createRustToolDefinition(
 	};
 }
 
+const workspacePolicies = new WeakMap<AgentTool, WorkspaceWritePolicy>();
+
+/** Keep SDK tool overrides and AgentSession's file-editing doctrine consistent. */
+export function getRustToolWorkspaceWritePolicy(tool: AgentTool | undefined): WorkspaceWritePolicy | undefined {
+	return tool ? workspacePolicies.get(tool) : undefined;
+}
+
 export function createRustTool(cwd: string, options?: RustToolOptions): AgentTool<typeof rustSchema> {
-	return wrapToolDefinition(createRustToolDefinition(cwd, options));
+	const tool = wrapToolDefinition(createRustToolDefinition(cwd, options));
+	workspacePolicies.set(
+		tool,
+		options?.provisioner?.workspaceWritePolicy ?? normalizeWorkspaceWritePolicy(options?.workspaceWritePolicy),
+	);
+	return tool;
 }

@@ -155,9 +155,25 @@ When a provider requests a retry delay longer than `retry.provider.maxRetryDelay
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
+| `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
 | `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
 | `rustCell.preludeExtra` | array | `[]` | User-selected crates.io dependencies available under `agent_lib::prelude::extra` |
+
+Set `"rustCell": { "workspaceWritePolicy": "ro" }` to mount `/workspace` read-only
+for Rust guest execution. The prompt directs cells to produce patches and use the
+existing host `bash` tool to apply them, or return them to the caller when bash is
+unavailable. `/agent/state`, `/scratch`, and declared library edits remain writable.
+The default `"rw"` keeps direct guest edits. Invalid values (including `null`)
+reject runtime setup. Restart or `/reload` after changing the policy; children
+inherit the session settings. The SDK `createRustTool` option has the same name.
+
+Readonly mode requires the project and writable session mounts to be separate,
+including resolved symlink roots. Host mount paths containing `:` are rejected
+because WasmEdge uses colons as mount delimiters. There is no writable fallback.
+This is a guest capability restriction: Cargo/build scripts, host bash, and host
+handlers retain host permissions. It is not a read-only agent pipeline or a
+patch approval/replay system.
 
 Gas and memory limits apply to cells and each sandboxed skill test module. For example,
 `"rustCell": { "cellGasLimit": 100000000, "cellMemoryPageLimit": 4096 }`
