@@ -11,6 +11,7 @@ bench/
 ├── run.ts        # driver: (task × model × group × rep) headless runs
 ├── analyze.ts    # session JSONL → per-run CSV + per-condition aggregates + D20 gate
 ├── launchers.ts  # agent entry-point resolution, fingerprints, and validation
+├── source-inputs.ts # fingerprints for explicitly declared files/directories
 ├── tasks/<id>/   # task.json (prompts/turns/timeout), fixture/, check.sh
 └── results/      # gitignored: plans/<planId>.json, locks/<planId>.lock, and runs/<runId>/{task,project,agent-dir,workspaces,models.json,meta.json,turn-*.log}
 ```
@@ -92,8 +93,9 @@ slot was registered; `startedAt` stays null until that run starts.
 After all run records are registered, the driver atomically publishes a
 separate `results/plans/<planId>.json` before launching the first agent.
 This inventory lists every expected run ID, task, model, group, resolved
-prompt variant, repetition, task/provider-config fingerprints, and agent launcher pin. Each
-run's metadata links to it with `planId`. If saving the inventory fails,
+prompt variant, repetition, task/provider-config fingerprints, agent launcher pin,
+and optional declared source-input pins. Each run's metadata links to it with
+`planId`. If saving the inventory fails,
 no agent starts. The inventory is not rewritten as runs progress.
 
 Each run also retains a `task/` snapshot of the selected task directory before
@@ -143,10 +145,9 @@ launch, around each turn, and before/after checking the task. A mismatch is a
 driver error with no acceptance result; later turns do not start. Turn-boundary
 verification overhead is included in `wallMs`.
 
-This pins only the entry-point file, not a transitive installation. A shell
-wrapper's source tree, PoC extension, packages, interpreter, template, Cargo,
-WasmEdge, shared libraries, environment, and provider routing are still external
-inputs. No executable version probe or full runtime snapshot is performed.
+Launcher fingerprints cover only the entry-point file. Use `--source-inputs`
+below to include files/directories used by a wrapper. No dependency discovery,
+executable version probe, or full runtime snapshot is performed.
 Concurrent changes between checks can escape detection; these are local
 experiment records, not tamper-proof attestations.
 
@@ -167,6 +168,54 @@ outcome, distinct from a driver error. Recording requires a writable results
 directory. A failed or interrupted registration may leave only part of the
 plan, but no agent has run yet. Records left without their inventory block
 analyzer verdicts.
+
+### Declaring source inputs
+
+For a comparison using source launchers or wrappers, pass
+`--source-inputs /path/to/inputs.json` with an explicit, nonempty list for every
+selected group. Paths resolve relative to that manifest, not the driver's cwd.
+For example, a minimal declaration for two source checkouts could be:
+
+```json
+{
+  "A": ["./baseline/src", "./baseline/package.json"],
+  "F": ["./fork/packages/coding-agent/src", "./fork/tsconfig.json"]
+}
+```
+
+The example only covers those paths. Include other internal package sources
+and configuration actually loaded by your launchers. The fork's default
+`wasmedge-agent.sh` uses TypeScript source; a wrapper that runs a bundled build
+needs its generated bundle declared instead.
+Group B also needs its PoC extension sources. Include installed packages,
+runtime templates or other inputs explicitly when they matter to the experiment;
+a lockfile alone does not verify installed dependency bytes. The driver does
+not infer these dependencies or change how launchers execute.
+
+Before registering runs, the driver fingerprints each declared file/directory.
+`sourceInputs` in each plan slot and run metadata records the absolute invocation
+path, resolved root and SHA-256 content fingerprint. Directory hashing includes
+all sorted relative entries, file bytes and executable bits; timestamps are
+excluded. There are no implicit ignore rules. Select stable inputs rather than
+build/cache/output directories. Root symlinks are resolved and pinned; nested
+symlinks and special files are rejected. Duplicate roots and paths overlapping
+the benchmark results directory are rejected. File contents are not copied
+into results.
+
+Checks run before setup and launch, around each turn, and before/after task
+checking. Changes or unavailable inputs become driver errors with no acceptance
+result. Turn-boundary hashing contributes to `wallMs`, so large declared trees
+can increase the measured time. Resume validates all pending inputs before any
+run starts, using saved paths/fingerprints without rereading the manifest.
+Completed/attempted runs do not require today's source files to exist.
+
+New plans record `sourcePinVersion: 1`. Without `--source-inputs`, their explicit
+`sourceInputs: null` means sources are unverified. Older launcher-pinned plans
+without source fields remain resumable with that same limitation. Neither
+option proves that the declared set covers everything loaded: interpreters,
+external tools, environment/provider settings and undeclared files remain
+external inputs. Boundary checks do not prevent modification and restoration
+between checks or provide host isolation.
 
 ### Saving and resuming a plan
 
@@ -217,10 +266,21 @@ current launcher file; only pending slots can execute and require that file.
 
 The lock and local records are not tamper-proof or a host security boundary.
 Resumed runs use pinned agent entry points and task/config snapshot bytes,
-but still use current wrapper dependencies, toolchains, environment, and provider
-routing. Use the same external environment when continuing an experiment.
+and, when declared, verify source-input fingerprints. Undeclared wrapper
+dependencies, toolchains, environment, and provider routing remain external.
+Use the same external environment when continuing an experiment.
 
 ## Metrics (analyze.ts)
+
+The analyzer reports declared source-input coverage and appends
+`sourceInputsHash` to the CSV (blank when unpinned). This hash includes the
+recorded paths, resolved roots and content hashes; analysis does not read the
+current sources. Pins must match their inventory and stay consistent within
+each model/condition, including the selected path set. Baseline and treatment
+may have different source identities. Mixed pinned/unpinned comparisons or
+inconsistent versions within a condition withhold verdicts. Unpinned-only
+historical comparisons retain the existing rules with an explicit limitation;
+this also applies to `--d21`. The analyzer cannot verify declaration completeness.
 
 The analyzer checks every saved plan against the discovered run records.
 Missing records (including an entire model), duplicate run IDs or planned

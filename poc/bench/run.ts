@@ -22,6 +22,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AgentLauncher, launcherFields, launcherIdentity, resolveAgentLauncher, verifyAgentLauncher } from "./launchers.ts";
+import { type SourceInput, loadSourceInputs, sameSourceInputs, sourceInputsIdentity, verifySourceInputs } from "./source-inputs.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..");
@@ -47,6 +48,7 @@ interface TaskSpec {
 }
 
 interface RunMeta extends AgentLauncher {
+	sourceInputs: SourceInput[] | null;
 	runId: string;
 	planId: string;
 	task: string;
@@ -80,6 +82,7 @@ function parseArgs(argv: string[]) {
 		reps: 1,
 		variant: "example" as "example" | "noexample" | "split",
 		planOnly: false,
+		sourceInputs: null as string | null,
 		resumePlan: null as string | null,
 	};
 	if (argv.includes("--resume-plan")) {
@@ -100,6 +103,7 @@ function parseArgs(argv: string[]) {
 		else if (arg === "--groups") opts.groups = next().split(",") as ("A" | "B" | "F")[];
 		else if (arg === "--reps") opts.reps = Number(next());
 		else if (arg === "--variant") opts.variant = next() as typeof opts.variant;
+		else if (arg === "--source-inputs" && opts.sourceInputs === null) opts.sourceInputs = next();
 		else if (arg === "--plan-only" && !opts.planOnly) opts.planOnly = true;
 		else throw new Error(`unknown arg: ${arg}`);
 	}
@@ -438,6 +442,7 @@ function planRun(
 	providerConfig: Buffer,
 	planId: string,
 	launcher: AgentLauncher,
+	sourceInputs: SourceInput[] | null,
 ): { task: TaskSpec; meta: RunMeta } {
 	const variantSlug = variant.replace(/[^a-z0-9]+/gi, "") || "default";
 	const runId = `${task.id}-${group}-${shortModel(model)}-${variantSlug}-r${rep}-${randomUUID()}`;
@@ -450,6 +455,7 @@ function planRun(
 	const snapshot = loadTask(task.id, taskDir);
 	const meta: RunMeta = {
 		...launcher,
+		sourceInputs,
 		runId,
 		planId,
 		task: task.id,
@@ -499,6 +505,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		verifyTask(meta);
 		const providerConfig = verifyProviderConfig(meta);
 		verifyAgentLauncher(meta);
+		verifySourceInputs(meta.sourceInputs);
 		mkdirSync(projectDir, { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 
@@ -533,6 +540,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		const timeoutMs = task.timeoutMs ?? 600_000;
 		verifyProviderConfig(meta, true);
 		verifyAgentLauncher(meta);
+		verifySourceInputs(meta.sourceInputs);
 		turnStartedAt = Date.now();
 		daemon = launchDaemon(bin, baseArgs, projectDir, env, join(runDir, "daemon.log"));
 		meta.daemonPid = daemon.child.pid ?? null;
@@ -542,6 +550,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		for (let turn = 0; turn < task.turns.length; turn++) {
 			verifyProviderConfig(meta, true);
 			verifyAgentLauncher(meta);
+			verifySourceInputs(meta.sourceInputs);
 			if (daemon.exited) throw new Error("benchmark daemon exited before the next turn");
 			const args = [...baseArgs];
 			if (turn > 0) {
@@ -564,6 +573,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 			persistMeta(meta);
 			verifyProviderConfig(meta, true);
 			verifyAgentLauncher(meta);
+			verifySourceInputs(meta.sourceInputs);
 			if (result.timedOut) {
 				break;
 			}
@@ -576,6 +586,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		verifyTask(meta);
 		verifyProviderConfig(meta, true);
 		verifyAgentLauncher(meta);
+		verifySourceInputs(meta.sourceInputs);
 		const checkScript = join(taskDir, "check.sh");
 		if (existsSync(checkScript)) {
 			const check = await new Promise<{ code: number | null; out: string }>((res, reject) => {
@@ -596,6 +607,7 @@ async function runOne(task: TaskSpec, meta: RunMeta): Promise<RunMeta> {
 		verifyTask(meta);
 		verifyProviderConfig(meta, true);
 		verifyAgentLauncher(meta);
+		verifySourceInputs(meta.sourceInputs);
 		meta.sessionFile = findSessionFile(agentDir);
 		meta.driverStatus = "completed";
 	} catch (err) {
@@ -679,6 +691,12 @@ function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
 	if (manifest.launcherPinVersion !== 1) {
 		throw new Error(`benchmark plan has no supported agent launcher pin and cannot be resumed: ${planId}`);
 	}
+	if (manifest.sourcePinVersion !== undefined && manifest.sourcePinVersion !== 1 ||
+		manifest.runs.some((slot) => !isRecord(slot) || (manifest.sourcePinVersion === 1
+			? slot.sourceInputs !== null && !sourceInputsIdentity(slot.sourceInputs)
+			: slot.sourceInputs !== undefined))) {
+		throw new Error(`invalid benchmark source-input pins in plan: ${planId}`);
+	}
 	const ids = new Set<string>();
 	const slots = new Set<string>();
 	const pending: { task: TaskSpec; meta: RunMeta }[] = [];
@@ -700,6 +718,7 @@ function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
 		if (!lstatSync(runDir).isDirectory()) throw new Error(`invalid benchmark run directory: ${runDir}`);
 		const record = readRecord(join(runDir, "meta.json"));
 		if (record.planId !== planId || record.runDir !== runDir || fields.some((key) => record[key] !== slot[key]) ||
+			!sameSourceInputs(record.sourceInputs, slot.sourceInputs) ||
 			typeof record.driverStatus !== "string" || !["planned", "running", "completed", "error"].includes(record.driverStatus)) {
 			throw new Error(`run record differs from benchmark plan: ${slot.runId}`);
 		}
@@ -717,6 +736,7 @@ function resumePlan(planId: string): { task: TaskSpec; meta: RunMeta }[] {
 		verifyTask(meta);
 		verifyProviderConfig(meta);
 		verifyAgentLauncher(meta);
+		verifySourceInputs(meta.sourceInputs);
 		const task = loadTask(meta.task, join(runDir, "task"));
 		if (meta.category !== task.category) throw new Error(`task category differs from snapshot: ${slot.runId}`);
 		pending.push({ task, meta });
@@ -728,6 +748,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 	// Validate the full selection and persist every slot before any agent can run.
 	const tasks = opts.tasks.map((id) => loadTask(id));
 	const providerConfig = loadProviderConfig();
+	const sources = loadSourceInputs(opts.sourceInputs, opts.groups, RESULTS_DIR);
 	const launchers = new Map(opts.groups.map((group) =>
 		[group, resolveAgentLauncher(group === "F" ? FORK_PRIME_AGENT : PRIME_AGENT_SH)]));
 	console.log(
@@ -751,7 +772,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 									? "example"
 									: "noexample"
 								: opts.variant;
-					plan.push(planRun(task, group, model, variant, rep, providerConfig, planId, launchers.get(group)!));
+					plan.push(planRun(task, group, model, variant, rep, providerConfig, planId, launchers.get(group)!, sources.get(group)!));
 				}
 			}
 		}
@@ -765,6 +786,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 		version: 1,
 		executionLockVersion: 1,
 		launcherPinVersion: 1,
+		sourcePinVersion: 1,
 		planId,
 		plannedAt: new Date().toISOString(),
 		runs: plan.map(({ meta }) => ({
@@ -775,6 +797,7 @@ function createPlan(opts: ReturnType<typeof parseArgs>, planId: string): { task:
 			launcherPath: meta.launcherPath,
 			launcherRealPath: meta.launcherRealPath,
 			launcherHash: meta.launcherHash,
+			sourceInputs: meta.sourceInputs,
 			model: meta.model,
 			group: meta.group,
 			variant: meta.variant,

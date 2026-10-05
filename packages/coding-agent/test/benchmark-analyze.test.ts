@@ -18,6 +18,7 @@ function fixture() {
 	const analyzer = join(root, "analyze.ts");
 	copyFileSync(join(repo, "poc/bench/analyze.ts"), analyzer);
 	copyFileSync(join(repo, "poc/bench/launchers.ts"), join(root, "launchers.ts"));
+	copyFileSync(join(repo, "poc/bench/source-inputs.ts"), join(root, "source-inputs.ts"));
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
 	mkdirSync(join(root, "results/runs"), { recursive: true });
 	let nextId = 0;
@@ -41,6 +42,7 @@ function fixture() {
 						"launcherPath",
 						"launcherRealPath",
 						"launcherHash",
+						"sourceInputs",
 					].map((key) => [key, meta[key]]),
 				);
 			});
@@ -53,6 +55,7 @@ function fixture() {
 					version: 1,
 					planId,
 					runs,
+					sourcePinVersion: runs.some((run) => run.sourceInputs !== undefined) ? 1 : undefined,
 					launcherPinVersion: runs.some((run) => run.launcherHash !== undefined) ? 1 : undefined,
 				}),
 			);
@@ -184,6 +187,126 @@ function overall(stdout: string) {
 	expect(section, "missing overall D20 summary").toBeDefined();
 	return section!;
 }
+
+describe("benchmark declared source evidence", () => {
+	function addPinned(
+		f: ReturnType<typeof fixture>,
+		group: string,
+		sourceInputs: unknown = [
+			{
+				path: `/src/${group}`,
+				realPath: `/src/${group}`,
+				hash: `sha256:${group === "A" ? "a".repeat(64) : "f".repeat(64)}`,
+			},
+		],
+	) {
+		const run = f.add({ group, variant: group === "A" ? "n/a" : "builtin", tokensOut: 100 });
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		writeFileSync(run.metaPath, JSON.stringify({ ...meta, sourceInputs }));
+		return run;
+	}
+
+	it("compares distinct baseline/treatment inputs using recorded evidence only", () => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F");
+		f.registerPlan();
+		const result = f.run();
+		expect(result.stdout).toContain("Run inventory: 2/2 planned records match");
+		expect(result.stdout).toContain("Declared source-input pins: 2/2 records");
+		expect(result.stdout).toContain("→ GO");
+		for (const row of csvRows(result.csv)) expect(row.sourceInputsHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+		expect(result.csv).not.toContain("/src/");
+	});
+
+	it.each(["path", "realPath", "hash"])(
+		"withholds a cohort with inconsistent %s even if its inventory matches",
+		(key) => {
+			const f = fixture();
+			addPinned(f, "A");
+			addPinned(f, "F");
+			const run = addPinned(f, "F");
+			const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+			meta.sourceInputs[0][key] = key === "hash" ? `sha256:${"0".repeat(64)}` : "/different";
+			writeFileSync(run.metaPath, JSON.stringify(meta));
+			f.registerPlan();
+			const result = f.run();
+			expect(result.stdout).toContain("3/3 planned records match");
+			expect(result.stdout).toContain("source-input fingerprints incomplete or inconsistent — no verdict");
+			expect(result.stdout).not.toContain("→ GO");
+		},
+	);
+
+	it.each([null, undefined])("does not compare declared inputs to unpinned evidence: %s", (sourceInputs) => {
+		const f = fixture();
+		const run = addPinned(f, "A");
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		writeFileSync(run.metaPath, JSON.stringify({ ...meta, sourceInputs }));
+		addPinned(f, "F");
+		const result = f.run();
+		expect(result.stdout).toContain("Declared source-input pins: 1/2 records");
+		expect(result.stdout).toContain("source-input fingerprints incomplete or inconsistent — no verdict");
+	});
+
+	it("withholds a cohort mixing pinned and unpinned repetitions", () => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F");
+		addPinned(f, "F", null);
+		f.registerPlan();
+		expect(f.run().stdout).toContain("source-input fingerprints incomplete or inconsistent — no verdict");
+	});
+
+	it("retains historical unpinned-only comparisons with an explicit limitation", () => {
+		const f = fixture();
+		addPinned(f, "A", null);
+		addPinned(f, "F", null);
+		f.registerPlan();
+		const result = f.run();
+		expect(result.stdout).toContain("unpinned-only comparisons do not verify sources");
+		expect(result.stdout).toContain("→ GO");
+	});
+
+	it.each([
+		[],
+		{},
+		[{ path: "/src", realPath: "/src", hash: "bad" }],
+		[{ path: "relative", realPath: "/src", hash: `sha256:${"a".repeat(64)}` }],
+	])("rejects malformed evidence: %j", (inputs) => {
+		const f = fixture();
+		addPinned(f, "A");
+		addPinned(f, "F", inputs);
+		f.registerPlan();
+		expect(f.run().stdout).toContain("invalid source-input pin");
+	});
+
+	it("checks source pins against the inventory", () => {
+		const f = fixture();
+		addPinned(f, "A");
+		const run = addPinned(f, "F");
+		f.registerPlan();
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		meta.sourceInputs = null;
+		writeFileSync(run.metaPath, JSON.stringify(meta));
+		expect(f.run().stdout).toContain("run record differs from plan");
+	});
+
+	it("canonicalizes input and object key order without changing the fingerprint", () => {
+		const f = fixture();
+		addPinned(f, "A");
+		const first = { path: "/first", realPath: "/first", hash: `sha256:${"a".repeat(64)}` };
+		const second = { path: "/second", realPath: "/second", hash: `sha256:${"b".repeat(64)}` };
+		addPinned(f, "F", [first, second]);
+		const run = addPinned(f, "F", [second, first]);
+		f.registerPlan();
+		const meta = JSON.parse(readFileSync(run.metaPath, "utf-8"));
+		meta.sourceInputs = [first, { hash: second.hash, realPath: second.realPath, path: second.path }];
+		writeFileSync(run.metaPath, JSON.stringify(meta));
+		const result = f.run();
+		expect(result.stdout).toContain("3/3 planned records match");
+		expect(result.stdout).toContain("→ GO");
+	});
+});
 
 describe("benchmark launcher evidence", () => {
 	function addPinned(f: ReturnType<typeof fixture>, group: string, override: Record<string, unknown> = {}) {

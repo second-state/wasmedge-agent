@@ -10,6 +10,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launcherFields, launcherIdentity } from "./launchers.ts";
+import { sameSourceInputs, sourceInputsHash, sourceInputsIdentity } from "./source-inputs.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(HERE, "results", "runs");
@@ -78,6 +79,7 @@ interface RunMetrics {
 	task: string;
 	taskHash: string | null;
 	providerConfigHash: string | null;
+	sourceInputsHash: string | null;
 	launcherHash: string | null;
 	launcherIdentity: string | null;
 	category: string;
@@ -271,12 +273,16 @@ for (const metaPath of existsSync(RUNS_DIR) ? findMetaFiles(RUNS_DIR) : []) {
 	if (launcherFields.some((key) => meta[key] !== undefined) && !launcher) {
 		inventoryIssues.push(`invalid agent launcher pin: ${metaPath}`);
 	}
+	if (meta.sourceInputs !== undefined && meta.sourceInputs !== null && !sourceInputsIdentity(meta.sourceInputs)) {
+		inventoryIssues.push(`invalid source-input pin: ${metaPath}`);
+	}
 	const m: RunMetrics = {
 		runId: meta.runId,
 		planId: typeof meta.planId === "string" ? meta.planId : null,
 		task: meta.task,
 		taskHash: typeof meta.taskHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.taskHash) ? meta.taskHash : null,
 		providerConfigHash: typeof meta.providerConfigHash === "string" && /^sha256:[a-f0-9]{64}$/.test(meta.providerConfigHash) ? meta.providerConfigHash : null,
+		sourceInputsHash: sourceInputsHash(meta.sourceInputs),
 		launcherHash: launcher ? meta.launcherHash : null,
 		launcherIdentity: launcher,
 		category: meta.category,
@@ -340,6 +346,13 @@ for (const name of existsSync(PLANS_DIR) ? readdirSync(PLANS_DIR).sort() : []) {
 		inventoryIssues.push(`invalid agent launcher pins in plan: ${name}`);
 		continue;
 	}
+	if (plan.sourcePinVersion !== undefined && plan.sourcePinVersion !== 1 ||
+		plan.runs.some((slot) => plan.sourcePinVersion === 1
+			? slot.sourceInputs !== null && !sourceInputsIdentity(slot.sourceInputs)
+			: slot.sourceInputs !== undefined)) {
+		inventoryIssues.push(`invalid source-input pins in plan: ${name}`);
+		continue;
+	}
 	planIds.add(plan.planId);
 	const slots = new Set<string>();
 	for (const slot of plan.runs) {
@@ -370,13 +383,15 @@ for (const [runId, { planId, slot }] of expectedRuns) {
 	if (!records.length) inventoryIssues.push(`missing run record: ${planId} / ${runId}`);
 	else if (records.length === 1) {
 		const meta = records[0].meta;
-		if (meta.planId !== planId || slotFields.some((key) => meta[key] !== slot[key])) {
+		if (meta.planId !== planId || slotFields.some((key) => meta[key] !== slot[key]) ||
+			!sameSourceInputs(meta.sourceInputs, slot.sourceInputs)) {
 			inventoryIssues.push(`run record differs from plan: ${planId} / ${runId}`);
 		} else matchedRuns += 1;
 	}
 }
 console.log(`Run inventory: ${matchedRuns}/${expectedRuns.size} planned records match; ${inventoryRecords.filter(({ meta }) => meta.planId === undefined).length} legacy records without a plan.`);
-console.log(`Agent launcher pins: ${runs.filter((run) => run.launcherIdentity !== null).length}/${runs.length} records. Legacy-only comparisons do not verify launchers; wrapper dependencies and toolchains are not pinned.`);
+console.log(`Agent launcher pins: ${runs.filter((run) => run.launcherIdentity !== null).length}/${runs.length} records. Legacy-only comparisons do not verify launchers; entry-point fingerprints do not cover wrapper dependencies or toolchains.`);
+console.log(`Declared source-input pins: ${runs.filter((run) => run.sourceInputsHash !== null).length}/${runs.length} records. Only operator-selected paths are verified; unpinned-only comparisons do not verify sources.`);
 if (inventoryIssues.length) {
 	console.log("Run inventory incomplete or inconsistent; aggregates describe discovered records only. All D20 verdicts are withheld.");
 	for (const issue of inventoryIssues) console.log(`  ${issue}`);
@@ -432,7 +447,7 @@ if (d21Profile) {
 // Per-run CSV
 const csvPath = resolve(options.get("--csv") ?? join(HERE, "results", "bench.csv"));
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId,launcherHash";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId,launcherHash,sourceInputsHash";
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -463,6 +478,7 @@ const rows = runs.map((m) => {
 		m.providerConfigHash,
 		m.planId,
 		m.launcherHash,
+		m.sourceInputsHash,
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -475,6 +491,7 @@ interface Agg {
 	taskVersions: Map<string, string> | null;
 	providerConfigHash: string | null;
 	launcherStatus: "legacy" | "recorded" | "inconsistent";
+	sourceStatus: "unpinned" | "recorded" | "inconsistent";
 	passRate: number | null;
 	tokensOutMedian: number | null;
 	tokensInMedian: number | null;
@@ -546,6 +563,8 @@ for (const [key, ms] of byCondition) {
 		providerConfigHash: new Set(ms.map((m) => m.providerConfigHash)).size === 1 ? ms[0].providerConfigHash : null,
 		launcherStatus: new Set(ms.map((m) => m.launcherIdentity)).size !== 1
 			? "inconsistent" : ms[0].launcherIdentity === null ? "legacy" : "recorded",
+		sourceStatus: new Set(ms.map((m) => m.sourceInputsHash)).size !== 1
+			? "inconsistent" : ms[0].sourceInputsHash === null ? "unpinned" : "recorded",
 		passRate: complete && scored.length === ms.length ? scored.filter((m) => m.pass).length / ms.length : null,
 		tokensOutMedian: complete ? median(ms.map((m) => m.tokensOut)) : null,
 		tokensInMedian: complete ? median(ms.map((m) => m.tokensIn)) : null,
@@ -636,6 +655,9 @@ function d20Gate(a: Agg | undefined, b: Agg | undefined): GateResult {
 	if (a.providerConfigHash !== b.providerConfigHash) return noVerdict("provider configs differ");
 	if (a.launcherStatus === "inconsistent" || b.launcherStatus === "inconsistent" || a.launcherStatus !== b.launcherStatus) {
 		return noVerdict("agent launcher fingerprints incomplete or inconsistent");
+	}
+	if (a.sourceStatus === "inconsistent" || b.sourceStatus === "inconsistent" || a.sourceStatus !== b.sourceStatus) {
+		return noVerdict("source-input fingerprints incomplete or inconsistent");
 	}
 	if (a.passRate === null || b.passRate === null) return noVerdict("checks incomplete");
 	if (a.tokensOutMedian === null || b.tokensOutMedian === null) return noVerdict("output usage incomplete");
