@@ -20,7 +20,7 @@ import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
 import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, type RustSkillMount, syncRustSkills } from "../src/core/rust-cell/workspace.js";
-import { snapshotWorkspace } from "../src/core/rust-cell/workspace-snapshot.js";
+import { snapshotWorkspace, withInheritedSkills } from "../src/core/rust-cell/workspace-snapshot.js";
 
 function writeFakeWorkspace(root: string): string {
 	const workspace = join(root, "workspace");
@@ -125,6 +125,21 @@ describe("syncRustSkills (unit)", () => {
 		expect(syncRustSkills(workspace, [skill]).changed).toBe(false);
 		symlinkSync(skill.cratePath, join(skill.cratePath, "src/cycle"));
 		expect(() => syncRustSkills(workspace, [skill])).toThrow("symlink cycle");
+	});
+
+	it("retains inherited skill sources when unmounted so they can be repaired and remounted", () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-retained-"));
+		tempDirs.push(root);
+		const workspace = writeFakeWorkspace(root);
+		const skill = writeSkillCrate(join(workspace, "skills"), "local", "not Rust\n");
+		writeFileSync(join(workspace, ".inherited-workspace"), "1\n");
+		syncRustSkills(workspace, [skill]);
+		expect(syncRustSkills(workspace, []).mounted).toEqual([]);
+		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toBe("not Rust\n");
+		expect(readFileSync(join(workspace, "agent_lib/src/skills/mod.rs"), "utf-8")).not.toContain("pub use local");
+		writeFileSync(join(skill.cratePath, "src/lib.rs"), "pub fn repaired() {}\n");
+		expect(syncRustSkills(workspace, withInheritedSkills(workspace, [])).mounted).toEqual(["local"]);
+		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toBe("pub fn repaired() {}\n");
 	});
 });
 

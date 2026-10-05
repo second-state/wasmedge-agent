@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { constants, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +39,103 @@ describe.skipIf(!available)("workspace upgrades with real Cargo and WasmEdge", (
 		// Cargo versions before build-dir support store intermediates in target_directory.
 		if (metadata.build_directory) expect(resolve(metadata.build_directory)).toBe(resolve(template, "target"));
 	});
+
+	it.each([
+		{ needsBrokenSkill: false, inherited: false },
+		{ needsBrokenSkill: true, inherited: false },
+		{ needsBrokenSkill: false, inherited: true },
+	])(
+		"probes skills before upgrade validation (needed: $needsBrokenSkill, inherited: $inherited)",
+		{ timeout: 300_000 },
+		async ({ needsBrokenSkill, inherited }) => {
+			const root = mkdtempSync(join(tmpdir(), "workspace-upgrade-skills-"));
+			dirs.push(root);
+			const template = join(root, "template");
+			cpSync(resolveTemplateDir(), template, {
+				recursive: true,
+				mode: constants.COPYFILE_FICLONE,
+				preserveTimestamps: true,
+			});
+			vi.stubEnv("WASMEDGE_AGENT_TEMPLATE_DIR", template);
+			const workspace = join(root, "workspace");
+			const skillRoot = inherited ? join(workspace, "skills") : root;
+			const rustSkills = ["healthy", "fragile"].map((name) => {
+				const cratePath = join(skillRoot, name);
+				mkdirSync(join(cratePath, "src"), { recursive: true });
+				const cargoTomlPath = join(cratePath, "Cargo.toml");
+				writeFileSync(cargoTomlPath, `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n`);
+				writeFileSync(join(cratePath, "src/lib.rs"), "pub fn value() -> u32 { 7 }\n");
+				return { name, crateName: name, cratePath, cargoTomlPath };
+			});
+			if (inherited) writeFileSync(join(workspace, ".inherited-workspace"), "1\n");
+			const diagnostics: string[] = [];
+			const options = {
+				cwd: root,
+				workspaceDir: workspace,
+				rustSkills,
+				onDiagnostic: (msg: string) => diagnostics.push(msg),
+			};
+			const original = new RustCellProvisioner(options);
+			provisioners.push(original);
+			const runner = await original.ensure();
+			const code = `fn main() {
+    std::fs::write("/workspace/cell-ran", "ran").unwrap();
+    println!("{}", agent_lib::skills::healthy::value() ${needsBrokenSkill ? "+ agent_lib::skills::fragile::value()" : ""});
+}`;
+			const first = await runner.execute({ code });
+			expect(first.status, first.compileDiagnostics ?? first.stderr).toBe("ok");
+			await original.dispose();
+			rmSync(join(root, "cell-ran"));
+			writeFileSync(join(workspace, "state/state.json"), '{"saved":true}');
+			const markerBefore = readFileSync(join(workspace, WORKSPACE_VERSION_FILE), "utf-8");
+			const runtimePath = join(template, "rlm/src/lib.rs");
+			const runtimeSource = readFileSync(runtimePath, "utf-8");
+			writeFileSync(runtimePath, `${runtimeSource}\npub fn upgrade_probe() -> u32 { 42 }\n`);
+			const fragileSource = join(skillRoot, "fragile/src/lib.rs");
+			writeFileSync(fragileSource, "pub fn value() -> u32 { not Rust }\n");
+			const upgraded = new RustCellProvisioner(options);
+			provisioners.push(upgraded);
+			if (needsBrokenSkill) {
+				await expect(upgraded.ensure()).rejects.toThrow("Workspace upgrade failed; original workspace retained");
+				expect(readFileSync(join(workspace, WORKSPACE_VERSION_FILE), "utf-8")).toBe(markerBefore);
+				expect(readFileSync(join(workspace, "rlm/src/lib.rs"), "utf-8")).toBe(runtimeSource);
+				expect(existsSync(join(workspace, "skills/fragile"))).toBe(true);
+				writeFileSync(fragileSource, "pub fn value() -> u32 { 9 }\n");
+			}
+			const resumed = await upgraded.ensure();
+			expect(existsSync(join(workspace, "skills/healthy"))).toBe(true);
+			expect(existsSync(join(workspace, "skills/fragile"))).toBe(needsBrokenSkill || inherited);
+			expect(
+				readFileSync(join(workspace, "agent_lib/src/skills/mod.rs"), "utf-8").includes("pub use fragile;"),
+			).toBe(needsBrokenSkill);
+			if (!needsBrokenSkill) {
+				expect(diagnostics).toContainEqual(
+					expect.stringContaining('rust skill "fragile" failed to compile and was unmounted'),
+				);
+				expect(readFileSync(fragileSource, "utf-8")).toContain("not Rust");
+			}
+			expect(readFileSync(join(workspace, "cell/src/main.rs"), "utf-8")).toBe(code);
+			expect(readFileSync(join(workspace, "state/state.json"), "utf-8")).toBe('{"saved":true}');
+			expect(existsSync(join(root, "cell-ran"))).toBe(false);
+			expect(readFileSync(join(workspace, WORKSPACE_VERSION_FILE), "utf-8")).not.toBe(markerBefore);
+			const result = await resumed.execute({
+				code: 'use agent_lib::prelude::*; fn main() { println!("{} {}", rlm::upgrade_probe(), agent_lib::skills::healthy::value()); }',
+			});
+			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+			expect(result.stdout.trim()).toBe("42 7");
+			if (inherited) {
+				await upgraded.dispose();
+				writeFileSync(fragileSource, "pub fn value() -> u32 { 9 }\n");
+				const reloaded = new RustCellProvisioner(options);
+				provisioners.push(reloaded);
+				const repaired = await (await reloaded.ensure()).execute({
+					code: 'fn main() { println!("{}", agent_lib::skills::fragile::value()); }',
+				});
+				expect(repaired.status, repaired.compileDiagnostics ?? repaired.stderr).toBe("ok");
+				expect(repaired.stdout.trim()).toBe("9");
+			}
+		},
+	);
 
 	it.each([false, true])(
 		"preserves cells, library overrides, skills, state and history (legacy: %s)",

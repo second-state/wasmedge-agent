@@ -208,7 +208,7 @@ export class RustCellProvisioner {
 				}
 				onProgress?.("Preparing configured prelude dependencies...");
 				configurePreludeExtra(workspace, extras, this.toolchainInfo!.cargoBin);
-				syncRustSkills(workspace, skills);
+				syncRustSkills(workspace, skills, { cargoBin: this.toolchainInfo!.cargoBin });
 			},
 			validate: (workspace) => {
 				execFileSync(this.toolchainInfo!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
