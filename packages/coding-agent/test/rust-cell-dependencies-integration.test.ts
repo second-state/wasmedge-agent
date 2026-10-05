@@ -43,7 +43,6 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		{ timeout: 600_000 },
 		async () => {
 			const { root, workspace } = fixture();
-			// Six sequential offline builds share this cell budget, including CI cache misses.
 			const first = provision({ cwd: root, workspaceDir: workspace, cellTimeoutMs: 300_000 });
 			const runner = await first.ensure();
 			const templateManifest = readFileSync(join(resolveTemplateDir(), "Cargo.toml"), "utf-8");
@@ -51,31 +50,35 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 			mkdirSync(cargoHome);
 			vi.stubEnv("CARGO_HOME", cargoHome);
 			vi.stubEnv("CARGO_NET_OFFLINE", "true");
-			const added = await runner.execute({
-				code: `use agent_lib::prelude::*;
+			// Keep multiple additions in one cell without six release builds sharing its deadline on CI.
+			for (let offset = 0; offset < TEMPLATE_CRATES.length; offset += 2) {
+				const crates = TEMPLATE_CRATES.slice(offset, offset + 2);
+				const added = await runner.execute({
+					code: `use agent_lib::prelude::*;
             use std::io::Write;
             fn main() -> Result<()> {
                 let mut file = std::fs::File::create("/agent/state/open.txt")?;
                 file.write_all(b"before,")?;
                 rlm::state::set("before", &1)?;
-                for name in [${TEMPLATE_CRATES.map((name) => JSON.stringify(name)).join(",")}] {
+                for name in [${crates.map((name) => JSON.stringify(name)).join(",")}] {
                     rlm::deps::add(name)?;
                 }
-                rlm::deps::add("itoa")?;
+                rlm::deps::add(${JSON.stringify(crates[0])})?;
                 assert!(rlm::deps::add("reqwest").is_err());
                 assert!(rlm::host_request("deps.add", json!({"crate_name":"itoa","version":"99.0.0"})).is_err());
                 file.write_all(b"after")?;
                 rlm::state::set("after", &2)?;
                 println!("added once"); Ok(())
             }`,
-			});
-			expect(added.status, added.compileDiagnostics ?? added.stderr).toBe("ok");
-			expect(added.stdout.trim()).toBe("added once");
-			expect(readFileSync(join(workspace, "state/open.txt"), "utf-8")).toBe("before,after");
-			expect(JSON.parse(readFileSync(join(workspace, "state/state.json"), "utf-8"))).toMatchObject({
-				before: 1,
-				after: 2,
-			});
+				});
+				expect(added.status, added.compileDiagnostics ?? added.stderr).toBe("ok");
+				expect(added.stdout.trim()).toBe("added once");
+				expect(readFileSync(join(workspace, "state/open.txt"), "utf-8")).toBe("before,after");
+				expect(JSON.parse(readFileSync(join(workspace, "state/state.json"), "utf-8"))).toMatchObject({
+					before: 1,
+					after: 2,
+				});
+			}
 			expect(readCellDependencies(workspace)).toEqual(TEMPLATE_CRATES.sort());
 			const history = execFileSync("git", ["-C", workspace, "log", "--pretty=%s"], { encoding: "utf-8" });
 			expect(history.match(/chore\(deps\):/g)).toHaveLength(6);
