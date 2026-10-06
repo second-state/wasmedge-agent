@@ -130,6 +130,7 @@ interface InspectableRlmSession {
 	_rlmChildSessions: Map<string, { session: AgentSession; run?: InspectableRlmRun }>;
 	_rlmChildUnsubscribes: Map<string, () => void>;
 	_deletedRlmChildIds: Set<string>;
+	_deletedRlmChildRuns: Map<string, InspectableRlmRun>;
 	_rlmQuiescenceWaitAborts: Set<AbortController>;
 	_createHostRequestHandlers(): HostRequestHandlers;
 	_reapDeletedRlmSubagentRuntimesAfterCompaction(): Promise<void>;
@@ -1651,67 +1652,78 @@ describe("AgentSession rlm recursion", () => {
 		expect(await root.listRlmSubagents()).toEqual({ subagents: [expected[0]] });
 	});
 
-	it("coalesces passive daemon child deletion and waits for it during quiescence", async () => {
-		let releaseListing!: () => void;
-		const listingGate = new Promise<void>((resolve) => {
-			releaseListing = resolve;
-		});
-		const cleanupStarted = deferred<void>();
-		const cleanup = deferred<void>();
-		const deleteRlmSubagentRuntime = vi.fn(async () => {
-			cleanupStarted.resolve();
-			await cleanup.promise;
-		});
-		const root = createSession({
-			agentMessageController: {
-				listAgents: async () => {
-					await listingGate;
-					return {
-						current: { activeSessionId: "parent-active", sessionId: "parent-session" },
-						agents: [
-							{
-								activeSessionId: "passive-session",
-								sessionId: "passive-session",
-								sessionName: "passive-worker",
-								runtimeKind: "subagent" as const,
-								cwd: tempDir,
-								isStreaming: false,
-								unfinishedActionCount: 0,
-								parentActiveSessionId: "parent-active",
-								rlmChildId: "passive-child",
-								sessionDir: join(tempDir, "passive-child"),
-							},
-						],
-					};
+	it.each(["quiescence", "async disposal", "sync disposal"])(
+		"coalesces passive daemon child deletion and waits for it during %s",
+		async (mode) => {
+			let releaseListing!: () => void;
+			const listingGate = new Promise<void>((resolve) => {
+				releaseListing = resolve;
+			});
+			const cleanupStarted = deferred<void>();
+			const cleanup = deferred<void>();
+			const deleteRlmSubagentRuntime = vi.fn(async () => {
+				cleanupStarted.resolve();
+				await cleanup.promise;
+			});
+			const root = createSession({
+				agentMessageController: {
+					listAgents: async () => {
+						await listingGate;
+						return {
+							current: { activeSessionId: "parent-active", sessionId: "parent-session" },
+							agents: [
+								{
+									activeSessionId: "passive-session",
+									sessionId: "passive-session",
+									sessionName: "passive-worker",
+									runtimeKind: "subagent" as const,
+									cwd: tempDir,
+									isStreaming: false,
+									unfinishedActionCount: 0,
+									parentActiveSessionId: "parent-active",
+									rlmChildId: "passive-child",
+									sessionDir: join(tempDir, "passive-child"),
+								},
+							],
+						};
+					},
+					sendAgentMessage: async () => {
+						throw new Error("unexpected send");
+					},
 				},
-				sendAgentMessage: async () => {
-					throw new Error("unexpected send");
+				subagentRuntimeHost: {
+					createRlmSubagentRuntime: async () => {
+						throw new Error("unexpected hydration");
+					},
+					deleteRlmSubagentRuntime,
 				},
-			},
-			subagentRuntimeHost: {
-				createRlmSubagentRuntime: async () => {
-					throw new Error("unexpected hydration");
-				},
-				deleteRlmSubagentRuntime,
-			},
-		});
+			});
 
-		const first = root.deleteRlmSubagent("passive-worker");
-		const second = root.deleteRlmSubagent("passive-worker");
-		releaseListing();
-		await cleanupStarted.promise;
-		const quiescence = root.waitForRlmQuiescence().then(() => "quiesced");
-		try {
-			expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
-			cleanup.resolve();
-			await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-			expect(deleteRlmSubagentRuntime).toHaveBeenCalledOnce();
-			expect(await quiescence).toBe("quiesced");
-		} finally {
-			cleanup.resolve();
-			await Promise.allSettled([first, second, quiescence]);
-		}
-	});
+			const first = root.deleteRlmSubagent("passive-worker");
+			const second = root.deleteRlmSubagent("passive-worker");
+			releaseListing();
+			await cleanupStarted.promise;
+			if (mode === "sync disposal") root.dispose();
+			const barrier = (mode === "quiescence" ? root.waitForRlmQuiescence() : root.disposeAsync()).then(
+				() => "completed",
+			);
+			try {
+				expect(await Promise.race([barrier, sleep(20).then(() => "pending")])).toBe("pending");
+				cleanup.resolve();
+				await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+				expect(deleteRlmSubagentRuntime).toHaveBeenCalledOnce();
+				expect(await barrier).toBe("completed");
+				if (mode !== "quiescence") {
+					const internals = root as unknown as InspectableRlmSession;
+					expect(internals._deletedRlmChildIds.size).toBe(0);
+					expect(internals._deletedRlmChildRuns.size).toBe(0);
+				}
+			} finally {
+				cleanup.resolve();
+				await Promise.allSettled([first, second, barrier]);
+			}
+		},
+	);
 
 	it("adds child usage to the parent session aggregate", async () => {
 		const root = createSession();
@@ -2538,6 +2550,103 @@ describe("AgentSession rlm recursion", () => {
 		expect(terminalNotices(root)).toHaveLength(0);
 		if (mode === "fails") expect(failureNotices(root)).toHaveLength(0);
 		childCompletion.resolve();
+	});
+
+	it.each([
+		{ mode: "async", fails: false },
+		{ mode: "async", fails: true },
+		{ mode: "sync then async", fails: false },
+		{ mode: "sync then async", fails: true },
+		{ mode: "sync during async drain", fails: false },
+		{ mode: "sync during async drain", fails: true },
+	])("drains retained child deletion on parent disposal ($mode, fails: $fails)", async ({ mode, fails }) => {
+		const child = createSession({ rlmSessionDir: join(tempDir, "disposing-retained-child") });
+		const cleanupStarted = deferred<void>();
+		const cleanup = deferred<void>();
+		const deleteRuntime = vi.fn(async () => {
+			await child.disposeAsync();
+			cleanupStarted.resolve();
+			await cleanup.promise;
+		});
+		const root = createSession({
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: async () => ({ session: child }),
+				deleteRlmSubagentRuntime: deleteRuntime,
+			},
+		});
+		expect(root.registerRlmChildSession("disposing-retained-child", child)).toBe(true);
+		const deletion = root.deleteRlmSubagent("disposing-retained-child").then(
+			() => "deleted" as const,
+			(error: unknown) => error,
+		);
+		await cleanupStarted.promise;
+		if (mode === "sync then async") root.dispose();
+		const refinement = deferred<void>();
+		if (mode === "sync during async drain") {
+			vi.spyOn(
+				root as unknown as { _drainPendingRefinementForDisposal(): Promise<void> },
+				"_drainPendingRefinementForDisposal",
+			).mockReturnValue(refinement.promise);
+		}
+		const firstDisposal = root.disposeAsync();
+		if (mode === "sync during async drain") root.dispose();
+		refinement.resolve();
+		const disposal = Promise.all([firstDisposal, root.disposeAsync()]).then(() => "disposed");
+		try {
+			expect(await Promise.race([disposal, sleep(20).then(() => "pending")])).toBe("pending");
+			const cleanupError = new Error("retained cleanup failed during disposal");
+			if (fails) cleanup.reject(cleanupError);
+			else cleanup.resolve();
+			expect(await deletion).toBe(fails ? cleanupError : "deleted");
+			expect(await disposal).toBe("disposed");
+			expect(deleteRuntime).toHaveBeenCalledOnce();
+			const internals = root as unknown as InspectableRlmSession;
+			expect(internals._rlmChildSessions.size).toBe(0);
+			expect(internals._rlmChildCleanupFailures.size).toBe(0);
+			expect(internals._deletedRlmChildIds.size).toBe(0);
+			expect(internals._deletedRlmChildRuns.size).toBe(0);
+			expect(terminalNotices(root)).toHaveLength(0);
+		} finally {
+			cleanup.resolve();
+			await Promise.allSettled([deletion, disposal]);
+		}
+	});
+
+	it("awaits retained child fallback cleanup when deletion fails after sync disposal", async () => {
+		const child = createSession({ rlmSessionDir: join(tempDir, "fallback-delete-child") });
+		const childCleanup = deferred<void>();
+		const callback = vi.fn(() => childCleanup.promise);
+		child.registerDisposeCallback(callback);
+		const cleanupStarted = deferred<void>();
+		const cleanup = deferred<void>();
+		const root = createSession({
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: async () => ({ session: child }),
+				deleteRlmSubagentRuntime: async () => {
+					cleanupStarted.resolve();
+					await cleanup.promise;
+				},
+			},
+		});
+		expect(root.registerRlmChildSession("fallback-delete-child", child)).toBe(true);
+		const deletion = root.deleteRlmSubagent("fallback-delete-child").catch((error: unknown) => error);
+		await cleanupStarted.promise;
+		root.dispose();
+		const disposal = root.disposeAsync().then(() => "disposed");
+		try {
+			const error = new Error("host deletion failed");
+			cleanup.reject(error);
+			expect(await Promise.race([deletion, sleep(20).then(() => "pending")])).toBe("pending");
+			expect(await Promise.race([disposal, sleep(20).then(() => "pending")])).toBe("pending");
+			childCleanup.resolve();
+			expect(await deletion).toBe(error);
+			expect(await disposal).toBe("disposed");
+			expect(callback).toHaveBeenCalledOnce();
+		} finally {
+			cleanup.resolve();
+			childCleanup.resolve();
+			await Promise.allSettled([deletion, disposal]);
+		}
 	});
 
 	it.each([false, true])(

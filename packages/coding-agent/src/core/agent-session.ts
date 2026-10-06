@@ -4914,6 +4914,7 @@ export class AgentSession {
 		for (const { session } of this._rlmChildSessions.values()) {
 			await session.disposeAsync().catch(() => undefined);
 		}
+		await this._drainPendingRlmChildDeletions();
 		this._rlmChildSessions.clear();
 		this._rlmChildCleanupFailures.clear();
 		this._deletedRlmChildIds.clear();
@@ -4930,12 +4931,18 @@ export class AgentSession {
 		return this._rustCellDisposalPromise;
 	}
 
+	private async _drainPendingRlmChildDeletions(): Promise<void> {
+		while (this._pendingRlmChildDeletions.size > 0) {
+			await Promise.allSettled([...this._pendingRlmChildDeletions]);
+		}
+	}
+
 	private _startDisposeCallbacks(): Promise<void> {
 		if (this._disposeCallbacksPromise) {
 			return this._disposeCallbacksPromise;
 		}
 		// disposeAsync() also awaits this promise after synchronous disposal.
-		const pending: Promise<void>[] = [this._disposeRustCellRuntime()];
+		const pending: Promise<void>[] = [this._disposeRustCellRuntime(), this._drainPendingRlmChildDeletions()];
 		for (const callback of this._disposeCallbacks) {
 			try {
 				const result = callback();
@@ -11891,11 +11898,15 @@ export class AgentSession {
 		} catch (error) {
 			if (this._disposed || this._disposing) {
 				this._removeRlmSubagentTracking(childId);
-				void retained?.session.disposeAsync().catch(() => undefined);
+				await retained?.session.disposeAsync().catch(() => undefined);
 			} else {
 				this._rlmChildCleanupFailures.set(childId, subagent);
 			}
 			throw error;
+		}
+		if (this._disposed || this._disposing) {
+			this._removeRlmSubagentTracking(childId);
+			return { subagent };
 		}
 		this._deletedRlmChildIds.add(childId);
 		// The receipt promises a collectable cancelled envelope, so a child deleted
