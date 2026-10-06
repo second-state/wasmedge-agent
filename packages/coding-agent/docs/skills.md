@@ -208,7 +208,7 @@ Before executing any test module, the host inspects every artifact against an ex
 
 Successful tests are cached by content within the runtime. Before each cell, mounted skills previously tested in this runtime or referenced by local/global harness entries are revalidated when their inputs change. Reload/resume starts a fresh cache, so registered skills are tested before the next cell.
 
-The fingerprint covers mounted skill files (including tests, fixtures, and symlink target contents), workspace manifests/lockfile/configuration, runtime sources, and the scaffold version; `.git` and crate-root `target` output are excluded. This is not a filesystem lock, and it does not fingerprint external build inputs, vendored dependency contents, or the host environment.
+The fingerprint covers mounted skill files (including tests, fixtures, and symlink target contents), workspace manifests/lockfile/configuration, runtime sources, the complete `agent_lib` crate, and the scaffold version; `.git` and crate-root `target` output are excluded. Skill tests can use `agent_lib` as a dev-dependency, so library edits invalidate the shared cache and trigger revalidation before the next cell. Library changes detected during snapshotting or testing also reject validation. This is not a filesystem lock, and it does not fingerprint external build inputs, vendored dependency contents, or the host environment.
 
 A failed or interrupted revalidation prevents that cell from running or applying its source edits, and preserves the harness entry. Repair the skill through host file tools and retry; reload unmounts skills that fail the compile probe. Concurrent source changes detected during snapshotting or testing reject validation.
 
