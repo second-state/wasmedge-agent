@@ -193,6 +193,8 @@ export interface CellResult {
 
 Session 關閉路徑共用一次 runtime teardown：先 `dispose()` 再 `disposeAsync()`，或同步關閉插入非同步 refinement drain 期間，後續等待仍涵蓋該 session 的 runtime 與 disposal callbacks，不會因 session 已標示 disposed 而提前完成。
 
+關閉也等待已進入 host cleanup 的 retained／passive child 刪除；失敗時先等 retained child 的 fallback disposal，再保留原始刪除錯誤。Parent disposal 維持 best-effort，晚到的刪除結果不會重新建立已關閉 parent 的 child tombstones。
+
 Process 錯誤路徑：已取得 child process handle 後，即使 bridge attachment 或 child process 回報錯誤，也先終止 process group 並等到 `close`，才回報原始錯誤、釋放編譯許可或回復來源；同步 spawn throw 尚未取得 child handle，則直接回報。
 
 併發治理：cargo build 吃 CPU。沿用 `boot-gate.ts` 的許可證模式做 **compile gate**：全 worker 進程內同時編譯數 `min(4, cpus/2)`，可用 `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` 覆寫（對映 `PRIME_AGENT_MAX_CONCURRENT_KERNEL_BOOTS`）。
