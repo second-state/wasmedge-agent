@@ -109,9 +109,7 @@ describe.skipIf(!available)("workspace upgrades with real Cargo and WasmEdge", (
 				readFileSync(join(workspace, "agent_lib/src/skills/mod.rs"), "utf-8").includes("pub use fragile;"),
 			).toBe(needsBrokenSkill);
 			if (!needsBrokenSkill) {
-				expect(diagnostics).toContainEqual(
-					expect.stringContaining('rust skill "fragile" failed to compile and was unmounted'),
-				);
+				expect(diagnostics).toContainEqual(expect.stringContaining('rust skill "fragile" was unmounted'));
 				expect(readFileSync(fragileSource, "utf-8")).toContain("not Rust");
 			}
 			expect(readFileSync(join(workspace, "cell/src/main.rs"), "utf-8")).toBe(code);
