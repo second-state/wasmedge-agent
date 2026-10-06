@@ -1126,6 +1126,85 @@ describe("AgentSession rlm recursion", () => {
 		expect(headlessIdleCalls).toBe(2);
 	});
 
+	it.each([
+		{ order: "wait first", outcome: "success" },
+		{ order: "delete first", outcome: "success" },
+		{ order: "wait first", outcome: "cleanup failure" },
+		{ order: "delete first", outcome: "cleanup failure" },
+		{ order: "wait first", outcome: "parent abort" },
+		{ order: "delete first", outcome: "external abort" },
+	])("drains retained child deletion during quiescence ($order, $outcome)", async ({ order, outcome }) => {
+		const child = gatedBashChild("retained-delete-wait");
+		await child.started;
+		let cleanupStarted = deferred<void>();
+		let cleanup = deferred<void>();
+		const root = createSession({
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: async () => ({ session: child.session }),
+				deleteRlmSubagentRuntime: async () => {
+					cleanupStarted.resolve();
+					await child.session.disposeAsync();
+					await cleanup.promise;
+				},
+			},
+		});
+		expect(root.registerRlmChildSession("retained-delete-wait", child.session)).toBe(true);
+		const external = new AbortController();
+		const waitForQuiescence = () =>
+			root.waitForRlmQuiescence(external.signal).then(
+				() => "quiesced" as const,
+				(error: unknown) => error,
+			);
+		const deleteChild = () =>
+			root.deleteRlmSubagent("retained-delete-wait").then(
+				() => "deleted" as const,
+				(error: unknown) => error,
+			);
+		let quiescence: Promise<unknown> | undefined;
+		let deletion: Promise<unknown> | undefined;
+		try {
+			if (order === "wait first") {
+				quiescence = waitForQuiescence();
+				await waitFor(() => quiescenceWaitAborts(child.session) > 0);
+			}
+			deletion = deleteChild();
+			await cleanupStarted.promise;
+			await waitFor(() => quiescenceWaitAborts(child.session) === 0);
+			child.completion.resolve();
+			await child.bash;
+			quiescence ??= waitForQuiescence();
+			expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+			if (outcome === "cleanup failure") {
+				const error = new Error("retained cleanup failed");
+				cleanup.reject(error);
+				expect(await deletion).toBe(error);
+				expect(await quiescence).toBe(error);
+				cleanupStarted = deferred<void>();
+				cleanup = deferred<void>();
+				deletion = deleteChild();
+				await cleanupStarted.promise;
+				quiescence = waitForQuiescence();
+				expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+			} else if (outcome.endsWith("abort")) {
+				if (outcome === "parent abort") root.requestAbort();
+				else external.abort();
+				expect(await quiescence).toMatchObject({ message: "RLM quiescence wait cancelled" });
+				expect(await Promise.race([deletion, sleep(20).then(() => "pending")])).toBe("pending");
+			}
+			cleanup.resolve();
+			expect(await deletion).toBe("deleted");
+			if (!outcome.endsWith("abort")) expect(await quiescence).toBe("quiesced");
+			expect(quiescenceWaitAborts(root)).toBe(0);
+			expect(quiescenceWaitAborts(child.session)).toBe(0);
+		} finally {
+			external.abort();
+			child.completion.resolve();
+			cleanup.resolve();
+			await Promise.allSettled([child.bash, deletion, quiescence]);
+			await root.disposeAsync();
+		}
+	});
+
 	it("rechecks parent self-activity after a child quiescence boundary", async () => {
 		const child = gatedBashChild("boundary-active-child");
 		await child.started;
@@ -1572,12 +1651,17 @@ describe("AgentSession rlm recursion", () => {
 		expect(await root.listRlmSubagents()).toEqual({ subagents: [expected[0]] });
 	});
 
-	it("coalesces concurrent deletion of the same passive daemon child", async () => {
+	it("coalesces passive daemon child deletion and waits for it during quiescence", async () => {
 		let releaseListing!: () => void;
 		const listingGate = new Promise<void>((resolve) => {
 			releaseListing = resolve;
 		});
-		const deleteRlmSubagentRuntime = vi.fn(async () => {});
+		const cleanupStarted = deferred<void>();
+		const cleanup = deferred<void>();
+		const deleteRlmSubagentRuntime = vi.fn(async () => {
+			cleanupStarted.resolve();
+			await cleanup.promise;
+		});
 		const root = createSession({
 			agentMessageController: {
 				listAgents: async () => {
@@ -1615,8 +1699,18 @@ describe("AgentSession rlm recursion", () => {
 		const first = root.deleteRlmSubagent("passive-worker");
 		const second = root.deleteRlmSubagent("passive-worker");
 		releaseListing();
-		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-		expect(deleteRlmSubagentRuntime).toHaveBeenCalledOnce();
+		await cleanupStarted.promise;
+		const quiescence = root.waitForRlmQuiescence().then(() => "quiesced");
+		try {
+			expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+			cleanup.resolve();
+			await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+			expect(deleteRlmSubagentRuntime).toHaveBeenCalledOnce();
+			expect(await quiescence).toBe("quiesced");
+		} finally {
+			cleanup.resolve();
+			await Promise.allSettled([first, second, quiescence]);
+		}
 	});
 
 	it("adds child usage to the parent session aggregate", async () => {

@@ -1654,6 +1654,8 @@ export class AgentSession {
 	/** Wall-clock ms of the last accepted progress note; throttles rlm.progress.note. */
 	private _lastRlmProgressNoteAt: number | undefined;
 	private _unsettledRlmChildRuns = new Set<RlmChildRun>();
+	private _pendingRlmChildDeletions = new Set<Promise<RlmDeleteSubagentResult>>();
+	private _rlmChildDeletionWaits = new WeakMap<AgentSession, Promise<RlmDeleteSubagentResult>>();
 	private _abandonedRlmQuiescenceChildIds = new Set<string>();
 	private _rlmQuiescenceWaitAborts = new Set<AbortController>();
 	private _pendingRlmSubagentSessionNames = new Set<string>();
@@ -11863,8 +11865,27 @@ export class AgentSession {
 			return { subagent };
 		}
 
-		this._emitRlmSubagentRemoval(subagent);
 		const retained = this._rlmChildSessions.get(childId);
+		// No detached run owns retained/passive cleanup. Register it before the
+		// host can dispose the child and cancel an existing recursive wait.
+		const deletion = Promise.resolve().then(() => this._deleteRetainedRlmSubagent(subagent, retained));
+		if (retained) this._rlmChildDeletionWaits.set(retained.session, deletion);
+		this._pendingRlmChildDeletions.add(deletion);
+		try {
+			return await deletion;
+		} finally {
+			this._pendingRlmChildDeletions.delete(deletion);
+			this._maybeResumeGoalContinuationAfterRlmWork();
+			this._maybeResumeAutonomousContinuationAfterRlmWork();
+		}
+	}
+
+	private async _deleteRetainedRlmSubagent(
+		subagent: RlmSubagentRegistryEntry,
+		retained: RetainedRlmChild | undefined,
+	): Promise<RlmDeleteSubagentResult> {
+		const childId = subagent.rlm_child_id;
+		this._emitRlmSubagentRemoval(subagent);
 		try {
 			await this._deleteRlmSubagentSession(childId, retained?.session);
 		} catch (error) {
@@ -12052,11 +12073,13 @@ export class AgentSession {
 
 	private _rlmChildSessionSnapshot(): RetainedRlmChild[] {
 		const sessions = new Map<AgentSession, RetainedRlmChild>();
-		// Accepted deletions are drained by the run's settlement promise. Recursing
-		// into that session would let its expected disposal cancel the parent wait.
+		// Accepted deletions are drained by run settlement or retained cleanup.
+		// Recursing into that session would let its disposal cancel the parent wait.
 		for (const [childId, { session, run }] of this._rlmChildSessions) {
+			const deletion = this._rlmChildDeletionWaits.get(session);
 			if (
 				!this._abandonedRlmQuiescenceChildIds.has(childId) &&
+				!(deletion && this._pendingRlmChildDeletions.has(deletion)) &&
 				!run?.detachedDeletion &&
 				!this._activeRlmChildRuns.get(childId)?.detachedDeletion
 			) {
@@ -12073,6 +12096,7 @@ export class AgentSession {
 
 	private _hasUnsettledRlmQuiescenceWork(): boolean {
 		if (this._hasDeferredRlmTerminalNotices()) return true;
+		if (this._pendingRlmChildDeletions.size > 0) return true;
 		if ([...this._unsettledRlmChildRuns].some((run) => !run.settled)) return true;
 		return this._rlmChildSessionSnapshot().some(
 			({ session }) => session.isSessionActive || session._hasUnsettledRlmQuiescenceWork(),
@@ -12112,19 +12136,19 @@ export class AgentSession {
 				await wait(
 					Promise.all([
 						...unsettledRuns.map((run) => run.settlement.promise),
+						...this._pendingRlmChildDeletions,
 						...childSessions.map(({ session, run }) =>
 							session.waitForRlmQuiescence(cancellation.signal).catch((error: unknown) => {
-								if (
-									cancellation.signal.aborted ||
-									!(error instanceof RlmQuiescenceCancelledError) ||
-									!run?.detachedDeletion
-								) {
+								if (cancellation.signal.aborted || !(error instanceof RlmQuiescenceCancelledError)) {
 									throw error;
 								}
 								// Deletion can dispose the child after this recursive wait starts.
-								// The captured run still owns cleanup and terminal publication,
-								// even if deletion has already removed its lookup entries.
-								return run.settlement.promise;
+								// Keep the cleanup wait reachable after tracking is removed,
+								// including children that completed before deletion started.
+								if (run?.detachedDeletion) return run.settlement.promise;
+								const deletion = this._rlmChildDeletionWaits.get(session);
+								if (deletion) return deletion.then(() => undefined);
+								throw error;
 							}),
 						),
 					]),
