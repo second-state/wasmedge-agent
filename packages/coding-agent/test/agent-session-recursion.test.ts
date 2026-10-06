@@ -2446,29 +2446,90 @@ describe("AgentSession rlm recursion", () => {
 		childCompletion.resolve();
 	});
 
-	it("keeps deleted live runs in the RLM quiescence barrier until settlement", async () => {
-		const { child: hostedChild, completion, hasStarted } = createAbortInsensitiveChild();
-		const root = createSession({
-			subagentRuntimeHost: {
-				createRlmSubagentRuntime: async () => ({ session: hostedChild }),
-				deleteRlmSubagentRuntime: async () => {},
-			},
-		});
+	it.each([false, true])(
+		"keeps deleted live runs in quiescence until settlement (dispose child: %s)",
+		async (disposeChild) => {
+			const { child: hostedChild, completion, hasStarted } = createAbortInsensitiveChild();
+			const cleanup = deferred<void>();
+			const root = createSession({
+				subagentRuntimeHost: {
+					createRlmSubagentRuntime: async () => ({ session: hostedChild }),
+					deleteRlmSubagentRuntime: async (_id, child) => {
+						if (disposeChild) await child?.disposeAsync();
+						await cleanup.promise;
+					},
+				},
+			});
 
-		const spawned = await root.runRlmChild("slow child", { name: "deleted-live-worker" });
-		await waitFor(hasStarted);
-		let quiesced = false;
-		const quiescence = root.waitForRlmQuiescence().then(() => {
-			quiesced = true;
-		});
-		await root.deleteRlmSubagent(spawned.rlm_child_id);
-		await sleep(20);
-		expect(quiesced).toBe(false);
+			const spawned = await root.runRlmChild("slow child", { name: "deleted-live-worker" });
+			await waitFor(hasStarted);
+			const quiescence = root.waitForRlmQuiescence().then(
+				() => "quiesced" as const,
+				(error: unknown) => error,
+			);
+			try {
+				await waitFor(() => quiescenceWaitAborts(hostedChild) > 0);
+				await root.deleteRlmSubagent(spawned.rlm_child_id);
+				expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+				completion.resolve();
+				expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+				cleanup.resolve();
+				expect(await quiescence).toBe("quiesced");
+			} finally {
+				completion.resolve();
+				cleanup.resolve();
+				await quiescence;
+			}
+		},
+	);
 
-		completion.resolve();
-		await quiescence;
-		expect(quiesced).toBe(true);
-	});
+	it.each(["parent abort", "external abort", "child error"] as const)(
+		"preserves %s while an already-waited child is being deleted",
+		async (failure) => {
+			const { child, completion, hasStarted } = createAbortInsensitiveChild();
+			const cleanup = deferred<void>();
+			const childWait = deferred<void>();
+			const root = createSession({
+				subagentRuntimeHost: {
+					createRlmSubagentRuntime: async () => ({ session: child }),
+					deleteRlmSubagentRuntime: async () => {
+						if (failure !== "child error") await child.disposeAsync();
+						await cleanup.promise;
+					},
+				},
+			});
+			const spawned = await root.runRlmChild("slow child", { name: "deleted-wait-failure" });
+			await waitFor(hasStarted);
+			if (failure === "child error") {
+				vi.spyOn(child, "waitForHeadlessIdle").mockReturnValue(childWait.promise);
+			}
+			const external = new AbortController();
+			const quiescence = root.waitForRlmQuiescence(external.signal).then(
+				() => "quiesced" as const,
+				(error: unknown) => error,
+			);
+			try {
+				await waitFor(() => quiescenceWaitAborts(child) > 0);
+				await root.deleteRlmSubagent(spawned.rlm_child_id);
+				expect(await Promise.race([quiescence, sleep(20).then(() => "pending")])).toBe("pending");
+				const childError = new Error("child idle wait failed");
+				if (failure === "parent abort") root.requestAbort();
+				else if (failure === "external abort") external.abort();
+				else childWait.reject(childError);
+				const result = await quiescence;
+				if (failure === "child error") expect(result).toBe(childError);
+				else expect(result).toMatchObject({ message: "RLM quiescence wait cancelled" });
+				expect(quiescenceWaitAborts(root)).toBe(0);
+				expect(quiescenceWaitAborts(child)).toBe(0);
+			} finally {
+				childWait.resolve();
+				completion.resolve();
+				cleanup.resolve();
+				await quiescence;
+				await root.disposeAsync();
+			}
+		},
+	);
 
 	it("does not add a cancellation notice when deletion races a durably admitted completion notice", async () => {
 		const root = createSession();
