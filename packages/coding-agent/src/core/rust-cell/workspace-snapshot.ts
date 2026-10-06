@@ -61,7 +61,9 @@ export function withInheritedSkills(workspace: string, discovered: RustSkillMoun
 	const inherited = readdirSync(skillsDir).flatMap((crateName): RustSkillMount[] => {
 		const cratePath = join(skillsDir, crateName);
 		const cargoTomlPath = join(cratePath, "Cargo.toml");
-		if (!lstatSync(cratePath).isDirectory() || !existsSync(cargoTomlPath)) return [];
+		if (!lstatSync(cratePath).isDirectory()) return [];
+		// Probe missing manifests as local failures; falling back to a discovered
+		// source would replace this directory with a symlink and discard child edits.
 		return [
 			{
 				name: discovered.find((skill) => skill.crateName === crateName)?.name ?? crateName,

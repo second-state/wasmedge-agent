@@ -83,4 +83,21 @@ describe("child workspace snapshots", () => {
 		expect(existsSync(seed)).toBe(false);
 		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
+
+	it("does not replace a child skill with the shared source when its manifest is missing", () => {
+		const { root, parent, seed, write, skill } = fixture();
+		snapshotWorkspace(parent, seed);
+		const child = ensureWorkspaceAt(join(root, "child"), seed);
+		const childSkill = join(child, "skills/tool");
+		write(join(childSkill, "src/lib.rs"), "child edit");
+		write(join(childSkill, "notes.txt"), "unfinished child work");
+		rmSync(join(childSkill, "Cargo.toml"));
+		syncRustSkills(child, withInheritedSkills(child, [skill]));
+		expect(lstatSync(childSkill).isDirectory()).toBe(true);
+		expect(readFileSync(join(childSkill, "src/lib.rs"), "utf-8")).toBe("child edit");
+		expect(readFileSync(join(childSkill, "notes.txt"), "utf-8")).toBe("unfinished child work");
+		expect(existsSync(join(childSkill, "Cargo.toml"))).toBe(false);
+		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toBe("parent skill");
+		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf-8")).toBe("parent skill");
+	});
 });

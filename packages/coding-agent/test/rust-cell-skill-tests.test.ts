@@ -64,6 +64,9 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		const integration = join(f.cratePath, "tests/integration.rs");
 		writeFileSync(integration, "#[test] fn integration() { assert_eq!(example::value(), 42); }");
 		writeFileSync(join(f.workspace, "cell/src/main.rs"), "not compilable cell source");
+		const incompleteSource = join(f.workspace, "skills/incomplete/src/lib.rs");
+		mkdirSync(join(incompleteSource, ".."), { recursive: true });
+		writeFileSync(incompleteSource, "unfinished child skill without a manifest");
 		const processes = vi.spyOn(cellProcess, "runProcess");
 		try {
 			await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
@@ -75,6 +78,7 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		}
 		expect(readFileSync(join(f.workspace, "cell/src/main.rs"), "utf8")).toBe("not compilable cell source");
 		expect(readFileSync(join(f.cratePath, "src/lib.rs"), "utf8")).toBe(source);
+		expect(readFileSync(incompleteSource, "utf8")).toBe("unfinished child skill without a manifest");
 		expect(existsSync(join(f.root, "result"))).toBe(false);
 		writeFileSync(integration, '#[test] fn integration() { panic!("integration failure"); }');
 		await expect(testRustSkill(reference, f.options)).rejects.toThrow(

@@ -215,6 +215,8 @@ Children receive incremented `RLM_DEPTH`, the inherited maximum depth, and their
 
 The frozen seed is stored under the child session directory as `.rust-workspace-seed/`, so delayed startup and daemon restoration before the first cell use the same snapshot. Existing child workspaces survive reload without being overwritten. Root skill mounts remain editable symlinks; inherited child skills are local copies and stay local on reload.
 
+An inherited skill directory is preserved even if its `Cargo.toml` is missing. Reload unmounts the invalid skill with a diagnostic and keeps its local files for repair. Restore the manifest and reload to remount it.
+
 ## Independent Delegation
 
 Each spawn call admits an independent child and returns its handle immediately:

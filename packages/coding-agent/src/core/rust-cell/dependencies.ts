@@ -1,4 +1,4 @@
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HostRequestHandler } from "../host-bridge/types.js";
 import { withBuildPermit } from "./build-gate.js";
@@ -51,7 +51,7 @@ export function createDependencyHandler(options: {
 					for (const path of ["Cargo.toml", "agent_lib/Cargo.toml"]) {
 						copyFileSync(join(options.template, path), join(staged, path));
 					}
-					const skills = withInheritedSkills(staged, []);
+					const skills = withInheritedSkills(staged, []).filter((skill) => existsSync(skill.cargoTomlPath));
 					if (skills.some((skill) => skill.crateName === name.replaceAll("-", "_"))) {
 						throw new Error(`Curated crate conflicts with a mounted skill: ${name}`);
 					}
