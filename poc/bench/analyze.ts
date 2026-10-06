@@ -73,6 +73,36 @@ interface CompileRecovery {
 	distanceTotal: number;
 }
 
+// Version 1 phases partition admitted runner time. Queue/provisioning are separate.
+const cellPhaseKeys = ["prepareMs", "skillValidationMs", "libraryTestsMs", "buildQueueMs", "cargoMs", "rollbackMs", "importPolicyMs", "probeMs", "executionMs", "bridgeCleanupMs", "snapshotMs", "otherMs"] as const;
+const timingKeys = ["queueMs", ...cellPhaseKeys, "provisionMs", "toolTotalMs"] as const;
+type TimingKey = (typeof timingKeys)[number];
+type TimingSample = Partial<Record<TimingKey, number>>;
+function nonnegative(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function cellTiming(details: Record<string, unknown>): TimingSample | null {
+	const timing = details.timings;
+	if (!isRecord(timing) || timing.version !== 1 || !nonnegative(details.durationMs) ||
+		!["queueMs", ...cellPhaseKeys].every((key) => nonnegative(timing[key]))) return null;
+	const sum = cellPhaseKeys.reduce((total, key) => total + Number(timing[key]), 0);
+	if (!Number.isFinite(sum) || Math.abs(sum - details.durationMs) > 0.01) return null;
+	const sample = Object.fromEntries(["queueMs", ...cellPhaseKeys].map((key) => [key, timing[key]])) as TimingSample;
+	const tool = details.toolTiming;
+	if (isRecord(tool) && nonnegative(tool.provisionMs) && nonnegative(tool.totalMs) &&
+		tool.totalMs + 0.01 >= tool.provisionMs + details.durationMs + Number(timing.queueMs)) {
+		sample.provisionMs = tool.provisionMs;
+		sample.toolTotalMs = tool.totalMs;
+	}
+	return sample;
+}
+function timingValues(metrics: RunMetrics[], key: TimingKey): number[] | null {
+	if (metrics.some((m) => m.sessionStatus !== "ok")) return null;
+	const samples = metrics.flatMap((m) => m.rustTimings);
+	const values = samples.map((sample) => sample?.[key]);
+	return values.every(nonnegative) ? values : null;
+}
+
 interface RunMetrics {
 	runId: string;
 	planId: string | null;
@@ -100,7 +130,7 @@ interface RunMetrics {
 	cellCount: number;
 	compileErrorCells: number;
 	cellDurationsMs: number[] | null;
-	compileMsTotal: number;
+	rustTimings: (TimingSample | null)[];
 	compileRecovery: CompileRecovery | null;
 }
 
@@ -188,9 +218,9 @@ function analyzeSession(sessionFile: string, metrics: RunMetrics): SessionStatus
 					metrics.cellDurationsMs = null;
 				}
 				if (details?.status === "compile_error") metrics.compileErrorCells += 1;
-				if (typeof details?.compileMs === "number") metrics.compileMsTotal += details.compileMs;
 			}
 			if (toolName === "rust") {
+				metrics.rustTimings.push(cellTiming(details));
 				rustCellIndex += 1;
 				const status = details.status;
 				if (
@@ -303,7 +333,7 @@ for (const metaPath of existsSync(RUNS_DIR) ? findMetaFiles(RUNS_DIR) : []) {
 		cellCount: 0,
 		compileErrorCells: 0,
 		cellDurationsMs: [],
-		compileMsTotal: 0,
+		rustTimings: [],
 		compileRecovery: null,
 	};
 	if (typeof meta.sessionFile === "string" && meta.sessionFile) m.sessionStatus = analyzeSession(meta.sessionFile, m);
@@ -447,7 +477,8 @@ if (d21Profile) {
 // Per-run CSV
 const csvPath = resolve(options.get("--csv") ?? join(HERE, "results", "bench.csv"));
 const header =
-	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId,launcherHash,sourceInputsHash";
+	"runId,task,category,group,model,variant,rep,pass,timedOut,wallMs,tokensIn,tokensOut,assistantTurns,cellCount,compileErrorCells,cellP50Ms,cellP95Ms,errorToolResults,sessionStatus,recoveredCompileErrors,unrecoveredCompileErrors,compileRecoveryMeanCells,driverStatus,taskHash,providerConfigHash,planId,launcherHash,sourceInputsHash,rustCellCount,timedRustCells,toolTimedRustCells," +
+	timingKeys.flatMap((key) => [key.replace(/Ms$/, "P50Ms"), key.replace(/Ms$/, "P95Ms")]).join(",");
 const rows = runs.map((m) => {
 	const hasSession = m.sessionStatus === "ok";
 	return [
@@ -479,6 +510,10 @@ const rows = runs.map((m) => {
 		m.planId,
 		m.launcherHash,
 		m.sourceInputsHash,
+		hasSession ? m.rustTimings.length : null,
+		hasSession ? m.rustTimings.filter((sample) => sample !== null).length : null,
+		hasSession ? m.rustTimings.filter((sample) => sample?.toolTotalMs !== undefined).length : null,
+		...timingKeys.flatMap((key) => [percentile(timingValues([m], key), 50), percentile(timingValues([m], key), 95)]),
 	].join(",");
 });
 writeFileSync(csvPath, [header, ...rows].join("\n"));
@@ -598,6 +633,21 @@ for (const [key, a] of [...aggs.entries()].sort()) {
 			String(a.driverIncompleteRuns),
 		].join("  "),
 	);
+}
+
+console.log("\nRust cell timing (ms; pooled cells, all statuses; n/a if any run/cell lacks valid evidence):");
+console.log("Phases partition durationMs; queue/provisioning are outside it. executionMs includes process startup, guest work and host-handler waits, not just guest CPU. No LLM or diagnostics-reading time is inferred.");
+for (const [condition, metrics] of [...byCondition.entries()].sort()) {
+	const complete = metrics.every((m) => driverComplete(m) && m.sessionStatus === "ok");
+	const samples = metrics.flatMap((m) => m.rustTimings);
+	const coverage = complete ? `${samples.filter((s) => s !== null).length}/${samples.length}` : "n/a";
+	const tools = complete ? `${samples.filter((s) => s?.toolTotalMs !== undefined).length}/${samples.length}` : "n/a";
+	console.log(`  ${condition}: runner coverage ${coverage}; tool coverage ${tools}`);
+	if (!samples.length) continue;
+	for (const key of timingKeys) {
+		const values = complete ? timingValues(metrics, key) : null;
+		console.log(`    ${key.padEnd(20)} p50=${percentile(values, 50) ?? "n/a"} p95=${percentile(values, 95) ?? "n/a"}`);
+	}
 }
 
 console.log("\nCompile-error recovery (Rust cells):");

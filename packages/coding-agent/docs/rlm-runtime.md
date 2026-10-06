@@ -414,3 +414,43 @@ This prevents unlisted parent environment values from reaching compilation throu
 ## Focused Validation
 
 From `packages/coding-agent`, the implementation is covered by focused unit tests (`rust-cell-runtime`, `rust-cell-bridge-server`, `settings-manager`) and toolchain-gated integration tests (`rust-cell-bridge-integration`, `rust-cell-skills`, `rust-cell-harness`) that need `cargo`, the `wasm32-wasip1` target, and a `wasmedge` binary (`WASMEDGE_AGENT_WASMEDGE`). When changing child creation or accounting, include `agent-session-recursion.test.ts`; when changing the bridge, include the bridge server and native `rlm` tests (`cargo test --release --target <host>` in `wasmedge-agent-runtime/template/rlm`).
+
+### Cell timing
+
+Rust tool results include versioned `details.timings` using a monotonic clock.
+These milliseconds partition `durationMs`, from runner admission through final
+cleanup/snapshot; `otherMs` accounts for uninstrumented work between phases.
+Unreached phases are zero. Structured error, timeout and abort results retain
+measurements; exceptions that prevent a structured result provide no timing.
+
+| Field | Measured interval |
+|---|---|
+| `prepareMs` | Mount/state checks and source preparation |
+| `skillValidationMs` | Registered-skill revalidation, including any nested build/test work |
+| `libraryTestsMs` | Optional library-edit test gate, including snapshot/build/test/cleanup |
+| `buildQueueMs` | Waiting for the main cell's in-process build permit |
+| `cargoMs` | Main cell Cargo subprocess lifetime, including Cargo's own waits |
+| `rollbackMs` | Restoring submitted sources after build failure |
+| `importPolicyMs` | Reading and validating the produced Wasm imports |
+| `probeMs` | First readonly-preopen probe and its cleanup; zero when already cached |
+| `executionMs` | WasmEdge invocation, including argument/mount setup, process startup, guest execution and host-handler waits |
+| `bridgeCleanupMs` | Cancelling/draining bridge handlers after WasmEdge exits |
+| `snapshotMs` | Successful cell's Git snapshot attempt, including failed attempts |
+| `otherMs` | Remaining admitted-runner elapsed time |
+
+`timings.queueMs` measures submission-to-admission time on the same runner and
+is **outside** `durationMs` and the cell deadline. `details.toolTiming.provisionMs`
+measures `provisioner.ensure()` and startup callbacks; `totalMs` includes this,
+the runner queue, execution and result assembly up to returning the tool result.
+It excludes provider/model time and later transcript/UI handling. Provisioning
+can include template/workspace compilation and is outside the cell deadline.
+
+Legacy `compileMs` remains the build-permit/Cargo/rollback bucket; `runMs`
+remains execution plus bridge cleanup. Do not add those overlapping fields to
+`timings`. Execution time is not guest CPU time, and phase observations do not
+measure how long a model spent reading diagnostics. Timings are recorded in
+transcript details, without adding text to normal model-visible tool output.
+
+The offline [microbenchmark](../../../poc/bench/README.md#runtime-microbenchmark)
+exercises these boundaries without model calls. Full-task comparisons still
+need controlled model runs; runtime microbenchmarks cannot establish D20 GO.

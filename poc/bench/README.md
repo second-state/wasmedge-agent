@@ -493,3 +493,64 @@ before saving the session. The analyzer cannot distinguish such stored zeros
 from measured zeros. Historical CSVs are unchanged, and their input totals
 do not establish a complete input-cost comparison. The D20 token gate uses
 output tokens.
+
+
+### Runtime phase timing
+
+New Rust results include version 1 `details.timings` and wrapper `toolTiming`.
+The analyzer appends Rust-cell coverage counts and phase p50/p95 columns to the
+CSV, and prints per-condition pooled-cell phase distributions. It includes all
+statuses, including compile errors. Percentiles use the existing upper-middle
+convention described above; per-phase percentiles must not be added together.
+Each runner sample must have finite, nonnegative values for every phase and
+queue time, with phases summing to `durationMs` within 0.01 ms. Tool samples also
+require a total at least as large as provisioning plus queue plus runner time.
+Missing, malformed or unknown-version samples make the affected run/condition
+metric unavailable, never zero; wrapper evidence can be missing independently.
+Empty Rust samples are unavailable. Incomplete runs and unusable sessions
+withhold condition distributions; valid per-run observations remain in CSV.
+This adds no D20 gate and does not reconstruct historical timing.
+
+See [cell timing](../../packages/coding-agent/docs/rlm-runtime.md#cell-timing) for
+phase boundaries. `executionMs` includes host-handler waits and process startup.
+Nothing here attributes model latency or diagnostic-reading time to a phase.
+
+### Runtime microbenchmark
+
+`runtime.ts` measures the current Rust tool serially, with **no provider calls**:
+
+```sh
+npm ci
+npm run build
+# Prepare the template once (separate from the measured campaign):
+(cd wasmedge-agent-runtime/template && cargo vendor --locked vendor && cargo build --release --offline -p cell)
+WASMEDGE_AGENT_TEMPLATE_DIR="$PWD/wasmedge-agent-runtime/template" \
+  npx tsx poc/bench/runtime.ts --out /tmp/cell-runtime.json --reps 5
+```
+
+Install Rust's `wasm32-wasip1` target and WasmEdge first; set
+`WASMEDGE_AGENT_WASMEDGE` if the runtime is not on PATH. The output must not
+exist; reps accepts 1–100, default 5. Failed or interrupted campaigns leave
+`complete: false` evidence; only a fully validated campaign sets it to true.
+
+Each repetition uses a fresh persisted workspace and performs, in fixed order:
+first use from the warm template, unchanged cell, changed cell, library edit,
+100 synchronous stdio echo requests, 64 KiB state-blob round trip, deliberate
+compile error, recovery to the prior successful program, build with that
+workspace's target removed, and an edit with the optional library test gate.
+The last scenario reloads the provisioner and adds one passing Rust test.
+All successful scenarios include a Git snapshot attempt. Only benchmark-owned
+temporary workspaces are removed; the template, installed toolchains and OS
+caches are retained. Cold target therefore does not mean a cold machine or
+cold filesystem cache. Source rewriting may cause Cargo to rebuild even when
+cell text is unchanged; labels describe the input, not a promised cache hit.
+
+JSON contains every sample, status, timing phases, input hash, successful Wasm
+size, repetitions, environment/toolchain versions and source fingerprints. The
+source hash covers the listed current runtime/template files plus this script;
+the separate template hash covers the selected template's sources/manifests/
+Cargo config, excluding vendor and target. Hashes are checked again at the end.
+These are provenance checks, not an isolated or fully reproducible environment.
+No concurrency, provider latency, task success-rate comparison, or D20/D21
+verdict is measured. Run on an otherwise idle host and report actual environment,
+sample count and cache conditions when citing results.

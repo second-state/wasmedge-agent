@@ -674,9 +674,11 @@ wasmedge-agent/
 | 任務成功率 | check.sh | ≥ baseline − 15pp |
 | 每任務 token（in/out 分列） | usage entries | ≤ 2.0 × baseline（D20 採 output tokens） |
 | 每任務 cell 數與 compile-error cell 佔比 | tool results | 觀測值（無閾值；預期 error 佔比 20–40%） |
-| 每 cell 端到端延遲 p50/p95 | details.durationMs | 觀測／調校目標：p50 ≤ 1s |
+| 每 cell runner 延遲 p50/p95（不含 provisioning／同 runner 排隊） | details.durationMs | 觀測／調校目標：p50 ≤ 1s |
 | 修錯收斂：compile error 後至成功的平均輪數 | 序列分析 | 觀測／調校目標：≤ 2，另列未收斂錯誤 |
 | 質性：state/agent_lib 使用率、每 cell 重算率 | 人工複盤 trajectory | 報告記錄 |
+
+**Runtime 計時（2026-10-07）**：新結果以 monotonic clock 記錄 version 1 `details.timings`，拆分來源準備、skill 驗證、library test gate、build permit 等待、Cargo、rollback、import policy、probe、WasmEdge execution、bridge cleanup、Git snapshot 與其餘時間；各階段總和為 runner `durationMs`。同 runner 排隊另列 `queueMs`；tool wrapper 另記 provisioning 與 total，均不改 cell deadline 範圍。Execution 包含程序啟動和 host handler 等待，不能當成 guest CPU 或模型閱讀 diagnostics 的時間。Analyzer 彙整逐 cell phase p50/p95、回報 coverage，缺欄位／壞資料不補零；不改 D20 gate。`poc/bench/runtime.ts` 提供不呼叫模型的序列 microbenchmark，環境、來源指紋及逐筆資料獨立保存；不取代 D21 正式對照量測。欄位與重跑方式見 runtime 文件與 bench README。
 
 **Exit 判準（D20 已確認）**（→ Phase 1 GO）：成功率與 token 閾值同時達標於 ≥2 家模型；未達標 → 回修 prompt/prelude 一輪（≤1 週）再測；仍未達 → 升級決策（範圍收窄為 systems-agent 場景或轉選項 C 重新評估）。模型組合依 D21：Claude sonnet 級 + opus/fable 級 + 開源權重一家。
 
