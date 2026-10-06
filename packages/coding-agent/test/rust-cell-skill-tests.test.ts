@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +81,8 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		mkdirSync(join(unmounted, "src"), { recursive: true });
 		writeFileSync(join(unmounted, "Cargo.toml"), "[package\n");
 		writeFileSync(join(unmounted, "src/lib.rs"), "not Rust");
+		symlinkSync(join(f.root, "missing"), join(unmounted, "dangling"));
+		symlinkSync(unmounted, join(unmounted, "cycle"));
 		const processes = vi.spyOn(cellProcess, "runProcess");
 		try {
 			await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
@@ -84,6 +95,7 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		expect(readFileSync(join(f.workspace, "cell/src/main.rs"), "utf8")).toBe("not compilable cell source");
 		expect(readFileSync(join(f.cratePath, "src/lib.rs"), "utf8")).toBe(source);
 		expect(readFileSync(incompleteSource, "utf8")).toBe("unfinished child skill without a manifest");
+		for (const link of ["dangling", "cycle"]) expect(lstatSync(join(unmounted, link)).isSymbolicLink()).toBe(true);
 		expect(existsSync(join(f.root, "result"))).toBe(false);
 		writeFileSync(integration, '#[test] fn integration() { panic!("integration failure"); }');
 		await expect(testRustSkill(reference, f.options)).rejects.toThrow(

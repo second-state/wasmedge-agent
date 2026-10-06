@@ -46,7 +46,7 @@ export function createDependencyHandler(options: {
 			await updateDependencies(
 				workspace,
 				async (staged) => {
-					snapshotWorkspace(workspace, staged);
+					snapshotWorkspace(workspace, staged, { mountedSkillsOnly: true });
 					copyFileSync(join(workspace, "cell/src/main.rs"), join(staged, "cell/src/main.rs"));
 					const mounted = new Set(mountedSkillCrates(staged));
 					const skills = withInheritedSkills(staged, []).filter((skill) => mounted.has(skill.crateName));

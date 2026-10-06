@@ -1,4 +1,14 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +49,7 @@ function fixture() {
 	]);
 	mkdirSync(join(workspace, "skills/unmounted"));
 	writeFileSync(join(workspace, "skills/unmounted/Cargo.toml"), "[package\n");
+	symlinkSync(join(root, "missing"), join(workspace, "skills/unmounted/fixture"));
 	const handler = createDependencyHandler({
 		workspace,
 		template,
@@ -73,6 +84,7 @@ describe("curated dependency fetching", () => {
 				expect(options.timeoutMs).toBeLessThanOrEqual(10_000);
 				const stagedManifest = readFileSync(join(options.cwd, "Cargo.toml"), "utf-8");
 				expect(stagedManifest).not.toContain("skills/unmounted");
+				expect(existsSync(join(options.cwd, "skills/unmounted"))).toBe(false);
 				if (args[0] === "metadata") return { ...success, exitCode: 101, stderr: "missing crate" };
 				if (args[0] === "vendor") {
 					expect(args).toEqual(["vendor", "--no-delete", "vendor"]);
@@ -110,6 +122,7 @@ describe("curated dependency fetching", () => {
 			}
 			expect(readFileSync(join(workspace, "vendor/retained"), "utf-8")).toBe("old source");
 			expect(readFileSync(join(workspace, "skills/unmounted/Cargo.toml"), "utf-8")).toBe("[package\n");
+			expect(lstatSync(join(workspace, "skills/unmounted/fixture")).isSymbolicLink()).toBe(true);
 			expect(existsSync(dependencyTransactionDir(workspace))).toBe(false);
 		},
 	);
