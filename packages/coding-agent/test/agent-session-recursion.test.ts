@@ -1652,6 +1652,130 @@ describe("AgentSession rlm recursion", () => {
 		expect(await root.listRlmSubagents()).toEqual({ subagents: [expected[0]] });
 	});
 
+	it.each(
+		["retained", "passive", "inactive", "nested inactive"].flatMap((path) =>
+			["sync", "async"].map((mode) => ({ path, mode })),
+		),
+	)("rejects $path deletion preflight across $mode parent disposal", async ({ path, mode }) => {
+		const listingStarted = deferred<void>();
+		const listing = deferred<void>();
+		const disposalStarted = deferred<void>();
+		const cleanup = deferred<void>();
+		const blocker = createSession({ rlmSessionDir: join(tempDir, "disposal-blocker") });
+		blocker.registerDisposeCallback(async () => {
+			disposalStarted.resolve();
+			await cleanup.promise;
+		});
+		const child =
+			path === "retained" ? createSession({ rlmSessionDir: join(tempDir, "pending-delete-child") }) : undefined;
+		const deleteRuntime = vi.fn(async () => {});
+		const listAgents = vi.fn(async () => {
+			listingStarted.resolve();
+			await listing.promise;
+			return {
+				current: { activeSessionId: "parent-active", sessionId: "parent-session" },
+				agents: [
+					{
+						activeSessionId: "pending-delete-session",
+						sessionId: "pending-delete-session",
+						sessionName: "pending-delete-worker",
+						runtimeKind: "subagent" as const,
+						cwd: tempDir,
+						isStreaming: false,
+						unfinishedActionCount: 0,
+						parentActiveSessionId: "parent-active",
+						rlmChildId: "pending-delete-child",
+						sessionDir: join(tempDir, "pending-delete-child"),
+					},
+				],
+			};
+		});
+		const owner = createSession({
+			agentMessageController: {
+				listAgents,
+				sendAgentMessage: async () => {
+					throw new Error("unexpected send");
+				},
+			},
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: async () => {
+					throw new Error("unexpected hydration");
+				},
+				deleteRlmSubagentRuntime: deleteRuntime,
+			},
+		});
+		const root = path === "nested inactive" ? createSession() : owner;
+		expect(root.registerRlmChildSession("disposal-blocker", blocker)).toBe(true);
+		if (root !== owner) expect(root.registerRlmChildSession("nested-owner", owner)).toBe(true);
+		if (child) expect(owner.registerRlmChildSession("pending-delete-child", child)).toBe(true);
+		const deletion = (
+			path.includes("inactive")
+				? root.deleteInactiveRlmSubagent("pending-delete-child")
+				: root.deleteRlmSubagent("pending-delete-child")
+		).catch((error: unknown) => error);
+		await listingStarted.promise;
+		if (mode === "sync") root.dispose();
+		const disposal = root.disposeAsync();
+		await disposalStarted.promise;
+		try {
+			listing.resolve();
+			expect(await deletion).toEqual(new Error("Cannot delete a subagent after its parent started disposal"));
+			expect(deleteRuntime).not.toHaveBeenCalled();
+			const listingCount = listAgents.mock.calls.length;
+			await expect(root.deleteRlmSubagent("pending-delete-child")).rejects.toThrow("parent started disposal");
+			await expect(root.deleteInactiveRlmSubagent("pending-delete-child")).rejects.toThrow(
+				"parent started disposal",
+			);
+			expect(listAgents).toHaveBeenCalledTimes(listingCount);
+			cleanup.resolve();
+			await disposal;
+			await expect(root.deleteRlmSubagent("pending-delete-child")).rejects.toThrow("parent started disposal");
+			await expect(root.deleteInactiveRlmSubagent("pending-delete-child")).rejects.toThrow(
+				"parent started disposal",
+			);
+			expect(listAgents).toHaveBeenCalledTimes(listingCount);
+			expect(deleteRuntime).not.toHaveBeenCalled();
+			const internals = owner as unknown as InspectableRlmSession;
+			expect(internals._deletingRlmChildren.size).toBe(0);
+			expect(internals._deletedRlmChildIds.size).toBe(0);
+			expect(internals._deletedRlmChildRuns.size).toBe(0);
+		} finally {
+			listing.resolve();
+			cleanup.resolve();
+			await Promise.allSettled([deletion, disposal]);
+		}
+	});
+
+	it("rejects inactive deletion when only the nested owner closes during preflight", async () => {
+		const child = createSession({ rlmSessionDir: join(tempDir, "nested-delete-child") });
+		const deleteRuntime = vi.fn(async () => {});
+		const owner = createSession({
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: async () => ({ session: child }),
+				deleteRlmSubagentRuntime: deleteRuntime,
+			},
+		});
+		expect(owner.registerRlmChildSession("nested-delete-child", child)).toBe(true);
+		const snapshot = await owner.listRlmSubagents();
+		const listingStarted = deferred<void>();
+		const listing = deferred<void>();
+		vi.spyOn(owner, "listRlmSubagents").mockImplementation(async () => {
+			listingStarted.resolve();
+			await listing.promise;
+			return snapshot;
+		});
+		const root = createSession();
+		expect(root.registerRlmChildSession("nested-owner", owner)).toBe(true);
+		const deletion = root.deleteInactiveRlmSubagent("nested-delete-child").catch((error: unknown) => error);
+		await listingStarted.promise;
+		await owner.disposeAsync();
+		listing.resolve();
+		expect(await deletion).toEqual(new Error("Cannot delete a subagent after its parent started disposal"));
+		expect(deleteRuntime).not.toHaveBeenCalled();
+		expect((owner as unknown as InspectableRlmSession)._deletingRlmChildren.size).toBe(0);
+		expect((root as unknown as InspectableRlmSession)._disposing).toBe(false);
+	});
+
 	it.each(["quiescence", "async disposal", "sync disposal"])(
 		"coalesces passive daemon child deletion and waits for it during %s",
 		async (mode) => {
