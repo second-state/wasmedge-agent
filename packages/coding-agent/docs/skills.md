@@ -166,6 +166,8 @@ let summary = web_search::run("WasmEdge Agent skills")?;
 
 At session start (and on `/reload`) the skill directory is linked into the workspace as `skills/<crate>` and added to the cargo workspace, so edits to the skill source take effect on the next cell compile — there is no install step. When the mounted set, manifest, source, tests, or fixtures change, reload repeats the probe build. If the combined build fails, each skill is probed with only its own generated workspace entry and dependencies enabled. Broken manifests and unresolved dependencies unmount the affected skills and their dependents with diagnostics; unrelated healthy skills remain available. Cells or library code that still reference an unmounted skill must be updated before they can compile.
 
+Reload also checks the actual mount links, workspace and library manifests, and generated skill re-exports before reusing the mount cache. Missing or redirected skill links and edited mount declarations trigger synchronization and another probe even when the skill sources are unchanged.
+
 Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
 ## Creating Skills with WasmEdge Agent
