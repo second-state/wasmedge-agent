@@ -50,7 +50,7 @@ export function runProcess(
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
-		let settledEarly = false;
+		let failure: { error: unknown } | undefined;
 		let closed = false;
 		let bridgeError: Error | undefined;
 		let bridge: StdioBridge | undefined;
@@ -67,6 +67,13 @@ export function runProcess(
 				}
 			}
 		};
+		const fail = (error: unknown) => {
+			if (failure) return;
+			failure = { error };
+			killGroup();
+			bridge?.finish();
+		};
+		child.on("error", fail);
 
 		const timer = setTimeout(() => {
 			timedOut = true;
@@ -96,12 +103,7 @@ export function runProcess(
 			try {
 				opts.bridge.attach(bridge.connection);
 			} catch (error) {
-				bridge.finish();
-				clearTimeout(timer);
-				opts.signal?.removeEventListener("abort", onAbort);
-				killGroup();
-				settledEarly = true;
-				rejectPromise(error);
+				fail(error);
 			}
 		}
 		child.stdout?.on("data", (data: Buffer) => {
@@ -112,20 +114,17 @@ export function runProcess(
 			output(stderrDecoder.write(data), "stderr");
 		});
 
-		child.on("error", (err) => {
-			clearTimeout(timer);
-			opts.signal?.removeEventListener("abort", onAbort);
-			settledEarly = true;
-			bridge?.finish();
-			rejectPromise(err);
-		});
-
 		child.on("close", (code) => {
 			closed = true;
-			if (settledEarly) return;
 			clearTimeout(timer);
 			opts.signal?.removeEventListener("abort", onAbort);
 			bridge?.finish();
+			// Callers may roll back sources or start another cell after rejection.
+			// A failed attachment/spawn must release its process and pipes first.
+			if (failure) {
+				rejectPromise(failure.error);
+				return;
+			}
 			output(stdoutDecoder.end(), "stdout");
 			output(stderrDecoder.end(), "stderr");
 			if (bridgeError) output(`\n${bridgeError.message}\n`, "stderr");
