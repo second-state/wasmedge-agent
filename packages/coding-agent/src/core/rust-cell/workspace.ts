@@ -281,11 +281,28 @@ export function mountedSkillCrates(workspaceDir: string): string[] {
 	});
 }
 
-function skillsFingerprint(skills: RustSkillMount[]): string {
+function skillsFingerprint(workspaceDir: string, skills: RustSkillMount[]): string {
 	const entries = [...skills]
 		.sort((a, b) => a.crateName.localeCompare(b.crateName))
-		.map((skill) => [skill.crateName, skill.cratePath, skillSourceFingerprint(skill.cratePath)]);
-	return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+		.map((skill) => {
+			const path = join(workspaceDir, "skills", skill.crateName);
+			const mount = lstatSync(path, { throwIfNoEntry: false });
+			return [
+				skill.crateName,
+				skill.cratePath,
+				skillSourceFingerprint(skill.cratePath),
+				{ mode: mount?.mode, link: mount?.isSymbolicLink() ? readlinkSync(path) : null },
+			];
+		});
+	// Unchanged sources are reusable only while the generated mounts remain intact.
+	const configuration = skillSourceFingerprint(workspaceDir, [
+		"Cargo.toml",
+		"agent_lib/Cargo.toml",
+		"agent_lib/src/skills/mod.rs",
+	]);
+	return createHash("sha256")
+		.update(JSON.stringify([entries, configuration]))
+		.digest("hex");
 }
 
 /** Cargo requires members to live lexically below the workspace root, so
@@ -385,7 +402,7 @@ export function syncRustSkills(
 	options?: { cargoBin?: string },
 ): SyncRustSkillsResult {
 	const hashPath = join(workspaceDir, SKILLS_HASH_FILE);
-	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(skills)}`;
+	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, skills)}`;
 	const previous = existsSync(hashPath) ? readFileSync(hashPath, "utf-8").trim() : undefined;
 	if (previous === fingerprint) {
 		return { mounted: skills.map((skill) => skill.crateName), failed: [], changed: false };
@@ -417,7 +434,7 @@ export function syncRustSkills(
 		}
 	}
 
-	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(active)}\n`);
+	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, active)}\n`);
 	return { mounted: active.map((skill) => skill.crateName), failed, changed: true };
 }
 

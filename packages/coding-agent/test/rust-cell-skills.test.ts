@@ -134,6 +134,36 @@ describe("syncRustSkills (unit)", () => {
 		expect(() => syncRustSkills(workspace, [skill])).toThrow("symlink cycle");
 	});
 
+	it("repairs changed mount links and configuration even when skill sources are unchanged", () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-mount-repair-"));
+		tempDirs.push(root);
+		const workspace = writeFakeWorkspace(root);
+		const skill = writeSkillCrate(root, "alpha", "pub fn run() {}\n");
+		const other = writeSkillCrate(root, "other", "pub fn other() {}\n");
+		syncRustSkills(workspace, [skill]);
+		const link = join(workspace, "skills/alpha");
+		const files = ["Cargo.toml", "agent_lib/Cargo.toml", "agent_lib/src/skills/mod.rs"];
+		const expected = files.map((path) => readFileSync(join(workspace, path), "utf-8"));
+		const mutations = [
+			() => rmSync(link),
+			() => {
+				rmSync(link);
+				symlinkSync(other.cratePath, link);
+			},
+			() => writeFileSync(join(workspace, files[0]), expected[0].replace("skills/alpha", "skills/missing")),
+			() => writeFileSync(join(workspace, files[1]), expected[1].replace("../skills/alpha", "../skills/missing")),
+			() => writeFileSync(join(workspace, files[2]), "pub use missing;\n"),
+			() => rmSync(join(workspace, files[2])),
+		];
+		for (const mutate of mutations) {
+			mutate();
+			expect(syncRustSkills(workspace, [skill])).toMatchObject({ changed: true, mounted: ["alpha"], failed: [] });
+			expect(readlinkSync(link)).toBe(skill.cratePath);
+			expect(files.map((path) => readFileSync(join(workspace, path), "utf-8"))).toEqual(expected);
+			expect(syncRustSkills(workspace, [skill]).changed).toBe(false);
+		}
+	});
+
 	it("retains inherited skill sources when unmounted so they can be repaired and remounted", () => {
 		const root = mkdtempSync(join(tmpdir(), "skills-retained-"));
 		tempDirs.push(root);
@@ -281,6 +311,12 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 		const sync = syncRustSkills(workspace, [healthy, broken], { cargoBin: toolchain?.cargoBin });
 		expect(sync.mounted).toEqual(["greeter"]);
 		expect(sync.failed.map((f) => f.name)).toEqual(["broken-skill"]);
+
+		rmSync(join(workspace, "skills/greeter"));
+		rmSync(join(workspace, "agent_lib/src/skills/mod.rs"));
+		const repaired = syncRustSkills(workspace, [healthy], { cargoBin: toolchain?.cargoBin });
+		expect(repaired).toMatchObject({ changed: true, mounted: ["greeter"], failed: [] });
+		expect(syncRustSkills(workspace, [healthy], { cargoBin: toolchain?.cargoBin }).changed).toBe(false);
 
 		const runner = new CellRunner({
 			cwd,
