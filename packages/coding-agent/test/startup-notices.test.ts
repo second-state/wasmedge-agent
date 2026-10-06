@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "vitest";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { initTheme, preloadCodeHighlighter, preloadThemeValidator } from "../src/modes/interactive/theme/theme.js";
 import { formatTmuxWarningNotice } from "../src/modes/shared/startup-notices.js";
 
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
@@ -9,8 +9,9 @@ function stripAnsi(text: string): string {
 }
 
 describe("startup notice formatters", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
 		initTheme("dark");
+		await Promise.all([preloadCodeHighlighter(), preloadThemeValidator()]);
 	});
 
 	test("tmux warning notice is prefixed with the warning glyph", () => {

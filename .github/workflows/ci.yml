@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
 
       - name: Install dependencies
         run: npm ci
@@ -98,7 +98,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
 
       - name: Install dependencies
         run: npm ci
@@ -114,13 +114,25 @@ jobs:
   # (which skip without cargo + wasm32-wasip1 + wasmedge) run for real here,
   # on both platforms, plus the guest crate's native tests.
   test-rust-cell:
-    name: Cell runtime (${{ matrix.os }})
+    name: Cell runtime (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            shard: 1/2
+          - os: ubuntu-latest
+            shard: 2/2
+          - os: macos-latest
+            shard: 1/4
+          - os: macos-latest
+            shard: 2/4
+          - os: macos-latest
+            shard: 3/4
+          - os: macos-latest
+            shard: 4/4
     env:
       WASMEDGE_AGENT_WASMEDGE: ${{ github.workspace }}/.wasmedge/bin/wasmedge
     steps:
@@ -138,7 +150,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -188,7 +200,7 @@ jobs:
 
       - name: Cell tests (integration + suite)
         working-directory: packages/coding-agent
-        run: npm run test:rust-cell
+        run: npm run test:rust-cell -- --shard=${{ matrix.shard }}
 
   build-check-test:
     name: build-check-test

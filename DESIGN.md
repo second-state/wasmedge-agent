@@ -504,10 +504,10 @@ emits a diff to the user); write whole files with std::fs when generating them.
 2. `agent_lib/src/skills/mod.rs` 生成 `pub use <crate> as <name>;` re-export。
 3. 變更偵測：skill `Cargo.toml` hash 進 `.workspace-version`（對映 `pyprojectHash` 機制）；skill 依賴需通過 vendored registry 或觸發一次 `deps.add` 流程。
 4. 失敗策略沿用：單一 skill 編譯失敗 → 從 members 移除 + 警告診斷（不可拖垮整個 workspace——對映「install failure only warns」）。
-   掛載前逐 skill 掃描來源指紋；失效 symlink、循環連結或讀取錯誤只卸載該 skill 並回報診斷，其餘 skills 繼續 probe。修復來源後 reload 可重新掛載；此隔離限於掛載掃描，不改變 snapshot／登錄測試對不可讀來源的拒絕行為。
+   掛載前逐 skill 掃描來源指紋；失效 symlink、循環連結或讀取錯誤只卸載該 skill 並回報診斷，其餘 skills 繼續 probe。修復來源後 reload 可重新掛載。
    整體 probe 失敗後，逐 skill probe 的 members／agent_lib 依賴與 re-export 只保留當前候選；來源掛載保留，供 path dependencies 使用。損壞或缺失的 manifest、無法解析的依賴只淘汰該 skill 與依賴它的 skills，不誤卸載無關的健康 skills。
    Scaffold 升級也先在 staged workspace 執行 skill probe，再編譯保留的 cell／library；未被使用的壞 skill 可卸載，保留的程式若仍依賴它，升級仍失敗並保留原 workspace。卸載會移除 symlink 與 manifest／re-export 掛載；child 繼承的實體來源目錄保留，修復後可於 reload 重新掛載。
-   掛載狀態以 `agent_lib/Cargo.toml` 的 host 管理區塊為準；保留的 child 來源目錄不代表仍掛載。未掛載的 crate 不參與自動重驗，也不能通過登錄測試；測試 snapshot 與依賴更新沿用當下掛載集合，不重新掛回已卸載的來源。管理區塊損壞時回報錯誤，不視為空集合。
+   掛載狀態以 `agent_lib/Cargo.toml` 的 host 管理區塊為準；保留的 child 來源目錄不代表仍掛載。未掛載的 crate 不參與自動重驗，也不能通過登錄測試；測試指紋、測試 snapshot 與依賴更新暫存樹只讀取當下掛載的 skills，不遍歷已卸載的待修復來源，原 workspace 仍保留它們。已掛載來源或管理區塊損壞時仍拒絕驗證。Child spawn 的完整快照仍複製全部 skill 來源，無法複製時拒絕，不靜默丟棄。
    `.skills-hash` 同時比對實際掛載的類型／symlink 目標、workspace 與 agent_lib manifests、skills re-export 檔；這些設定異動時，reload 重新同步掛載並執行 probe，不因 skill 來源未變就略過。完成同步後才保存新指紋。
 5. 掛載範圍（定案）：發現到的 skills **全部掛載**（對映現制全裝進 venv + 全 pre-import）；bundled skills 預編譯進模板，user/project skills 首次進 session 時編譯一次。
 

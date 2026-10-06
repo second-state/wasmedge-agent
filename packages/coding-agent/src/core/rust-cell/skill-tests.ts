@@ -43,10 +43,8 @@ export function skillReferenceCrate(reference: Record<string, unknown>): string 
 export async function testRustSkill(reference: Record<string, unknown>, options: SkillTestOptions): Promise<void> {
 	const resourceArgs = wasmedgeResourceArgs(options);
 	const crateName = skillReferenceCrate(reference);
-	if (
-		!mountedSkillCrates(options.workspaceDir).includes(crateName) ||
-		!existsSync(join(options.workspaceDir, "skills", crateName, "Cargo.toml"))
-	) {
+	const mounted = mountedSkillCrates(options.workspaceDir);
+	if (!mounted.includes(crateName) || !existsSync(join(options.workspaceDir, "skills", crateName, "Cargo.toml"))) {
 		throw new Error(`skill crate ${crateName} is not mounted; reload skills before refinement`);
 	}
 	options.signal?.throwIfAborted();
@@ -56,9 +54,9 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 	const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-skill-tests-"));
 	try {
 		const workspace = join(root, "workspace");
-		const fingerprint = skillTestFingerprint(options.workspaceDir);
-		snapshotWorkspace(options.workspaceDir, workspace);
-		if (skillTestFingerprint(workspace) !== fingerprint) {
+		const fingerprint = skillTestFingerprint(options.workspaceDir, mounted);
+		snapshotWorkspace(options.workspaceDir, workspace, { mountedSkillsOnly: true });
+		if (skillTestFingerprint(workspace, mounted) !== fingerprint) {
 			throw new Error("Skill sources changed while taking the test snapshot; retry validation");
 		}
 		const target = join(workspace, "target");
@@ -142,7 +140,7 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 		}
 		if (passed === 0) throw new Error("skill registration requires at least one passing, non-ignored test");
 		signal.throwIfAborted();
-		if (skillTestFingerprint(options.workspaceDir) !== fingerprint) {
+		if (skillTestFingerprint(options.workspaceDir, mounted) !== fingerprint) {
 			throw new Error("Skill sources changed during testing; retry validation");
 		}
 	} catch (error) {

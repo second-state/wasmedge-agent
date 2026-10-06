@@ -84,6 +84,35 @@ describe("child workspace snapshots", () => {
 		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
 
+	it.each(["dangling", "cycle"])("excludes %s unmounted sources from selected snapshots", (kind) => {
+		const { root, parent, seed, write } = fixture();
+		const unmounted = join(parent, "skills/unmounted");
+		write(join(unmounted, "notes"), "unfinished child work");
+		const link = join(unmounted, "fixture");
+		symlinkSync(kind === "cycle" ? unmounted : join(root, "missing"), link);
+		snapshotWorkspace(parent, seed, { mountedSkillsOnly: true });
+		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf8")).toBe("parent skill");
+		expect(lstatSync(join(seed, "skills/tool")).isDirectory()).toBe(true);
+		expect(existsSync(join(seed, "skills/unmounted"))).toBe(false);
+		expect(readFileSync(join(unmounted, "notes"), "utf8")).toBe("unfinished child work");
+		expect(lstatSync(link).isSymbolicLink()).toBe(true);
+	});
+
+	it("retains unmounted child sources in full snapshots", () => {
+		const { parent, seed, write } = fixture();
+		write(join(parent, "skills/unmounted/notes"), "unfinished child work");
+		snapshotWorkspace(parent, seed);
+		expect(readFileSync(join(seed, "skills/unmounted/notes"), "utf8")).toBe("unfinished child work");
+	});
+
+	it("rejects unreadable mounted sources in selected snapshots", () => {
+		const { root, parent, seed, skill } = fixture();
+		symlinkSync(join(root, "missing"), join(skill.cratePath, "fixture"));
+		expect(() => snapshotWorkspace(parent, seed, { mountedSkillsOnly: true })).toThrow(/ENOENT/);
+		expect(existsSync(seed)).toBe(false);
+		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
+	});
+
 	it("does not replace a child skill with the shared source when its manifest is missing", () => {
 		const { root, parent, seed, write, skill } = fixture();
 		snapshotWorkspace(parent, seed);

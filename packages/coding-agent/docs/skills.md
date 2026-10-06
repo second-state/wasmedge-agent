@@ -168,7 +168,7 @@ At session start (and on `/reload`) the skill directory is linked into the works
 
 Reload also checks the actual mount links, workspace and library manifests, and generated skill re-exports before reusing the mount cache. Missing or redirected skill links and edited mount declarations trigger synchronization and another probe even when the skill sources are unchanged.
 
-If a skill's source scan fails (for example, a dangling symlink, symlink cycle, or unreadable file), mounting reports a diagnostic and excludes that skill before probing the others. Repair the source and reload to retry. Inherited child source directories are retained for repair. This isolates mount scanning errors; snapshots and registration tests can still reject unreadable filesystem data.
+If a skill's source scan fails (for example, a dangling symlink, symlink cycle, or unreadable file), mounting reports a diagnostic and excludes that skill before probing the others. Repair the source and reload to retry. Inherited child source directories are retained for repair. Mounted sources must still be readable for testing; full child snapshots still reject sources that cannot be copied.
 
 Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
@@ -214,7 +214,7 @@ The fingerprint covers mounted skill files (including tests, fixtures, and symli
 
 A failed or interrupted revalidation prevents that cell from running or applying its source edits, and preserves the harness entry. Repair the skill through host file tools and retry; reload unmounts skills that fail the compile probe. Concurrent source changes detected during snapshotting or testing reject validation.
 
-Mount status comes from the host-managed skill dependencies in `agent_lib/Cargo.toml`. Child source directories retained after unmounting remain available for repair; they do not trigger automatic revalidation or qualify for registration tests. Test snapshots and dependency updates preserve the current mount set. Repair the source and reload to remount it.
+Mount status comes from the host-managed skill dependencies in `agent_lib/Cargo.toml`. Child source directories retained after unmounting remain available for repair; they do not trigger automatic revalidation or qualify for registration tests. Test fingerprints, test snapshots, and dependency-update staging include only mounted skills, so broken links in unmounted sources do not block these operations. The original workspace retains those sources. Repair the source and reload to remount it.
 
 Ordinary cell/library edits and unregistered, untested installed skills retain their compile-only behavior. Guest harness mutations go through the host; harness directories are no longer preopened, and writable mount roots must be separate from the configured stores. Host bash and Cargo build scripts/proc macros retain their existing host permissions. Passing tests does not guarantee task correctness. See the [Rust skill authoring guide](../skills/skill-creator/references/rust-skills.md#quality-gate).
 

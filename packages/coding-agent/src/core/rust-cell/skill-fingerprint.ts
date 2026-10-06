@@ -37,7 +37,7 @@ export function skillSourceFingerprint(root: string, paths: string[] = ["."]): s
 }
 
 /** Mounted crates and agent_lib can be path/dev-dependencies of skill tests. */
-export function skillTestFingerprint(workspace: string): string {
+export function skillTestFingerprint(workspace: string, mountedSkills: readonly string[]): string {
 	return skillSourceFingerprint(workspace, [
 		"Cargo.toml",
 		"agent_lib",
@@ -45,6 +45,6 @@ export function skillTestFingerprint(workspace: string): string {
 		".cargo",
 		".workspace-version",
 		"rlm",
-		"skills",
+		...[...mountedSkills].sort().map((crate) => `skills/${crate}`),
 	]);
 }
