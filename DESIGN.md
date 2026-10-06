@@ -565,7 +565,7 @@ Host 端 `AgentSession.runRlmChild()` 的 8 步流程（depth 檢查→model 解
 - Child 的 kernel env 鍵沿用（`RLM_DEPTH`、`RLM_MAX_DEPTH`、`RLM_SESSION_DIR`…），由 `RustCellManagerOptions.env` 傳遞。
 - Child 是完整 `AgentSession` → 自帶自己的 workspace（`sub-xxxxxxxx/workspace/`）。**繼承策略（D18 定案：spawn 時快照複製）**——child workspace 從 parent 當下的 `agent_lib`（含 helpers 與 skills 掛載）clonefile/reflink 複製，target 快取一併複製（child 首 cell 仍熱）；之後各自演化互不干擾。fan-out 模式「parent 建工具、children 分段執行」因此成立；fan-in 仍走檔案/訊息。child 的 `state/` 從空開始（context 隔離不變）。
 
-**D18 實作註記（2026-10-01）**：spawn admission 前已快照 `agent_lib`、skill sources、scaffold/deps 與 `target/`，放在 child session directory 的 `.rust-workspace-seed/`；child 首次 provision 使用此 seed，後續 reload 保留既有 workspace。Skill symlink 在快照時實體化，避免父子共享可寫來源；child 的 state、cell source、Git history 從新開始。快取複製採 best-effort reflink，實際是否重編由 Cargo 判定，沒有固定首 cell 延遲保證。此實作取代下方 WP8 歷史註記中的「D18 尚未實作」。
+**D18 實作註記（2026-10-01）**：spawn admission 前已快照 `agent_lib`、skill sources、scaffold/deps 與 `target/`，放在 child session directory 的 `.rust-workspace-seed/`；child 首次 provision 使用此 seed，後續 reload 保留既有 workspace。Skill symlink 在快照時實體化，避免父子共享可寫來源；child 的 state、cell source、Git history 從新開始。繼承的 skill 目錄即使缺少 `Cargo.toml`，仍以 child 本地來源為準；reload 的 compile probe 會卸載並回報錯誤，保留來源供補回 manifest 後重掛。快取複製採 best-effort reflink，實際是否重編由 Cargo 判定，沒有固定首 cell 延遲保證。此實作取代下方 WP8 歷史註記中的「D18 尚未實作」。
 - `spawnCode` 歸因：BridgeServer 注入當前 cell code（§2.7）。
 
 ### 5.2 Goals / heartbeat / autonomous / compaction

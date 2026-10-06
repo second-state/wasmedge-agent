@@ -58,7 +58,10 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 		if (skillTestFingerprint(workspace) !== fingerprint) {
 			throw new Error("Skill sources changed while taking the test snapshot; retry validation");
 		}
-		syncRustSkills(workspace, withInheritedSkills(workspace, []));
+		syncRustSkills(
+			workspace,
+			withInheritedSkills(workspace, []).filter((skill) => existsSync(skill.cargoTomlPath)),
+		);
 		const target = join(workspace, "target");
 		const build = await withBuildPermit(
 			() =>

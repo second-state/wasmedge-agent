@@ -5,6 +5,7 @@
 
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -175,32 +176,66 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 		expect(syncRustSkills(workspace, [skill], options).changed).toBe(false);
 	});
 
-	it("compiles a child skill snapshot even after its shared source breaks", { timeout: 300_000 }, async () => {
-		const root = mkdtempSync(join(tmpdir(), "skills-child-"));
-		tempDirs.push(root);
-		const parent = ensureWorkspaceAt(join(root, "parent"));
-		const skill = writeSkillCrate(root, "shared", "pub fn value() -> u32 { 42 }\n");
-		syncRustSkills(parent, [skill], { cargoBin: toolchain?.cargoBin });
-		const seed = join(root, "seed");
-		snapshotWorkspace(parent, seed);
-		writeFileSync(join(skill.cratePath, "src/lib.rs"), "not Rust\n");
-		const child = new RustCellProvisioner({
-			cwd: root,
-			workspaceDir: join(root, "child"),
-			initialWorkspaceDir: seed,
-			rustSkills: [skill],
-		});
-		try {
-			const runner = await child.ensure();
-			const result = await runner.execute({
-				code: 'fn main() { println!("{}", agent_lib::skills::shared::value()); }',
+	it(
+		"retains child skill edits through shared source failures and local manifest repair",
+		{ timeout: 300_000 },
+		async () => {
+			const root = mkdtempSync(join(tmpdir(), "skills-child-"));
+			tempDirs.push(root);
+			const parent = ensureWorkspaceAt(join(root, "parent"));
+			const skill = writeSkillCrate(root, "shared", "pub fn value() -> u32 { 42 }\n");
+			syncRustSkills(parent, [skill], { cargoBin: toolchain?.cargoBin });
+			const seed = join(root, "seed");
+			snapshotWorkspace(parent, seed);
+			writeFileSync(join(skill.cratePath, "src/lib.rs"), "not Rust\n");
+			const diagnostics: string[] = [];
+			const child = new RustCellProvisioner({
+				cwd: root,
+				workspaceDir: join(root, "child"),
+				initialWorkspaceDir: seed,
+				rustSkills: [skill],
+				onDiagnostic: (message) => diagnostics.push(message),
 			});
-			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
-			expect(result.stdout.trim()).toBe("42");
-		} finally {
-			await child.dispose();
-		}
-	});
+			try {
+				const runner = await child.ensure();
+				const result = await runner.execute({
+					code: 'fn main() { println!("{}", agent_lib::skills::shared::value()); }',
+				});
+				expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+				expect(result.stdout.trim()).toBe("42");
+				await child.dispose();
+				const localSkill = join(root, "child/skills/shared");
+				const localManifest = join(localSkill, "Cargo.toml");
+				const manifest = readFileSync(localManifest, "utf-8");
+				writeFileSync(join(localSkill, "src/lib.rs"), "pub fn value() -> u32 { 77 }\n");
+				rmSync(localManifest);
+				writeFileSync(join(skill.cratePath, "src/lib.rs"), "pub fn value() -> u32 { 99 }\n");
+				const reloaded = await child.ensure();
+				expect(lstatSync(localSkill).isDirectory()).toBe(true);
+				expect(readFileSync(join(localSkill, "src/lib.rs"), "utf-8")).toContain("77");
+				expect(existsSync(localManifest)).toBe(false);
+				expect(diagnostics).toContainEqual(
+					expect.stringContaining('rust skill "shared" failed to compile and was unmounted'),
+				);
+				const independent = await reloaded.execute({
+					code: 'use agent_lib::prelude::*; fn main() -> Result<()> { rlm::deps::add("itoa")?; println!("independent"); Ok(()) }',
+				});
+				expect(independent.status, independent.compileDiagnostics ?? independent.stderr).toBe("ok");
+				expect(independent.stdout.trim()).toBe("independent");
+				await child.dispose();
+				writeFileSync(localManifest, manifest);
+				const repaired = await (await child.ensure()).execute({
+					code: 'fn main() { println!("{}", agent_lib::skills::shared::value()); }',
+				});
+				expect(repaired.status, repaired.compileDiagnostics ?? repaired.stderr).toBe("ok");
+				expect(repaired.stdout.trim()).toBe("77");
+				expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toContain("99");
+				expect(readFileSync(join(seed, "skills/shared/src/lib.rs"), "utf-8")).toContain("42");
+			} finally {
+				await child.dispose();
+			}
+		},
+	);
 
 	it("mounts a healthy skill, unmounts a broken one, and cells call the survivor", { timeout: 300_000 }, async () => {
 		const root = mkdtempSync(join(tmpdir(), "skills-int-"));
