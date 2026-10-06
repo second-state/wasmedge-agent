@@ -312,9 +312,24 @@ available, authenticated model, the bounded wait runs instead.
 |---------|------|---------|-------------|
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
 | `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
+| `rustCell.libraryTestGate` | boolean | `false` | Require sandboxed `agent_lib` tests before applying a cell's `lib` edits |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
 | `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
 | `rustCell.preludeExtra` | array | `[]` | User-selected crates.io dependencies available under `agent_lib::prelude::extra` |
+
+Set `"rustCell": { "libraryTestGate": true }` to validate nonempty `lib` edits
+in a disposable workspace before applying them. The gate builds `agent_lib` unit
+and integration tests with release/offline Cargo, then runs every test module in
+WasmEdge. It requires the standard Rust test harness and at least one passing,
+non-ignored test; a library with no tests is rejected. Put unit tests alongside
+helpers in `src/`, or maintain integration tests under `agent_lib/tests/` through
+host tools. Tests have only disposable `/scratch` access, without project,
+state, harness, or bridge access, and share the cell deadline and resource limits.
+Failure or cancellation leaves the submitted cell and library edits unapplied.
+Calls without `lib` edits keep their existing behavior. Restart or `/reload`
+after changing the setting; child sessions inherit it, and SDK Rust tools accept
+the same option. This does not generate tests, run doctests, rerun every skill's
+tests against the proposed edits, or isolate Cargo build scripts from the host.
 
 Set `"rustCell": { "workspaceWritePolicy": "ro" }` to mount `/workspace` read-only
 for Rust guest execution. The prompt directs cells to produce patches and use the

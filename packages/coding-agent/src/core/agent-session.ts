@@ -10603,6 +10603,7 @@ export class AgentSession {
 				initialWorkspaceDir: this._rustWorkspaceSeedDir(),
 				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
 				workspaceWritePolicy: this.settingsManager.getRustCellWorkspaceWritePolicy(),
+				libraryTestGate: this.settingsManager.getRustCellLibraryTestGate(),
 				preludeExtra: this.settingsManager.getRustCellPreludeExtra(),
 				...this.settingsManager.getRustCellResourceLimits(),
 				hostHandlers: this._createHostRequestHandlers(),

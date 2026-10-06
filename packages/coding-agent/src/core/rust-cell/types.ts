@@ -46,6 +46,8 @@ export interface CellResult {
 }
 
 export interface RunnerOptions extends CellResourceLimits {
+	/** Test proposed lib edits in WASI before applying them; defaults to false. */
+	libraryTestGate?: boolean;
 	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */
 	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Project directory mounted at /workspace. */

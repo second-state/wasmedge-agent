@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { assertHarnessMountsIsolated, assertReadonlyWorkspaceMounts } from "./harness-mounts.js";
+import { normalizeLibraryTestGate, testLibraryEdits } from "./library-tests.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
@@ -49,12 +50,17 @@ export class CellRunner {
 
 	constructor(opts: RunnerOptions) {
 		this.resourceArgs = wasmedgeResourceArgs(opts);
-		this.opts = { ...opts, workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy) };
+		this.opts = {
+			...opts,
+			workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy),
+			libraryTestGate: normalizeLibraryTestGate(opts.libraryTestGate),
+		};
 	}
 
 	/** Serialize cells (executionMode "sequential" is also enforced host-side). */
 	execute(input: CellInput, per: PerCallOptions = {}): Promise<CellResult> {
-		const run = this.queue.then(() => this.executeInner(input, per));
+		const submitted = { code: input.code, lib: input.lib?.map((file) => ({ ...file })) };
+		const run = this.queue.then(() => this.executeInner(submitted, per));
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
@@ -88,6 +94,10 @@ export class CellRunner {
 		try {
 			await this.opts.validateSkills?.(signal, remainingMs());
 			signal.throwIfAborted();
+			if (this.opts.libraryTestGate && input.lib?.length) {
+				await testLibraryEdits(input.lib, { ...this.opts, timeoutMs: Math.max(0, remainingMs()), signal });
+				signal.throwIfAborted();
+			}
 		} catch (error) {
 			return this.result(signal.aborted ? interruptedStatus() : "error", {
 				started,

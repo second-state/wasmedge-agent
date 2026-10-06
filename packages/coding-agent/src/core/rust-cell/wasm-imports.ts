@@ -59,7 +59,7 @@ const ALLOWED_WASI_FUNCTIONS = new Set([
  * rather than executed without inspection. WasmEdge remains the guest runtime. */
 export async function validateWasiImports(
 	bytes: Uint8Array<ArrayBuffer>,
-	purpose: "cell" | "skill test",
+	purpose: "cell" | "skill test" | "library test",
 	signal?: AbortSignal,
 ): Promise<void> {
 	signal?.throwIfAborted();
