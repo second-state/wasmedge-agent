@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { homedir } from "os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { getProjectConfigDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import { isUnderPath, resolveUserPath } from "../utils/paths.js";
 import { parseSlashCommand } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
@@ -26,6 +26,8 @@ export function parseCommandArgs(argsString: string): string[] {
 	const args: string[] = [];
 	let current = "";
 	let inQuote: string | null = null;
+	// An explicitly quoted token is an argument even when empty ("" or '').
+	let quoted = false;
 
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i];
@@ -38,17 +40,19 @@ export function parseCommandArgs(argsString: string): string[] {
 			}
 		} else if (char === '"' || char === "'") {
 			inQuote = char;
+			quoted = true;
 		} else if (/[\t\p{Zs}]/u.test(char)) {
-			if (current) {
+			if (current || quoted) {
 				args.push(current);
 				current = "";
+				quoted = false;
 			}
 		} else {
 			current += char;
 		}
 	}
 
-	if (current) {
+	if (current || quoted) {
 		args.push(current);
 	}
 
@@ -170,19 +174,6 @@ export interface LoadPromptTemplatesOptions {
 	includeDefaults: boolean;
 }
 
-function normalizePath(input: string): string {
-	const trimmed = input.trim();
-	if (trimmed === "~") return homedir();
-	if (trimmed.startsWith("~/")) return join(homedir(), trimmed.slice(2));
-	if (trimmed.startsWith("~")) return join(homedir(), trimmed.slice(1));
-	return trimmed;
-}
-
-function resolvePromptPath(p: string, cwd: string): string {
-	const normalized = normalizePath(p);
-	return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
-}
-
 /**
  * Load all prompt templates from:
  * 1. Global: agentDir/prompts/
@@ -199,15 +190,6 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 
 	const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
 	const projectPromptsDir = resolve(getProjectConfigDir(resolvedCwd), "prompts");
-
-	const isUnderPath = (target: string, root: string): boolean => {
-		const normalizedRoot = resolve(root);
-		if (target === normalizedRoot) {
-			return true;
-		}
-		const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-		return target.startsWith(prefix);
-	};
 
 	const getSourceInfo = (resolvedPath: string): SourceInfo => {
 		if (isUnderPath(resolvedPath, globalPromptsDir)) {
@@ -237,7 +219,7 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 
 	// 3. Load explicit prompt paths
 	for (const rawPath of promptPaths) {
-		const resolvedPath = resolvePromptPath(rawPath, resolvedCwd);
+		const resolvedPath = resolveUserPath(rawPath, resolvedCwd);
 		if (!existsSync(resolvedPath)) {
 			continue;
 		}

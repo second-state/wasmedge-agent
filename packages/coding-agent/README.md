@@ -66,10 +66,19 @@ The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` 
 
 For each built-in provider, WasmEdge Agent maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
+The model and MCP service catalogs ship with each release: they are committed under `catalog/` (`models.bundled.json`, `mcp-services.bundled.json`) and copied into `dist/` at build time. Nothing is fetched at runtime; only Prime Inference queries its own API for live models when you are signed in. To refresh the bundled snapshots from a local catalog checkout (`models/catalog.v1.json`, `plugins/catalog.v2.json`):
+
+```bash
+npm run catalog:assets -- --catalog-dir /path/to/catalog
+```
+
 **Subscriptions:**
 - Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro (Codex)
 - GitHub Copilot
+- xAI Grok (eligible subscriptions)
+
+Select the xAI subscription entry in `/login` to sign in. Model access depends on your xAI account entitlement. See [xAI setup](docs/providers.md#xai-grok).
 
 **API keys:**
 - Anthropic
@@ -99,6 +108,8 @@ For each built-in provider, WasmEdge Agent maintains a list of tool-capable mode
 - Xiaomi MiMo Token Plan (China)
 - Xiaomi MiMo Token Plan (Amsterdam)
 - Xiaomi MiMo Token Plan (Singapore)
+
+Prime Inference credentials and teams belong to Agent's `~/.wasmedge-agent/auth.json`. Normal use ignores Prime CLI's `~/.prime/config.json`. If you previously relied on CLI credentials, run `/login` once: Agent can import a production-compatible CLI key after production validation, without changing CLI config. `PRIME_API_KEY` still overrides the saved Agent key.
 
 See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
@@ -138,14 +149,15 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/login`, `/logout` | OAuth authentication |
 | `/model` | Switch models |
 | `/effort` | Set reasoning/thinking level |
-| `/scoped-models` | Enable/disable models for Ctrl+P cycling |
+| `/scoped-models` | Enable/disable models for Alt+M cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
-| `/resume` | Open the searchable session view |
+| `/resume [id\|path]` | Open the agents view, or resume a session directly |
 | `/new`, `/clear` | Start a new session |
 | `/name <name>` | Set session display name |
 | `/session` | Show session info (file, ID, messages) |
 | `/traces [status\|on\|off\|preview\|upload-current\|upload-all\|login]` | Preview traces, run one-shot current/all uploads, and manage automatic sharing (`upload` aliases `upload-current`) |
 | `/usage` | Show token, cost, and context usage |
+| `/speed [on\|off]` | Toggle footer readout of model output tok/sec (latest response and session average) |
 | `/tree` | Jump to any point in the session and continue from there |
 | `/fork` | Create a new session from a previous user message |
 | `/clone` | Duplicate the current active branch into a new session |
@@ -158,6 +170,8 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
 | `/quit` | Quit WasmEdge Agent |
+
+Trace uploads use environment or Agent-owned credentials, not live Prime CLI credentials. `/traces login` can reuse a CLI key only after production URL and scope validation. See [trace sharing credentials](docs/providers.md#trace-sharing-credentials).
 
 ### Keyboard Shortcuts
 
@@ -172,9 +186,8 @@ See `/hotkeys` for the full list. Customize via `~/.wasmedge-agent/keybindings.j
 | Escape | Clear the input without interrupting active work |
 | Escape twice | Open `/tree` |
 | Ctrl+L | Open model selector |
-| Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Ctrl+O | Collapse/expand tool output |
-| Ctrl+T | Collapse/expand thinking blocks |
+| Alt+M / Shift+Alt+M | Cycle scoped models forward/backward |
+| Ctrl+O | Cycle overview → thinking and file diffs → all output |
 
 ### Message Queue
 
@@ -182,9 +195,11 @@ Submit messages while the agent is working:
 
 - **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls
 - **Alt+Enter** queues a *follow-up* message, delivered only after the agent finishes all work
-- **Ctrl+C** interrupts active work and restores queued messages to the editor
+- **Ctrl+C** interrupts active work; queued messages are kept and resume after your next submit or edit
 - **Escape** clears the input without interrupting active work
-- **Alt+Up** retrieves queued messages back to editor
+- **Alt+Up / Alt+Down** browse queued messages individually and return to the editor draft
+- While browsing, **Enter** applies the edit as steering input and **Alt+Enter** applies it as a follow-up; submitting an empty edit deletes the item
+- **Ctrl+Alt+Up / Ctrl+Alt+Down** move the selected item earlier or later within its queue
 
 On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so WasmEdge Agent can receive the follow-up shortcut.
 
@@ -357,6 +372,8 @@ export default function (pi: ExtensionAPI) {
 
 The default export can also be `async`. WasmEdge Agent waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
 
+Schedule timers via `ctx.setTimeout`/`ctx.setInterval` (error-isolated, auto-cancelled on unload); raw global timers are unsupported for scheduling extension work.
+
 **What's possible:**
 - Custom tools (or replace built-in tools entirely)
 - Additional orchestration workflows and plan modes
@@ -476,6 +493,7 @@ Run `wasmedge-agent help` for the command list and `wasmedge-agent help <command
 ```bash
 wasmedge-agent agents                         # Search running, idle, and inactive sessions
 wasmedge-agent list [--all]                   # List active or saved agents
+wasmedge-agent sessions [--all] [--json]      # Show agent status, activity, and usage
 wasmedge-agent attach <agent>                 # Attach the interactive UI
 wasmedge-agent stop <agent>                   # Stop one agent
 wasmedge-agent rename <agent> <name>          # Rename an agent
@@ -533,7 +551,7 @@ cat README.md | wasmedge-agent -p "Summarize this text"
 | `--model <pattern>` | Model pattern or ID (supports `provider/id` and optional `:<thinking>`) |
 | `--api-key <key>` | API key (overrides env vars) |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
-| `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
+| `--models <patterns>` | Comma-separated patterns for Alt+M cycling |
 
 Use `wasmedge-agent model list [search]` to list available models.
 
@@ -653,9 +671,15 @@ wasmedge-agent --thinking high "Solve this complex problem"
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
 | `PI_SKIP_VERSION_CHECK` | Skip the WasmEdge Agent version update check at startup. This prevents the release manifest request |
+| `WASMEDGE_AGENT_TELEMETRY` | Override pseudonymous aggregate usage analytics with `1`/`true`/`yes` or `0`/`false`/`no` |
+| `WASMEDGE_AGENT_TELEMETRY_ENDPOINT` | Override the aggregate analytics ingestion endpoint |
+| `DO_NOT_TRACK` | Disable aggregate usage analytics when set to `1`/`true`/`yes` |
 | `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` | Release host for the WasmEdge Agent manifest and tarballs, overriding the one an official release records. A build that was not packed for release has none, and runs no update check |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing if it has `agent_traces` scope |
+| `PRIME_TEAM_ID` | Override the Prime Inference team request header without changing the saved Agent team |
+| `WASMEDGE_AGENT_INFERENCE_API_BASE_URL` | Override Agent authentication and team API URLs, not model inference URLs; defaults to production |
+| `WASMEDGE_AGENT_INFERENCE_FRONTEND_URL` | Override the Agent login browser frontend; defaults to production |
 | `WASMEDGE_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
 | `WASMEDGE_AGENT_TRACES_BASE_URL` | Override the WasmEdge Agent trace upload API base URL |
 | `WASMEDGE_AGENT_CARGO` | Path to the `cargo` binary (default: PATH, then `~/.cargo/bin/cargo`) |

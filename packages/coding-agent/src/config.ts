@@ -1,4 +1,3 @@
-import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import {
 	accessSync,
@@ -13,9 +12,10 @@ import {
 	statSync,
 } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join, resolve, sep, win32 } from "path";
+import { basename, dirname, join, posix, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import { shouldUseWindowsShell } from "./utils/child-process.js";
+import { shouldUseWindowsShell, spawnSyncHidden } from "./utils/child-process.js";
+import { normalizeSocketPath } from "./utils/daemon-socket-path.js";
 
 // =============================================================================
 // Package Detection
@@ -206,7 +206,7 @@ function readCommandOutput(
 	args: string[],
 	options: { requireSuccess?: boolean } = {},
 ): string | undefined {
-	const result = spawnSync(command, args, {
+	const result = spawnSyncHidden(command, args, {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 		shell: shouldUseWindowsShell(command),
@@ -365,9 +365,7 @@ export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
 	const envDir = process.env.PI_PACKAGE_DIR;
 	if (envDir) {
-		if (envDir === "~") return homedir();
-		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
-		return envDir;
+		return expandTildePath(envDir);
 	}
 
 	if (isBunBinary) {
@@ -422,19 +420,9 @@ export function getPackageJsonPath(): string {
 	return join(getPackageDir(), "package.json");
 }
 
-/** Get path to README.md */
-export function getReadmePath(): string {
-	return resolve(join(getPackageDir(), "README.md"));
-}
-
 /** Get path to docs directory */
 export function getDocsPath(): string {
 	return resolve(join(getPackageDir(), "docs"));
-}
-
-/** Get path to examples directory */
-export function getExamplesPath(): string {
-	return resolve(join(getPackageDir(), "examples"));
 }
 
 /** Get path to CHANGELOG.md */
@@ -692,9 +680,11 @@ export function warnIfLegacyAlias(invokedAs: string, write: (message: string) =>
 	return true;
 }
 
-export function expandTildePath(path: string): string {
+export function expandTildePath(path: string, platform: NodeJS.Platform = process.platform): string {
 	if (path === "~") return homedir();
-	if (path.startsWith("~/")) return homedir() + path.slice(1);
+	if (path.startsWith("~/") || (platform === "win32" && path.startsWith("~\\"))) {
+		return (platform === "win32" ? win32 : posix).join(homedir(), path.slice(2));
+	}
 	return path;
 }
 
@@ -742,6 +732,27 @@ export function getCustomThemesDir(): string {
 	return join(getAgentDir(), "themes");
 }
 
+/**
+ * Directory for fetched-catalog caches (provider models, MCP services,
+ * default-model pointer, Prime Inference model cache). Derived state only —
+ * never user-owned config like auth.json, settings.json, models.json, or
+ * mcp-connections.json. Caches are non-authoritative: losing them costs one
+ * cold fetch, nothing else.
+ */
+export function getCatalogCacheDir(): string {
+	return join(getAgentDir(), "catalog");
+}
+
+/** Model catalog caches: provider catalog snapshot + Prime Inference model cache. */
+export function getModelCacheDir(): string {
+	return join(getAgentDir(), "models");
+}
+
+/** MCP service catalog cache. */
+export function getMcpCacheDir(): string {
+	return join(getAgentDir(), "mcp");
+}
+
 /** Directory where daemon and client diagnostic logs are written (e.g. ~/.wasmedge-agent/logs/). */
 export function getLogsDir(): string {
 	return join(getAgentDir(), "logs");
@@ -767,12 +778,13 @@ export function getAgentLogPath(): string {
  * daemon.sock in different dirs) don't interleave into one file.
  */
 export function getDaemonLogPath(socketPath: string): string {
-	const hash = createHash("sha256").update(socketPath).digest("hex").slice(0, 8);
-	return join(getLogsDir(), `${basename(socketPath)}.${hash}.log`);
+	const normalized = normalizeSocketPath(socketPath);
+	const hash = createHash("sha256").update(normalized).digest("hex").slice(0, 8);
+	return join(getLogsDir(), `${basename(normalized)}.${hash}.log`);
 }
 
 export function getDaemonUpdateRestartManifestPath(socketPath: string, agentDir: string = getAgentDir()): string {
-	const normalizedSocketPath = process.platform === "win32" ? socketPath.toLowerCase() : resolve(socketPath);
+	const normalizedSocketPath = normalizeSocketPath(socketPath);
 	const socketHash = createHash("sha256").update(normalizedSocketPath).digest("hex");
 	return join(agentDir, "daemon-update-restarts", `${socketHash}.json`);
 }
@@ -807,19 +819,9 @@ export function appendRotatingLog(logPath: string, message: string, maxBytes: nu
 	}
 }
 
-/** Get path to models.json */
-export function getModelsPath(): string {
-	return join(getAgentDir(), "models.json");
-}
-
 /** Get path to auth.json */
 export function getAuthPath(): string {
 	return join(getAgentDir(), "auth.json");
-}
-
-/** Get path to settings.json */
-export function getSettingsPath(): string {
-	return join(getAgentDir(), "settings.json");
 }
 
 /** Get path to cron jobs store */
@@ -827,19 +829,9 @@ export function getCronJobsPath(agentDir: string = getAgentDir()): string {
 	return join(agentDir, "cron-jobs.json");
 }
 
-/** Get path to tools directory */
-export function getToolsDir(): string {
-	return join(getAgentDir(), "tools");
-}
-
 /** Get path to managed binaries directory (fd, rg) */
 export function getBinDir(): string {
 	return join(getAgentDir(), "bin");
-}
-
-/** Get path to prompt templates directory */
-export function getPromptsDir(): string {
-	return join(getAgentDir(), "prompts");
 }
 
 /** Get path to sessions directory */

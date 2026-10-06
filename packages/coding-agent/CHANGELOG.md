@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Synced with upstream v0.9.8, the last upstream TypeScript release. Upstream changes from v0.7.1 through v0.9.8 are included, except changes to the removed Python kernel runtime. See the upstream changelog for details.
 - Persisted Rust workspaces now detect template and toolchain changes. Scaffold upgrades compile in a separate tree before publication, preserving library edits, skills, state, cell source, and Git history; failed upgrades leave the original workspace intact.
 - Child agents now inherit a spawn-time snapshot of the parent's Rust library, mounted skill sources, and build cache. State and Git history start fresh; later library edits and reloads remain independent.
 - Persisted Rust workspaces now record an initial Git snapshot and a commit after each successful cell, including source and persistent state. Snapshot errors are reported without retrying the executed cell.

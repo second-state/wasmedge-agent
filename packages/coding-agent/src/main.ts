@@ -5,7 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { type Api, type ImageContent, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
 import { registerBuiltinMcpOAuthProviders } from "@earendil-works/pi-ai/mcp";
@@ -46,6 +46,7 @@ import {
 	withCurrentLegacyWarnings,
 } from "./config.js";
 import {
+	type AgentExecutionMode,
 	type AgentSessionRuntimeConfig,
 	mergeAgentSessionRuntimeConfig,
 	mergeAutonomousConfig,
@@ -78,8 +79,14 @@ import {
 	type SessionCwdIssue,
 } from "./core/session-cwd.js";
 import { canonicalSessionPath, SessionAlreadyActiveError } from "./core/session-lease.js";
-import { SessionManager } from "./core/session-manager.js";
+import {
+	findMostRecentSessionForCwd,
+	getDefaultSessionDir,
+	loadEntriesFromFile,
+	SessionManager,
+} from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
+import { isTelemetryEnabled } from "./core/telemetry.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import {
 	drainLegacyNameWarnings,
@@ -91,10 +98,15 @@ import {
 	writeStderrSync,
 } from "./migrations.js";
 import { isDaemonCatalogProcess, runDaemonCatalogProcess } from "./modes/daemon/daemon-catalog-process.js";
-import { deserializeDaemonError } from "./modes/daemon/daemon-errors.js";
-import { collectDaemonClientEnv, collectDaemonLaunchEnv } from "./modes/daemon/daemon-protocol.js";
+import {
+	DaemonSessionCreateError,
+	deserializeDaemonCreateError,
+	deserializeDaemonError,
+} from "./modes/daemon/daemon-errors.js";
+import { collectDaemonClientEnv, collectDaemonLaunchEnv, type DaemonResponse } from "./modes/daemon/daemon-protocol.js";
 import {
 	DAEMON_WORKER_ACTIVE_SESSION_ID_ENV,
+	daemonWorkerInstanceId,
 	isDaemonWorkerProcess,
 	requireDaemonWorkerAuthenticationToken,
 	waitForDaemonWorkerStartupGate,
@@ -111,6 +123,7 @@ import {
 	defaultDaemonSocketPath,
 	InProcessAgentConnection,
 	InteractiveMode,
+	normalizeSocketPath,
 	resolveAttachModelFallbackMessage,
 	runAcpMode,
 	runAcpModeWithConnection,
@@ -153,7 +166,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-export type ClientMode = "interactive" | "print" | "json" | "rpc" | "acp";
+export type ClientMode = AgentExecutionMode;
 /** Compatibility view of the CLI's internal daemon process entrypoint. */
 export type AppMode = ClientMode | "daemon";
 
@@ -161,8 +174,8 @@ export function shouldRejectNonInteractiveAttach(attachAgent: string | undefined
 	return attachAgent !== undefined && appMode !== "interactive";
 }
 
-export function shouldRejectBareResume(resume: true | string | undefined): boolean {
-	return resume === true;
+export function shouldRejectNonInteractiveBareResume(resume: true | string | undefined, appMode: AppMode): boolean {
+	return resume === true && appMode !== "interactive";
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
@@ -188,6 +201,10 @@ function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "acp" | "dae
 	return appMode === "json" ? "json" : "text";
 }
 
+export function isClientOwnedDaemonSession(appMode: AppMode, noSession?: boolean): boolean {
+	return appMode !== "acp" || noSession === true;
+}
+
 // `wasmedge-agent agents` opens the agents view directly.
 export function parseAgentsViewCommand(args: string[]): { explicitAgentsView: boolean; args: string[] } {
 	if (args[0] === "agents") {
@@ -202,18 +219,6 @@ export interface DaemonClientStartupDecision {
 	noSession?: boolean;
 	help?: boolean;
 	listModels?: string | true;
-}
-
-export type InteractiveDaemonStartupDecision = DaemonClientStartupDecision;
-
-/** Retained for callers that only classify persistent interactive startup. */
-export function shouldUseDaemonInteractive(options: DaemonClientStartupDecision): boolean {
-	return (
-		options.appMode === "interactive" &&
-		!options.startupBenchmark &&
-		!options.noSession &&
-		options.listModels === undefined
-	);
 }
 
 export function shouldUseDaemonClient(options: DaemonClientStartupDecision): boolean {
@@ -248,13 +253,12 @@ export interface AgentsViewStartupDecision {
 }
 
 export function shouldOpenAgentsViewForDaemonInteractive(options: AgentsViewStartupDecision): boolean {
+	const bareResume = options.resume === true;
+	const requestsAgentsView = bareResume || (options.explicitAgentsView && !options.needsOnboarding);
 	return (
 		options.useDaemonInteractive &&
-		// `wasmedge-agent` opens a new chat by default; the unified agents view is reached via
-		// left-arrow from a session or requested explicitly (`agents`).
-		!!options.explicitAgentsView &&
-		!options.needsOnboarding &&
-		// A resume selector resolves and opens its target directly.
+		// A selector, continuation, or fork must open its target directly rather than the agents view.
+		!!requestsAgentsView &&
 		typeof options.resume !== "string" &&
 		!options.continue &&
 		!options.fork
@@ -271,7 +275,12 @@ export interface DaemonInteractiveSessionManagerDecision {
 export function shouldUseEphemeralSessionManagerForDaemonInteractive(
 	options: DaemonInteractiveSessionManagerDecision,
 ): boolean {
-	return !options.hasActiveDaemonSession && options.resume === undefined && !options.continue && !options.fork;
+	return (
+		!options.hasActiveDaemonSession &&
+		(options.resume === undefined || options.resume === true) &&
+		!options.continue &&
+		!options.fork
+	);
 }
 
 export interface DaemonActiveSessionLookupDecision {
@@ -477,10 +486,22 @@ function getResumeSelector(parsed: Pick<Args, "resume">): string | undefined {
 	return typeof parsed.resume === "string" ? parsed.resume : undefined;
 }
 
+function readSessionManager(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+	const entries = loadEntriesFromFile(path);
+	const header = entries.find((entry) => entry.type === "session");
+	const manager = SessionManager.inMemory(
+		cwdOverride ?? header?.cwd ?? process.cwd(),
+		sessionDir ?? dirname(resolve(path)),
+	);
+	manager.setSessionFile(path, entries);
+	return manager;
+}
+
 export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	sessionDir: string | undefined,
+	readOnly = false,
 	/** See StartupExitWithCode: main() reports what startup collected before
 	 *  the process ends; every other caller keeps the bare exit. */
 	exitOnFailure: StartupExitWithCode = exitWithoutReporting,
@@ -509,7 +530,9 @@ export async function createSessionManager(
 		switch (resolved.type) {
 			case "path":
 			case "local":
-				return SessionManager.open(resolved.path, sessionDir, explicitCwdOverride);
+				return readOnly
+					? readSessionManager(resolved.path, sessionDir, explicitCwdOverride)
+					: SessionManager.open(resolved.path, sessionDir, explicitCwdOverride);
 
 			case "global": {
 				if (!process.stdin.isTTY) {
@@ -519,7 +542,7 @@ export async function createSessionManager(
 							`Error: session ${resumeSelector} belongs to a different project (${resolved.cwd}). Pass --fork ${resumeSelector} to use it here, or run from that project's directory.`,
 						),
 					);
-					process.exit(1);
+					exitOnFailure(1);
 				}
 				console.log(chalk.yellow(`Session found in different project: ${resolved.cwd}`));
 				const shouldFork = await promptConfirm("Fork this session into current directory?");
@@ -534,10 +557,15 @@ export async function createSessionManager(
 	}
 
 	if (parsed.continue) {
+		if (readOnly) {
+			const dir = sessionDir ?? getDefaultSessionDir(cwd);
+			const path = findMostRecentSessionForCwd(dir, cwd);
+			return path ? readSessionManager(path, dir, cwd) : SessionManager.inMemory(cwd, dir);
+		}
 		return SessionManager.continueRecent(cwd, sessionDir);
 	}
 
-	return SessionManager.create(cwd, sessionDir);
+	return readOnly ? SessionManager.inMemory(cwd, sessionDir) : SessionManager.create(cwd, sessionDir);
 }
 
 function buildSessionOptions(
@@ -608,7 +636,7 @@ function buildSessionOptions(
 		options.thinkingLevel = config.thinking;
 	}
 
-	// Scoped models for Ctrl+P cycling
+	// Scoped models for Alt+M cycling
 	// Keep thinking level undefined when not explicitly set in the model pattern.
 	// Undefined means "inherit current session thinking level" during cycling.
 	if (scopedModels.length > 0) {
@@ -680,6 +708,7 @@ function runtimeConfigFromArgs(
 	agentDir: string,
 	sessionDir: string | undefined,
 	appMode: AppMode,
+	telemetryDisabled?: true,
 ): AgentSessionRuntimeConfig {
 	return {
 		cwd,
@@ -706,6 +735,8 @@ function runtimeConfigFromArgs(
 		noContextFiles: parsed.noContextFiles,
 		autonomous: runtimeAutonomousConfigFromArgs(parsed),
 		extensionFlagValues: parsed.unknownFlags.size > 0 ? Object.fromEntries(parsed.unknownFlags.entries()) : undefined,
+		executionMode: appMode === "daemon" ? undefined : appMode,
+		telemetryDisabled,
 		// Serialized refine for print/json/rpc: the client's appMode is NOT
 		// "daemon" here — it's "print", "json", or "rpc". The daemon worker
 		// receives this flag via AgentSessionRuntimeConfig and uses it
@@ -755,7 +786,64 @@ export function resolveRuntimeSessionOptions(
 		rlmSessionDir: runtimeSessionOptions?.rlmSessionDir,
 		rlmParentNodeId: runtimeSessionOptions?.rlmParentNodeId,
 		rlmParentAgent: runtimeSessionOptions?.rlmParentAgent,
+		semanticParentSessionId: runtimeSessionOptions?.semanticParentSessionId,
+		semanticSpawnedByRequestId: runtimeSessionOptions?.semanticSpawnedByRequestId,
 		subagentRuntimeHost: runtimeSessionOptions?.subagentRuntimeHost,
+	};
+}
+
+/** The production runtime factory: every daemon-hosted and runtime-hosted session is created through this path. */
+export function createDefaultRuntimeFactory(
+	runtimeDefaultSessionConfig: AgentSessionRuntimeConfig,
+	extensionFactories?: ExtensionFactory[],
+): CreateAgentSessionRuntimeFactory {
+	return async ({
+		cwd,
+		agentDir,
+		sessionManager,
+		sessionStartEvent,
+		sessionConfig,
+		sessionOptions: runtimeSessionOptions,
+	}) => {
+		const config = mergeAgentSessionRuntimeConfig(runtimeDefaultSessionConfig, sessionConfig);
+		const prepared = await prepareRuntimeServices({
+			config,
+			cwd,
+			agentDir,
+			sessionManager,
+			extensionFactories,
+			sessionOptionsOverride: runtimeSessionOptions,
+		});
+		const { services, sessionOptions, diagnostics } = prepared;
+		const resolvedSessionOptions = resolveRuntimeSessionOptions(sessionOptions, runtimeSessionOptions);
+
+		const created = await createAgentSessionFromServices({
+			services,
+			sessionManager,
+			sessionStartEvent,
+			...resolvedSessionOptions,
+			// Main agents warm their rust workspace in the background at session
+			// creation; subagent sessions (rlmDepth > 0) keep the lazy first-call start.
+			prewarmRustWorkspace: true,
+			// Read serializedRefine from the merged runtime config (passed
+			// from the JSON/print client through AgentSessionRuntimeConfig)
+			// so it survives the daemon worker's appMode="daemon" context.
+			serializedRefine: config.serializedRefine ?? false,
+			executionMode: config.executionMode,
+			telemetryDisabled: config.telemetryDisabled,
+			// Only seed initial goal for top-level sessions (rlmDepth 0).
+			initialGoal: (runtimeSessionOptions?.rlmDepth ?? 0) === 0 ? config.initialGoal : undefined,
+		});
+		const cliThinkingOverride = config.thinking !== undefined || prepared.cliThinkingFromModel;
+		if (created.session.model && cliThinkingOverride) {
+			created.session.setThinkingLevel(created.session.thinkingLevel);
+		}
+
+		return {
+			...created,
+			services,
+			diagnostics,
+		};
 	};
 }
 
@@ -780,6 +868,12 @@ async function prepareRuntimeServices(options: {
 		// Subagents share the parent's Herdr pane; their own reporter would race
 		// the parent's and a subagent quit would release the still-active pane.
 		noBuiltinHerdrReporter: (options.sessionOptionsOverride?.rlmDepth ?? 0) > 0,
+		telemetryDisabled: config.telemetryDisabled,
+		// Interactive launches hold the notice back for onboarding, which marks
+		// itself shown; every other mode discloses immediately. Deriving it from
+		// the session config covers the daemon-hosted path too, which creates the
+		// session the TUI actually talks to.
+		deferTelemetryNoticeForOnboarding: config.executionMode === "interactive",
 		resourceLoaderOptions: {
 			additionalExtensionPaths: config.extensions,
 			additionalSkillPaths: config.skills,
@@ -926,6 +1020,22 @@ function isUnknownActiveSessionError(message: string): boolean {
 	return message.startsWith("Unknown active session:");
 }
 
+/**
+ * Unknown falls back to the saved-session path (whose create/open route retries recovery); recovering
+ * throws typed so an explicit --attach-agent surfaces the retryable state, not "No active agent found".
+ */
+export function resolveActiveSessionLookupFailure(
+	response: Extract<DaemonResponse, { success: false }>,
+): Error | undefined {
+	if (response.errorInfo?.code === "session_recovering") {
+		return deserializeDaemonError(response);
+	}
+	if (isUnknownActiveSessionError(response.error)) {
+		return undefined;
+	}
+	return new Error(response.error);
+}
+
 async function findActiveDaemonSessionSummary(
 	socketPath: string,
 	selector: string,
@@ -936,10 +1046,11 @@ async function findActiveDaemonSessionSummary(
 	try {
 		const response = await client.request({ type: "get_state", activeSessionId: selector }, 3000);
 		if (!response.success) {
-			if (isUnknownActiveSessionError(response.error)) {
-				return undefined;
+			const failure = resolveActiveSessionLookupFailure(response);
+			if (failure) {
+				throw failure;
 			}
-			throw new Error(response.error);
+			return undefined;
 		}
 		if (!isDaemonSessionSummary(response.data)) {
 			throw new Error("Daemon returned an invalid active session summary");
@@ -954,7 +1065,7 @@ function createSessionManagerForActiveDaemonSummary(summary: SessionSummary, fal
 	const cwd = summary.cwd || fallbackCwd;
 	if (summary.sessionFile) {
 		try {
-			return SessionManager.open(summary.sessionFile, undefined, cwd);
+			return readSessionManager(summary.sessionFile, undefined, cwd);
 		} catch {
 			return SessionManager.inMemory(cwd);
 		}
@@ -991,6 +1102,7 @@ async function createDaemonClientConnection(options: {
 	clientOwned?: boolean;
 	noSession?: boolean;
 	supportsExtensionUi?: boolean;
+	tracksHeartbeats?: boolean;
 }): Promise<{ connection: DaemonAgentConnection; summary: SessionSummary }> {
 	// Caller must have awaited ensureInteractiveDaemonRunning for this socket.
 	const client = new DaemonClient(options.socketPath);
@@ -1000,10 +1112,14 @@ async function createDaemonClientConnection(options: {
 		const attach = async (summary: SessionSummary) => {
 			const connection = await DaemonAgentConnection.attach(client, getDaemonSummaryActiveSessionId(summary), {
 				closeClientOnDispose: true,
+				deferSessionEvents: options.config.executionMode === "interactive",
 				sendClientEnv: true,
 				ownedSession: options.clientOwned,
+				ownedSessionRecoveryConfig: options.clientOwned ? options.config : undefined,
 				supportsExtensionUi: options.supportsExtensionUi,
+				tracksHeartbeats: options.tracksHeartbeats,
 				recoverDaemon: () => ensureInteractiveDaemonRunning(options.socketPath),
+				telemetryDisabled: options.config.telemetryDisabled,
 			});
 			return { connection, summary };
 		};
@@ -1018,7 +1134,7 @@ async function createDaemonClientConnection(options: {
 				await listActiveDaemonSessionSummaries(client),
 				options.sessionPath,
 			);
-			if (activeSummary) {
+			if (activeSummary && activeSummary.workerState !== "failed") {
 				return await attach(activeSummary);
 			}
 		}
@@ -1037,10 +1153,10 @@ async function createDaemonClientConnection(options: {
 			noSession: options.noSession,
 			env: collectDaemonClientEnv(),
 			lifecycle: options.clientOwned ? "client_owned" : "resident",
-			launchEnv: options.clientOwned ? collectDaemonLaunchEnv() : undefined,
+			launchEnv: collectDaemonLaunchEnv(),
 		});
 		if (!response.success) {
-			throw deserializeDaemonError(response);
+			throw deserializeDaemonCreateError(response);
 		}
 		if (!isDaemonSessionSummary(response.data)) {
 			throw new Error("Daemon returned an invalid create response");
@@ -1248,15 +1364,13 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	}
 	time("parseArgs");
-	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
+	const appMode = resolveAppMode(parsed, process.stdin.isTTY);
 
 	if (shouldRejectNonInteractiveAttach(publicCommand.attachAgent, appMode)) {
 		exitWithStartupError("Error: attach requires an interactive terminal");
 	}
-	if (shouldRejectBareResume(parsed.resume)) {
-		exitWithStartupError(
-			"Error: --resume requires a session id or path; browse sessions with left-arrow from a chat",
-		);
+	if (shouldRejectNonInteractiveBareResume(parsed.resume, appMode)) {
+		exitWithStartupError("Error: --resume without a session selector requires an interactive terminal");
 	}
 	setLogContext({ mode: appMode });
 	const shouldTakeOverStdout = appMode !== "interactive";
@@ -1303,6 +1417,10 @@ export async function main(args: string[], options?: MainOptions) {
 			const message = error instanceof Error ? error.message : String(error);
 			exitWithStartupError(`Error: Cannot use cwd ${cwd}: ${message}`);
 		}
+	}
+	if (parsed.daemonSocket) {
+		// After --cwd so a relative socket path resolves against the requested directory.
+		parsed.daemonSocket = normalizeSocketPath(parsed.daemonSocket);
 	}
 
 	// Must precede runMigrations()'s deprecationWarnings snapshot below, and
@@ -1416,7 +1534,7 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager = SessionManager.inMemory(cwd);
 	} else {
 		try {
-			sessionManager = await createSessionManager(parsed, cwd, sessionDir, (exitCode) =>
+			sessionManager = await createSessionManager(parsed, cwd, sessionDir, useDaemonClient, (exitCode) =>
 				exitAfterMigrations(deprecationWarnings, exitCode),
 			);
 		} catch (error) {
@@ -1446,7 +1564,9 @@ export async function main(args: string[], options?: MainOptions) {
 				// opens now.
 				exitAfterMigrations(deprecationWarnings, 0);
 			}
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
+			sessionManager = useDaemonClient
+				? readSessionManager(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd)
+				: SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			// Non-interactive, so the mode-level reporter has already run and
 			// this adds nothing; routed through the same exit anyway so the
@@ -1459,57 +1579,24 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionManager");
 
-	const defaultSessionConfig = runtimeConfigFromArgs(parsed, sessionManager.getCwd(), agentDir, sessionDir, appMode);
+	const telemetrySettingsManager =
+		sessionManager.getCwd() === cwd
+			? startupSettingsManager
+			: SettingsManager.create(sessionManager.getCwd(), agentDir);
+	const telemetryDisabled = isTelemetryEnabled(telemetrySettingsManager) ? undefined : true;
+	const defaultSessionConfig = runtimeConfigFromArgs(
+		parsed,
+		sessionManager.getCwd(),
+		agentDir,
+		sessionDir,
+		appMode,
+		telemetryDisabled,
+	);
 	// Verifier/headless clients pass initialGoal in each create request. The long-lived
 	// daemon fallback must not seed that goal into unrelated future sessions.
 	const daemonDefaultSessionConfig = daemonServerDefaultSessionConfig(defaultSessionConfig);
 	const runtimeDefaultSessionConfig = appMode === "daemon" ? daemonDefaultSessionConfig : defaultSessionConfig;
-	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
-		cwd,
-		agentDir,
-		sessionManager,
-		sessionStartEvent,
-		sessionConfig,
-		sessionOptions: runtimeSessionOptions,
-	}) => {
-		const config = mergeAgentSessionRuntimeConfig(runtimeDefaultSessionConfig, sessionConfig);
-		const prepared = await prepareRuntimeServices({
-			config,
-			cwd,
-			agentDir,
-			sessionManager,
-			extensionFactories: options?.extensionFactories,
-			sessionOptionsOverride: runtimeSessionOptions,
-		});
-		const { services, sessionOptions, diagnostics } = prepared;
-		const resolvedSessionOptions = resolveRuntimeSessionOptions(sessionOptions, runtimeSessionOptions);
-
-		const created = await createAgentSessionFromServices({
-			services,
-			sessionManager,
-			sessionStartEvent,
-			...resolvedSessionOptions,
-			// Main agents warm their rust workspace in the background at session
-			// creation; subagent sessions (rlmDepth > 0) keep the lazy first-call start.
-			prewarmRustWorkspace: true,
-			// Read serializedRefine from the merged runtime config (passed
-			// from the JSON/print client through AgentSessionRuntimeConfig)
-			// so it survives the daemon worker's appMode="daemon" context.
-			serializedRefine: config.serializedRefine ?? false,
-			// Only seed initial goal for top-level sessions (rlmDepth 0).
-			initialGoal: (runtimeSessionOptions?.rlmDepth ?? 0) === 0 ? config.initialGoal : undefined,
-		});
-		const cliThinkingOverride = config.thinking !== undefined || prepared.cliThinkingFromModel;
-		if (created.session.model && cliThinkingOverride) {
-			created.session.setThinkingLevel(created.session.thinkingLevel);
-		}
-
-		return {
-			...created,
-			services,
-			diagnostics,
-		};
-	};
+	const createRuntime = createDefaultRuntimeFactory(runtimeDefaultSessionConfig, options?.extensionFactories);
 	time("createRuntime");
 	// Daemon mode never uses the bootstrap runtime, so skip the heavy
 	// createAgentSessionRuntime below and start listening immediately; sessions
@@ -1524,6 +1611,7 @@ export async function main(args: string[], options?: MainOptions) {
 				createRuntime,
 				worker: {
 					authenticationToken: requireDaemonWorkerAuthenticationToken(),
+					workerInstanceId: daemonWorkerInstanceId(),
 					restoreActiveSessionId: process.env[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV],
 				},
 			});
@@ -1548,12 +1636,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 		const startupModel = await resolvePreparedStartupModel({ prepared, sessionManager });
 
-		// ACP holds stdin open as a long-lived NDJSON request stream, so reading
-		// piped stdin here would block until EOF and never return.
-		let stdinContent: string | undefined;
-		if (appMode !== "acp") {
-			stdinContent = await readPipedStdin();
-		}
+		const stdinContent = await readPipedStdin();
 		time("readPipedStdin");
 
 		const { initialMessage, initialImages } = await prepareInitialMessage(
@@ -1584,7 +1667,7 @@ export async function main(args: string[], options?: MainOptions) {
 					return `${sm.model.id}${thinkingStr}`;
 				})
 				.join(", ");
-			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
+			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Alt+M to cycle)")}`));
 		}
 
 		const promptStashStore = new ClientPromptStashStore();
@@ -1620,7 +1703,6 @@ export async function main(args: string[], options?: MainOptions) {
 				migratedProviders,
 				modelFallbackMessage: startupModel.modelFallbackMessage,
 				promptStashStore,
-				startupModelId: startupModel.model?.id,
 				initialSession,
 				initialScopeKey,
 				verbose: parsed.verbose,
@@ -1653,17 +1735,27 @@ export async function main(args: string[], options?: MainOptions) {
 		// no DeferredAgentConnection is needed to avoid creating it up front.
 		const isFreshDefaultSession =
 			!activeDaemonSessionSummary && !getInteractiveDaemonSessionPath(parsed, sessionManager);
-		const { connection, summary } = await createDaemonClientConnection({
-			socketPath: daemonSocketPath,
-			config: defaultSessionConfig,
-			activeSessionId: activeDaemonSessionSummary
-				? getDaemonSummaryActiveSessionId(activeDaemonSessionSummary)
-				: undefined,
-			sessionPath: getInteractiveDaemonSessionPath(parsed, sessionManager),
-			clientOwned: parsed.noSession,
-			noSession: parsed.noSession,
-			supportsExtensionUi: true,
-		});
+		let connection: DaemonAgentConnection;
+		let summary: SessionSummary;
+		try {
+			({ connection, summary } = await createDaemonClientConnection({
+				socketPath: daemonSocketPath,
+				config: defaultSessionConfig,
+				activeSessionId: activeDaemonSessionSummary
+					? getDaemonSummaryActiveSessionId(activeDaemonSessionSummary)
+					: undefined,
+				sessionPath: getInteractiveDaemonSessionPath(parsed, sessionManager),
+				clientOwned: parsed.noSession,
+				noSession: parsed.noSession,
+				supportsExtensionUi: true,
+			}));
+		} catch (error) {
+			if (error instanceof DaemonSessionCreateError) {
+				console.error(chalk.red(`Error: ${error.message}`));
+				process.exit(1);
+			}
+			throw error;
+		}
 		const agentConnection: AgentConnection = connection;
 		const attachModelFallbackMessage = isFreshDefaultSession
 			? startupModel.modelFallbackMessage
@@ -1761,12 +1853,14 @@ export async function main(args: string[], options?: MainOptions) {
 				config: defaultSessionConfig,
 				sessionPath: parsed.noSession ? undefined : sessionManager.getSessionFile(),
 				continueRecent: parsed.continue,
-				clientOwned: true,
+				clientOwned: isClientOwnedDaemonSession(appMode, parsed.noSession),
 				noSession: parsed.noSession,
 				supportsExtensionUi: appMode === "rpc",
+				// ACP never issues a scheduled-job command, so attach opts it into heartbeats_changed pushes.
+				tracksHeartbeats: appMode === "acp",
 			}));
 		} catch (error) {
-			if (error instanceof SessionAlreadyActiveError) {
+			if (error instanceof SessionAlreadyActiveError || error instanceof DaemonSessionCreateError) {
 				exitWithStartupErrorAfterMigrations(deprecationWarnings, `Error: ${error.message}`);
 			}
 			throw error;
@@ -1841,9 +1935,6 @@ export async function main(args: string[], options?: MainOptions) {
 	let stdinContent: string | undefined;
 	if (appMode !== "rpc" && appMode !== "acp" && appMode !== "daemon") {
 		stdinContent = await readPipedStdin();
-		if (stdinContent !== undefined && appMode === "interactive") {
-			appMode = "print";
-		}
 	}
 	time("readPipedStdin");
 
@@ -1891,7 +1982,7 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await runAcpMode(runtime);
 	} else if (appMode === "interactive") {
-		if (explicitAgentsView) {
+		if (explicitAgentsView || parsed.resume === true) {
 			console.error(chalk.yellow("Warning: the agents view needs the daemon; opening a normal chat instead"));
 		}
 		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
@@ -1901,7 +1992,7 @@ export async function main(args: string[], options?: MainOptions) {
 					return `${sm.model.id}${thinkingStr}`;
 				})
 				.join(", ");
-			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
+			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Alt+M to cycle)")}`));
 		}
 
 		const interactiveMode = new InteractiveMode({

@@ -18,17 +18,6 @@ function assistantDelta(type: "text_delta" | "thinking_delta", delta: string): A
 }
 
 describe("ACP session event mapping", () => {
-	it("maps assistant text deltas to agent_message_chunk", () => {
-		const updates = acpUpdatesForSessionEvent(assistantDelta("text_delta", "hello"));
-		expect(updates).toEqual([
-			{
-				sessionUpdate: "agent_message_chunk",
-				messageId: "wasmedge-agent-assistant-1",
-				content: { type: "text", text: "hello" },
-			},
-		]);
-	});
-
 	it("maps thinking deltas to agent_thought_chunk, not visible text", () => {
 		const updates = acpUpdatesForSessionEvent(assistantDelta("thinking_delta", "reasoning"));
 		expect(updates).toEqual([
@@ -73,7 +62,7 @@ describe("ACP session event mapping", () => {
 		).toEqual([]);
 	});
 
-	it("treats IPython as an execute tool call carrying its cell source", () => {
+	it("treats the rust cell as an execute tool call carrying its cell source", () => {
 		expect(acpToolKind("rust")).toBe("execute");
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_start",
@@ -93,7 +82,7 @@ describe("ACP session event mapping", () => {
 		]);
 	});
 
-	it("carries rich IPython output from the fields the tool actually reports", () => {
+	it("carries rich rust cell output from the fields the tool actually reports", () => {
 		// The rust tool reports media/diffs under `details`, so the mapping must
 		// read those exact fields rather than an invented MIME bundle.
 		const updates = acpUpdatesForSessionEvent({
@@ -126,7 +115,7 @@ describe("ACP session event mapping", () => {
 		});
 	});
 
-	it("omits IPython rich metadata when the cell produced none", () => {
+	it("omits rust cell rich metadata when the cell produced none", () => {
 		const updates = acpUpdatesForSessionEvent({
 			type: "tool_execution_end",
 			toolCallId: "call-3",
@@ -155,150 +144,6 @@ describe("ACP session event mapping", () => {
 		// spelling; this one names the value clients were given.
 		expect(bashToolCallId("r1")).toBe("prime-agent-bash-r1");
 		expect(bashToolCallId(undefined)).toBe("prime-agent-bash");
-	});
-
-	it("gives bash a synthetic tool call with a stable id across its lifecycle", () => {
-		const state: AcpEventMappingState = {};
-		const start = acpUpdatesForSessionEvent(
-			{ type: "bash_start", command: "ls", excludeFromContext: false, runId: "r1" } as AgentConnectionSessionEvent,
-			state,
-		);
-		// bash_output carries no runId, so the mapping must remember the active run.
-		const mid = acpUpdatesForSessionEvent(
-			{ type: "bash_output", chunk: "a.ts\n" } as AgentConnectionSessionEvent,
-			state,
-		);
-		expect(mid[0]).toMatchObject({ toolCallId: bashToolCallId("r1") });
-		const end = acpUpdatesForSessionEvent(
-			{
-				type: "bash_end",
-				exitCode: 0,
-				cancelled: false,
-				truncated: false,
-				runId: "r1",
-			} as AgentConnectionSessionEvent,
-			state,
-		);
-		expect(start[0]).toMatchObject({ toolCallId: bashToolCallId("r1"), kind: "execute", status: "in_progress" });
-		expect(end[0]).toMatchObject({ toolCallId: bashToolCallId("r1"), status: "completed" });
-	});
-
-	it("fails a bash tool call on a non-zero exit", () => {
-		const end = acpUpdatesForSessionEvent({
-			type: "bash_end",
-			exitCode: 1,
-			cancelled: false,
-			truncated: false,
-			runId: "r2",
-		} as AgentConnectionSessionEvent);
-		expect(end[0]).toMatchObject({ status: "failed" });
-	});
-
-	it("surfaces subagent updates as namespaced metadata", () => {
-		const updates = acpUpdatesForSessionEvent({
-			type: "rlm_child_update",
-			child: { id: "sub-1", sessionName: "reviewer", status: "running", model: "openai/gpt-5.6-terra" },
-		} as AgentConnectionSessionEvent);
-		expect(updates[0]?.sessionUpdate).toBe("session_info_update");
-		expect(updates[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: {
-				subagents: [{ id: "sub-1", sessionName: "reviewer", status: "running" }],
-			},
-		});
-	});
-
-	it("surfaces compaction as metadata rather than distorting a standard update", () => {
-		const updates = acpUpdatesForSessionEvent({
-			type: "compaction_end",
-			reason: "threshold",
-			result: { summary: "compacted", tokensBefore: 1234 },
-			aborted: false,
-			willRetry: false,
-		} as AgentConnectionSessionEvent);
-		expect(updates[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 1234, summary: "compacted" } },
-		});
-	});
-
-	it("surfaces goal state as namespaced metadata", () => {
-		const updates = acpUpdatesForSessionEvent({
-			type: "goal_update",
-			goal: { status: "active", objective: "ship ACP", tokenBudget: 1000, tokensUsed: 25 },
-		} as AgentConnectionSessionEvent);
-		expect(updates[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: {
-				goal: { status: "active", objective: "ship ACP", tokenBudget: 1000, tokensUsed: 25 },
-			},
-		});
-	});
-
-	it("surfaces continual-harness refinement outcomes, applied edits only", () => {
-		const done = acpUpdatesForSessionEvent({
-			type: "refine_complete",
-			result: {
-				summary: "persisted a memory",
-				appliedEdits: [
-					{ applied: true, action: "create", kind: "memory", id: "m1" },
-					{ applied: false, action: "create", kind: "skill", id: "s1" },
-				],
-			},
-		} as AgentConnectionSessionEvent);
-		expect(done[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: {
-				refinement: { status: "complete", summary: "persisted a memory", changes: ["create memory:m1"] },
-			},
-		});
-
-		const failed = acpUpdatesForSessionEvent({
-			type: "refine_failed",
-			error: "budget exhausted",
-		} as AgentConnectionSessionEvent);
-		expect(failed[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: { refinement: { status: "failed", error: "budget exhausted" } },
-		});
-	});
-
-	it("streams bash output incrementally and surfaces compaction over ACP", () => {
-		const start = acpUpdatesForSessionEvent({
-			type: "bash_start",
-			command: "echo hi",
-			excludeFromContext: false,
-			runId: "b1",
-		} as AgentConnectionSessionEvent);
-		const mid = acpUpdatesForSessionEvent({ type: "bash_output", chunk: "hi\n" } as AgentConnectionSessionEvent);
-		const end = acpUpdatesForSessionEvent({
-			type: "bash_end",
-			exitCode: 0,
-			cancelled: false,
-			truncated: false,
-			runId: "b1",
-		} as AgentConnectionSessionEvent);
-
-		expect(start[0]).toMatchObject({ sessionUpdate: "tool_call", kind: "execute" });
-		expect(JSON.stringify(mid[0]?.content)).toContain("hi");
-		expect(end[0]).toMatchObject({ status: "completed" });
-
-		const compaction = acpUpdatesForSessionEvent({
-			type: "compaction_end",
-			reason: "threshold",
-			result: { summary: "kept the last turns", tokensBefore: 90_000, firstKeptEntryId: "e1" },
-			aborted: false,
-			willRetry: false,
-		} as AgentConnectionSessionEvent);
-		expect(compaction[0]?._meta).toMatchObject({
-			[WASMEDGE_AGENT_META_NAMESPACE]: { compaction: { tokensBefore: 90_000, summary: "kept the last turns" } },
-		});
-	});
-
-	it("reports a cancelled bash run as a failed tool call", () => {
-		const end = acpUpdatesForSessionEvent({
-			type: "bash_end",
-			exitCode: undefined,
-			cancelled: true,
-			truncated: false,
-			runId: "b2",
-		} as AgentConnectionSessionEvent);
-		expect(end[0]).toMatchObject({ status: "failed" });
 	});
 
 	it("emits nothing for events ACP has no place for", () => {

@@ -18,11 +18,13 @@ import {
 	type DaemonServerCapability,
 	getDaemonCommandCompatibilities,
 	isDaemonMutatingCommand,
+	isDaemonResponse,
+	meetsDaemonCommandCompatibility,
 } from "./daemon-protocol.js";
 import type { DaemonWorkerCommand, DaemonWorkerCommandBody } from "./daemon-worker-protocol.js";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
-type DaemonCommandBody = DistributiveOmit<DaemonCommand, "id">;
+export type DaemonCommandBody = DistributiveOmit<DaemonCommand, "id">;
 
 type DaemonWireCommandBody = DaemonCommandBody | DaemonWorkerCommandBody;
 
@@ -34,6 +36,14 @@ export type DaemonClientProgressListener = (message: DaemonRequestProgress) => v
 
 export interface DaemonClientRequestOptions {
 	onProgress?: DaemonClientProgressListener;
+	/** Runs synchronously before the reader dispatches any records following this response. */
+	onResponse?: (response: DaemonResponse) => void;
+	/**
+	 * False opts out of reconnect parking: a close rejects so the caller's own retry loop stays live.
+	 * Any caller that owns its own bounded retry MUST pass false; a parked request waits for a hello
+	 * that only the caller's stuck loop could produce.
+	 */
+	recoverable?: boolean;
 }
 
 interface PendingDaemonRequest {
@@ -46,6 +56,7 @@ interface PendingDaemonRequest {
 	wireData: string;
 	awaitingReconnect: boolean;
 	acknowledgeResult: boolean;
+	recoverable: boolean;
 	/** Re-checked against the new hello before a reconnect replay. */
 	compatibilities: readonly DaemonCommandCompatibility[];
 }
@@ -97,6 +108,36 @@ export interface DaemonClientReconnectOptions {
 	recoverDaemon: () => Promise<void>;
 	timeoutMs?: number;
 	onStatus?: (status: DaemonClientReconnectStatus) => void;
+}
+
+export interface DaemonTransportClient {
+	readonly hello: DaemonHello | undefined;
+	readonly isConnected: boolean;
+	supportsServerCapability(capability: DaemonServerCapability): boolean;
+	waitForHello(timeoutMs?: number): Promise<DaemonHello>;
+	connect(timeoutMs?: number): Promise<void>;
+	reconnect(timeoutMs?: number): Promise<void>;
+	disconnectForReconnect(reason: DaemonClosingReason): void;
+	resetTransportForReconnect(): void;
+	onMessage(listener: DaemonClientMessageListener): () => void;
+	onClose(listener: DaemonClientCloseListener): () => void;
+	enableRequestRecovery(): void;
+	request(
+		command: DaemonCommandBody,
+		timeoutMs?: number,
+		options?: DaemonClientRequestOptions,
+	): Promise<DaemonResponse>;
+	close(): void;
+}
+
+const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 30_000;
+// Windows worker startup can exceed 30 seconds under antivirus scanning.
+const WINDOWS_DAEMON_CREATE_TIMEOUT_MS = 120_000;
+
+function defaultDaemonRequestTimeout(command: DaemonCommandBody): number {
+	return command.type === "create" && process.platform === "win32"
+		? WINDOWS_DAEMON_CREATE_TIMEOUT_MS
+		: DEFAULT_DAEMON_REQUEST_TIMEOUT_MS;
 }
 
 const DEFAULT_RECONNECT_TIMEOUT_MS = 60_000;
@@ -178,37 +219,16 @@ export class DaemonClient {
 		this.socket = socket;
 		this.detachReader = attachJsonlLineReader(socket, (line) => this.handleLine(line));
 
-		await new Promise<void>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				cleanup();
-				this.clearSocketReference(socket);
-				socket.destroy();
-				reject(
-					new Error(
-						`Timed out after ${timeoutMs}ms connecting to the WasmEdge Agent daemon. ${daemonEndpointDetails(this.socketPath)}`,
-					),
-				);
-			}, timeoutMs);
-			const cleanup = () => {
-				clearTimeout(timeout);
-				socket.off("connect", onConnect);
-				socket.off("error", onError);
-			};
-			const onConnect = () => {
-				cleanup();
-				resolve();
-			};
-			const onError = (error: Error) => {
-				cleanup();
-				this.clearSocketReference(socket);
-				reject(
-					new Error(
-						`Failed to connect to the WasmEdge Agent daemon: ${error.message}. ${daemonEndpointDetails(this.socketPath)}`,
-					),
-				);
-			};
-			socket.once("connect", onConnect);
-			socket.once("error", onError);
+		await awaitSocketConnect(socket, timeoutMs, {
+			onFailure: () => this.clearSocketReference(socket),
+			timeoutError: () =>
+				new Error(
+					`Timed out after ${timeoutMs}ms connecting to the WasmEdge Agent daemon. ${daemonEndpointDetails(this.socketPath)}`,
+				),
+			connectError: (error) =>
+				new Error(
+					`Failed to connect to the WasmEdge Agent daemon: ${error.message}. ${daemonEndpointDetails(this.socketPath)}`,
+				),
 		});
 
 		socket.on("error", (error) =>
@@ -294,7 +314,7 @@ export class DaemonClient {
 
 	async request(
 		command: DaemonCommandBody,
-		timeoutMs = 30000,
+		timeoutMs = defaultDaemonRequestTimeout(command),
 		options: DaemonClientRequestOptions = {},
 	): Promise<DaemonResponse> {
 		if (!this.socket || this.socket.destroyed) {
@@ -305,7 +325,7 @@ export class DaemonClient {
 		const hello = this.helloMessage ?? (await this.waitForHello());
 		const compatibilities = getDaemonCommandCompatibilities(command);
 		const missingCompatibility = compatibilities.find(
-			(compatibility) => !this.meetsCommandCompatibility(hello, compatibility),
+			(compatibility) => !meetsDaemonCommandCompatibility(hello, compatibility),
 		);
 		if (missingCompatibility) {
 			throw new DaemonCapabilityUnavailableError(command.type, missingCompatibility.capability);
@@ -317,16 +337,6 @@ export class DaemonClient {
 			options,
 			envelopeProtocolVersion >= DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION ? envelopeProtocolVersion : undefined,
 			compatibilities,
-		);
-	}
-
-	private meetsCommandCompatibility(hello: DaemonHello, compatibility: DaemonCommandCompatibility): boolean {
-		return (
-			hello.protocol.version >= compatibility.minProtocol &&
-			(compatibility.minSchemaRevision === undefined ||
-				(hello.schemaRevision ?? 0) >= compatibility.minSchemaRevision) &&
-			(compatibility.capability === undefined ||
-				hello.serverCapabilities?.includes(compatibility.capability) === true)
 		);
 	}
 
@@ -371,7 +381,14 @@ export class DaemonClient {
 
 		return new Promise((resolve, reject) => {
 			const pending: PendingDaemonRequest = {
-				resolve,
+				resolve: (response) => {
+					try {
+						options.onResponse?.(response);
+						resolve(response);
+					} catch (error) {
+						reject(error);
+					}
+				},
 				reject,
 				timeoutMs,
 				commandType: command.type,
@@ -379,6 +396,7 @@ export class DaemonClient {
 				wireData,
 				awaitingReconnect: false,
 				acknowledgeResult,
+				recoverable: options.recoverable !== false,
 				compatibilities,
 			};
 			this.pendingRequests.set(id, pending);
@@ -444,7 +462,7 @@ export class DaemonClient {
 					}
 					pending.awaitingReconnect = false;
 					const missingCompatibility = pending.compatibilities.find(
-						(compatibility) => !this.meetsCommandCompatibility(message, compatibility),
+						(compatibility) => !meetsDaemonCommandCompatibility(message, compatibility),
 					);
 					if (missingCompatibility) {
 						this.pendingRequests.delete(id);
@@ -517,7 +535,7 @@ export class DaemonClient {
 
 	private rejectAll(error: Error, preservePendingRequests = false): void {
 		for (const [id, pending] of this.pendingRequests) {
-			if (preservePendingRequests) {
+			if (preservePendingRequests && pending.recoverable) {
 				if (pending.timeout) {
 					clearTimeout(pending.timeout);
 					pending.timeout = undefined;
@@ -621,22 +639,51 @@ function isDaemonClosing(value: unknown): value is Extract<DaemonOutbound, { typ
 	return candidate.type === "daemon_closing" && (candidate.reason === "shutdown" || candidate.reason === "update");
 }
 
+/**
+ * `onFailure` drops the caller's socket reference, so a failed connect never leaves the client
+ * holding a socket it never connected.
+ */
+export function awaitSocketConnect(
+	socket: Socket,
+	timeoutMs: number,
+	handlers: {
+		onFailure: () => void;
+		timeoutError: () => Error;
+		connectError: (error: Error) => Error;
+	},
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			cleanup();
+			handlers.onFailure();
+			socket.destroy();
+			reject(handlers.timeoutError());
+		}, timeoutMs);
+		const cleanup = () => {
+			clearTimeout(timeout);
+			socket.off("connect", onConnect);
+			socket.off("error", onError);
+		};
+		const onConnect = () => {
+			cleanup();
+			resolve();
+		};
+		const onError = (error: Error) => {
+			cleanup();
+			handlers.onFailure();
+			reject(handlers.connectError(error));
+		};
+		socket.once("connect", onConnect);
+		socket.once("error", onError);
+	});
+}
+
 function isDaemonHello(value: unknown): value is DaemonHello {
 	if (!value || typeof value !== "object") {
 		return false;
 	}
 	const candidate = value as { type?: unknown; protocol?: unknown };
 	return candidate.type === "daemon_hello" && typeof candidate.protocol === "object" && candidate.protocol !== null;
-}
-
-function isDaemonResponse(value: unknown): value is DaemonResponse {
-	if (!value || typeof value !== "object") {
-		return false;
-	}
-	const candidate = value as { type?: unknown; success?: unknown; command?: unknown };
-	return (
-		candidate.type === "response" && typeof candidate.success === "boolean" && typeof candidate.command === "string"
-	);
 }
 
 function isDaemonRequestProgress(value: unknown): value is DaemonRequestProgress {
@@ -689,6 +736,7 @@ function isDaemonSavedSessionAgentStatus(value: unknown): boolean {
 		typeof candidate.basedOnMessageCount === "number" &&
 		(candidate.taskState === undefined ||
 			candidate.taskState === "needs_input" ||
-			candidate.taskState === "completed")
+			candidate.taskState === "completed" ||
+			candidate.taskState === "error")
 	);
 }

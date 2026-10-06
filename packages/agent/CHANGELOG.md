@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Synced with upstream v0.9.8, the last upstream TypeScript release. Upstream changes from v0.7.1 through v0.9.8 are included, except changes to the removed Python kernel runtime. See the upstream changelog for details.
+
 ## [0.0.2] - 2026-09-29
 
 ## [0.0.1] - 2026-09-11

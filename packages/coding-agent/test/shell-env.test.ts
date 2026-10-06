@@ -70,9 +70,9 @@ describe("getShellEnv", () => {
 	});
 
 	it("keeps unrelated inherited variables intact", () => {
-		process.env.SHELL_ENV_TEST_SENTINEL = "sentinel";
+		process.env.WASMEDGE_AGENT_TEST_SHELL_ENV = "sentinel";
 		const env = getShellEnv();
-		expect(env.SHELL_ENV_TEST_SENTINEL).toBe("sentinel");
-		delete process.env.SHELL_ENV_TEST_SENTINEL;
+		expect(env.WASMEDGE_AGENT_TEST_SHELL_ENV).toBe("sentinel");
+		delete process.env.WASMEDGE_AGENT_TEST_SHELL_ENV;
 	});
 });

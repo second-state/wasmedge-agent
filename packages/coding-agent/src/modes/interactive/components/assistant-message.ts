@@ -1,3 +1,5 @@
+import { resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { LOGIN_RECOVERY_MESSAGE } from "../../../core/auth-guidance.js";
@@ -8,6 +10,7 @@ import {
 	shouldCollapseErrorDetails,
 	summarizeErrorDetails,
 } from "./collapsible-error.js";
+import type { MermaidMarkdownTransform } from "./mermaid.js";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -15,12 +18,15 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const LOGIN_RECOVERY_SUFFIX = `\n\n${LOGIN_RECOVERY_MESSAGE}`;
 
 export interface AssistantMessageComponentOptions {
+	cwd?: string;
 	expanded?: boolean;
-	precededByToolActivity?: boolean;
+	precededByToolActivity?: boolean | (() => boolean);
+	/** Replaces Mermaid code blocks in assistant text (never thinking) with Unicode diagrams. */
+	mermaidTransform?: MermaidMarkdownTransform;
 }
 
 function getThinkingMarkdownTheme(baseTheme: MarkdownTheme): MarkdownTheme {
-	const quiet = (text: string) => theme.fg("thinkingText", text);
+	const quiet = (text: string) => theme.fg("dim", text);
 	return {
 		...baseTheme,
 		heading: quiet,
@@ -61,7 +67,6 @@ export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
-	private hiddenThinkingLabel: string;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private expanded = false;
@@ -69,22 +74,26 @@ export class AssistantMessageComponent extends Container {
 	private lastSignature?: string;
 	private blockMarkdowns = new Map<number, Markdown>();
 	private lastBlockTexts = new Map<number, string>();
-	private precededByToolActivity: boolean;
+	private precededByToolActivity: boolean | (() => boolean);
+	private lastPrecededByToolActivity?: boolean;
+	private mermaidTransform?: MermaidMarkdownTransform;
+	private baseUrl?: string;
+	private isStreaming = false;
 
 	constructor(
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
-		hiddenThinkingLabel = "Thinking...",
 		options: AssistantMessageComponentOptions = {},
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
-		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.expanded = options.expanded ?? false;
 		this.precededByToolActivity = options.precededByToolActivity ?? false;
+		this.mermaidTransform = options.mermaidTransform;
+		this.baseUrl = options.cwd ? pathToFileURL(`${resolve(options.cwd)}${sep}`).href : undefined;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -107,11 +116,6 @@ export class AssistantMessageComponent extends Container {
 		this.dirty = true;
 	}
 
-	setHiddenThinkingLabel(label: string): void {
-		this.hiddenThinkingLabel = label;
-		this.dirty = true;
-	}
-
 	setExpanded(expanded: boolean): void {
 		if (this.expanded !== expanded) {
 			this.expanded = expanded;
@@ -120,6 +124,12 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		const precededByToolActivity = this.isPrecededByToolActivity();
+		if (this.lastPrecededByToolActivity !== precededByToolActivity) {
+			this.lastPrecededByToolActivity = precededByToolActivity;
+			this.lastSignature = undefined;
+			this.dirty = true;
+		}
 		if (this.dirty) {
 			if (this.lastMessage) {
 				this.reconcile(this.lastMessage);
@@ -136,8 +146,43 @@ export class AssistantMessageComponent extends Container {
 		return lines;
 	}
 
-	updateContent(message: AssistantMessage): void {
+	private isPrecededByToolActivity(): boolean {
+		return typeof this.precededByToolActivity === "function"
+			? this.precededByToolActivity()
+			: this.precededByToolActivity;
+	}
+
+	private hasVisibleBody(): boolean {
+		return (this.lastMessage?.content ?? []).some(
+			(content) =>
+				(content?.type === "text" && content.text.trim()) ||
+				(content?.type === "thinking" && !this.hideThinkingBlock && content.thinking.trim()),
+		);
+	}
+
+	/** Mirrors the trailing separator rendered before this message's tool calls. */
+	hasTrailingSpace(): boolean {
+		return (
+			!!this.lastMessage?.content.some((content) => content?.type === "toolCall") &&
+			(this.hasVisibleBody() || this.lastMessage.stopReason === "aborted" || !this.isPrecededByToolActivity())
+		);
+	}
+
+	getSpacingContent(): "visible" | "tool-only" | "hidden" {
+		const message = this.lastMessage;
+		const hasToolCalls = message?.content.some((content) => content?.type === "toolCall");
+		if (
+			this.hasVisibleBody() ||
+			message?.stopReason === "aborted" ||
+			(message?.stopReason === "error" && !hasToolCalls)
+		)
+			return "visible";
+		return hasToolCalls ? "tool-only" : "hidden";
+	}
+
+	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
 		this.lastMessage = message;
+		this.isStreaming = isStreaming;
 		this.dirty = true;
 	}
 
@@ -160,8 +205,9 @@ export class AssistantMessageComponent extends Container {
 		}
 		parts.push(
 			`hide:${this.hideThinkingBlock}`,
-			`label:${this.hiddenThinkingLabel}`,
 			`expanded:${this.expanded}`,
+			// In the signature so the streaming->final transition rebuilds (mermaid renders differently).
+			`streaming:${this.isStreaming}`,
 			`stop:${message.stopReason ?? ""}`,
 			`error:${message.errorMessage ?? ""}`,
 		);
@@ -204,7 +250,9 @@ export class AssistantMessageComponent extends Container {
 		this.lastBlockTexts.clear();
 
 		const hasVisibleContent = message.content.some(
-			(c) => (c?.type === "text" && c.text.trim()) || (c?.type === "thinking" && c.thinking.trim()),
+			(c) =>
+				(c?.type === "text" && c.text.trim()) ||
+				(c?.type === "thinking" && !this.hideThinkingBlock && c.thinking.trim()),
 		);
 
 		if (hasVisibleContent) {
@@ -217,35 +265,43 @@ export class AssistantMessageComponent extends Container {
 			if (content?.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				const markdown = new Markdown(content.text.trim(), 1, 0, this.markdownTheme);
+				const mermaidTransform = this.mermaidTransform;
+				const isStreaming = this.isStreaming;
+				const markdown = new Markdown(
+					content.text.trim(),
+					1,
+					0,
+					this.markdownTheme,
+					{
+						color: (text: string) => theme.fg("mdBody", text),
+					},
+					{
+						baseUrl: this.baseUrl,
+						transform:
+							mermaidTransform && ((md, availableWidth) => mermaidTransform(md, availableWidth, isStreaming)),
+					},
+				);
 				this.blockMarkdowns.set(i, markdown);
 				this.lastBlockTexts.set(i, content.text.trim());
 				this.contentContainer.addChild(markdown);
 			} else if (content?.type === "thinking" && content.thinking.trim()) {
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some((c) => (c?.type === "text" && c.text.trim()) || (c?.type === "thinking" && c.thinking.trim()));
+				// Hidden thinking renders nothing at all; the working loader in the
+				// tray is the activity signal while the rows are hidden.
+				if (!this.hideThinkingBlock) {
+					// Add spacing only when another visible assistant content block follows.
+					const hasVisibleContentAfter = message.content
+						.slice(i + 1)
+						.some((c) => (c?.type === "text" && c.text.trim()) || (c?.type === "thinking" && c.thinking.trim()));
 
-				if (this.hideThinkingBlock) {
-					// Show static thinking label when hidden
-					this.contentContainer.addChild(
-						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 1, 0),
-					);
-					if (hasVisibleContentAfter) {
-						this.contentContainer.addChild(new Spacer(1));
-					}
-				} else {
-					// Thinking traces keep Markdown structure but stay visually quiet.
 					const markdown = new Markdown(
 						content.thinking.trim(),
 						1,
 						0,
 						getThinkingMarkdownTheme(this.markdownTheme),
 						{
-							color: (text: string) => theme.fg("thinkingText", text),
+							color: (text: string) => theme.fg("dim", text),
 						},
+						{ baseUrl: this.baseUrl },
 					);
 					this.blockMarkdowns.set(i, markdown);
 					this.lastBlockTexts.set(i, content.thinking.trim());
@@ -272,7 +328,7 @@ export class AssistantMessageComponent extends Container {
 			this.contentContainer.addChild(this.createErrorComponent(errorMsg, "Error"));
 		}
 
-		if (hasToolCalls && (hasVisibleContent || message.stopReason === "aborted" || !this.precededByToolActivity)) {
+		if (hasToolCalls && (hasVisibleContent || message.stopReason === "aborted" || !this.isPrecededByToolActivity())) {
 			this.contentContainer.addChild(new Spacer(1));
 		}
 	}

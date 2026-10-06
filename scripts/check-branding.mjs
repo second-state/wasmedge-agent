@@ -231,6 +231,8 @@ const PRODUCT_ENV_NAMES = new Set([
 	"WASMEDGE_AGENT_CODING_AGENT_DIR",
 	"WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR",
 	"WASMEDGE_AGENT_DOWNLOAD_BASE_URL",
+	"WASMEDGE_AGENT_INFERENCE_API_BASE_URL",
+	"WASMEDGE_AGENT_INFERENCE_FRONTEND_URL",
 	"WASMEDGE_AGENT_INSTALLER_PLAIN",
 	"WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE",
 	"WASMEDGE_AGENT_KERNEL_FORKSERVER",
@@ -250,6 +252,8 @@ const PRODUCT_ENV_NAMES = new Set([
 	"WASMEDGE_AGENT_SPLASH_PREVIEW_FRAMES",
 	"WASMEDGE_AGENT_STANDALONE_NODE_BIN",
 	"WASMEDGE_AGENT_STRESS_WORKERS",
+	"WASMEDGE_AGENT_TELEMETRY",
+	"WASMEDGE_AGENT_TELEMETRY_ENDPOINT",
 	"WASMEDGE_AGENT_TEMPLATE_DIR",
 	"WASMEDGE_AGENT_TOOLCHAIN",
 	"WASMEDGE_AGENT_TRACES_API_KEY",
@@ -463,6 +467,12 @@ function changelogScopedPaths(path, lines) {
  *  file still fails. */
 const ALLOWLIST = [
 	{
+		glob: "packages/ai/src/models.generated.ts",
+		allow: [/fetched from prime-agent-catalog at runtime/],
+		reason:
+			"the generated header comment comes from upstream and AGENTS.md forbids editing this file by hand; the fork does not fetch the catalog, it ships packages/coding-agent/catalog/models.bundled.json",
+	},
+	{
 		glob: "packages/coding-agent/src/core/prime-inference-auth.ts",
 		allow: [/"prime-agent-traces"/],
 		reason: "prime-agent-traces provider id is a wire value (rule R1); only the quoted literal survives",
@@ -563,11 +573,6 @@ const ALLOWLIST = [
 		glob: "packages/coding-agent/test/daemon-launch.test.ts",
 		allow: [/"prime-agent\.daemon"/],
 		reason: "the launch tests fabricate a daemon hello as a peer writes it, so the protocol name is data on the wire and not a reference to our constant (rule R1); only the quoted literal is exempt",
-	},
-	{
-		glob: "packages/coding-agent/test/heartbeat-catalog.test.ts",
-		allow: [/"prime-agent\.daemon"/],
-		reason: "the heartbeat fixture carries a peer's protocol name in a hello frame, the same wire value (rule R1); only the quoted literal is exempt",
 	},
 	{
 		glob: "packages/coding-agent/test/daemon-multiclient-bench.ts",
@@ -734,18 +739,6 @@ const ALLOWLIST = [
 			"the tour's opening sentence names the upstream product this is a fork of (rule R1); only that clause is exempt, so the showcase's own prose about this fork still fails",
 	},
 	{
-		glob: "packages/ai/src/env-api-keys.ts",
-		allow: [/"\.prime", "config\.json"/],
-		reason:
-			"~/.prime/config.json is Prime Inference's own credentials file, the provider's and not the agent's (rule R1); only that two-segment pair is exempt, so a split-form legacy agent path -- join(home, \".prime\", \"agent\") -- added here still fails, and so does the joined form",
-	},
-	{
-		glob: "packages/ai/scripts/generate-models.ts",
-		allow: [/"\.prime", "config\.json"/],
-		reason:
-			"the model generator reads Prime Inference's own ~/.prime/config.json for the API key it needs (rule R1); only that two-segment pair is exempt, so a split-form legacy agent path added here still fails",
-	},
-	{
 		glob: "packages/coding-agent/src/core/prime-inference-auth.ts",
 		allow: [/"\.prime", "config\.json"/],
 		reason:
@@ -753,9 +746,21 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "packages/coding-agent/test/auth-flows.test.ts",
-		allow: [/join\(tempDir, "\.prime"\)/],
+		allow: [/join\(tempDir, "\.prime"\)/, /join\(tempDir, "\.prime", "config\.json"\)/],
 		reason:
-			"the auth-flow test builds Prime Inference's own config directory under a temp HOME (rule R1); anchored to that one call, so a split-form legacy agent path added elsewhere in this file still fails",
+			"the auth-flow test builds Prime Inference's own config directory, and the ~/.prime/config.json credentials file inside it, under a temp HOME (rule R1); anchored to those two calls, so a split-form legacy agent path added elsewhere in this file still fails",
+	},
+	{
+		glob: "packages/coding-agent/test/agent-session-services.test.ts",
+		allow: [/join\(tempDir, "\.prime", "config\.json"\)/],
+		reason:
+			"the services test asserts the default Prime CLI credentials path, Prime Inference's own ~/.prime/config.json under a temp HOME (rule R1); anchored to that one call, so a split-form legacy agent path added here still fails",
+	},
+	{
+		glob: "packages/coding-agent/test/suite/agent-session-runtime.test.ts",
+		allow: [/join\(tempDir, "\.prime", "config\.json"\)/],
+		reason:
+			"the runtime test asserts the default Prime CLI credentials path, Prime Inference's own ~/.prime/config.json under a temp HOME (rule R1); anchored to that one call, so a split-form legacy agent path added here still fails",
 	},
 	{
 		glob: "packages/coding-agent/src/config.ts",
@@ -818,21 +823,15 @@ const ALLOWLIST = [
 			"the covering test for the project-local skills fallback creates a skill inside the legacy directory, as split path segments (rule R3); only the quoted segment is exempt",
 	},
 	{
-		glob: "packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
-		allow: [/Connect your Prime Intellect account/],
+		glob: "packages/coding-agent/src/modes/interactive/auth-flows.ts",
+		allow: [/heading: "Login with Prime Intellect"/],
 		reason:
-			"Prime Inference sign-in copy: the account being connected really is a Prime Intellect one, and the provider is untouched by the rebrand (rule R1). Only that clause is exempt, so prose of ours elsewhere in this file still fails",
+			"the Prime Inference sign-in panel's heading: the account being signed in to really is a Prime Intellect one, and the provider is untouched by the rebrand (rule R1). Only that heading is exempt, so prose of ours elsewhere in this file still fails",
 	},
 	{
 		glob: "packages/coding-agent/test/login-dialog.test.ts",
 		allow: [/Connect your Prime Intellect account/],
 		reason: "the covering test asserts that Prime Inference sign-in copy verbatim (rule R1); only that clause is exempt",
-	},
-	{
-		glob: "packages/coding-agent/test/prime-onboarding-splash.test.ts",
-		allow: [/with Prime Intellect/, /your Prime Intellect account/, /connected to Prime Intellect/],
-		reason:
-			"the covering test rejects, by name, the earlier wordings of the Prime Inference sign-in the onboarding splash used to offer (rule R1); only those three clause shapes are exempt",
 	},
 	// The rename announcement lived in coding-agent's Unreleased section until
 	// 0.0.1 was cut, and had an entry here naming each legacy literal it could
@@ -1197,12 +1196,16 @@ function selfTest() {
 		["packages/coding-agent/src/migrations.ts", 'const legacyDir = join(homedir(), ".prime", "agent");', 0],
 		// Prime Inference's own config file is the provider's, sharing the legacy
 		// directory prefix.
-		["packages/ai/src/env-api-keys.ts", 'const p = _join(_homedir(), ".prime", "config.json");', 0],
-		// ...but env-api-keys.ts's exemption is that config-file pair, not any legacy
-		// agent path in it -- neither the joined spelling nor the split one the old
-		// entry let through.
-		["packages/ai/src/env-api-keys.ts", 'const legacy = ".prime/agent";', 1],
-		["packages/ai/src/env-api-keys.ts", 'const legacy = _join(_homedir(), ".prime", "agent");', 1],
+		[
+			"packages/coding-agent/src/core/prime-inference-auth.ts",
+			'return join(homedir(), ".prime", "config.json");',
+			0,
+		],
+		// ...but prime-inference-auth.ts's exemption is that config-file pair, not
+		// any legacy agent path in it -- neither the joined spelling nor the split
+		// one the old entry let through.
+		["packages/coding-agent/src/core/prime-inference-auth.ts", 'const legacy = ".prime/agent";', 1],
+		["packages/coding-agent/src/core/prime-inference-auth.ts", 'const legacy = join(homedir(), ".prime", "agent");', 1],
 		["packages/tui/test/tui-log-path.test.ts", 'assert.ok(!tuiLogPath("d.log").includes(".prime"));', 0],
 		["packages/tui/test/tui-log-path.test.ts", 'const legacy = join(home, ".prime", "agent");', 1],
 		// Brand-asset identifiers and filenames, which matched no pattern at all
@@ -1221,12 +1224,12 @@ function selfTest() {
 		// Prime Intellect as their actual subject.
 		["LICENSE", "Copyright (c) 2026 Prime Intellect", 0],
 		[
-			"packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
-			'theme.fg("muted", "Connect your Prime Intellect account to enable Prime Inference models."),',
+			"packages/coding-agent/src/modes/interactive/auth-flows.ts",
+			'const closeDialog = this.host.showAuthPanel(dialog, { heading: "Login with Prime Intellect" });',
 			0,
 		],
-		// login-dialog.ts's exemption is that sign-in clause, not the vendor's name.
-		["packages/coding-agent/src/modes/interactive/components/login-dialog.ts", "// Prime Intellect ships this", 1],
+		// auth-flows.ts's exemption is that sign-in heading, not the vendor's name.
+		["packages/coding-agent/src/modes/interactive/auth-flows.ts", "// Prime Intellect ships this", 1],
 		// A phrase wrapped across a line break, which neither half shows on its
 		// own. This is how a shipped skill reference kept the old product name.
 		["docs/x.md", "ships a Rust crate. Prime\nAgent mounts the crate", 1],

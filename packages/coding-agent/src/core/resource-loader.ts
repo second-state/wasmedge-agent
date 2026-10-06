@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { getBundledSkillsDir, getProjectConfigDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
@@ -8,7 +8,7 @@ import type { ResourceDiagnostic } from "./diagnostics.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
-import { canonicalizePath, isLocalPath } from "../utils/paths.js";
+import { canonicalizePath, isLocalPath, isUnderPath } from "../utils/paths.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.js";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.js";
@@ -601,11 +601,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const normalizedResourcePath = resolve(resourcePath);
 		if (extraSourceInfos) {
 			for (const [sourcePath, sourceInfo] of extraSourceInfos.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
+				if (isUnderPath(normalizedResourcePath, sourcePath)) {
 					return { ...sourceInfo, path: resourcePath };
 				}
 			}
@@ -618,11 +614,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 
 			for (const [sourcePath, metadata] of metadataByPath.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
+				if (isUnderPath(normalizedResourcePath, sourcePath)) {
 					return createSourceInfo(resourcePath, metadata);
 				}
 			}
@@ -660,13 +652,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 		];
 
 		for (const root of agentRoots) {
-			if (this.isUnderPath(normalizedPath, root)) {
+			if (isUnderPath(normalizedPath, root)) {
 				return { path: filePath, source: "local", scope: "user", origin: "top-level", baseDir: root };
 			}
 		}
 
 		for (const root of projectRoots) {
-			if (this.isUnderPath(normalizedPath, root)) {
+			if (isUnderPath(normalizedPath, root)) {
 				return { path: filePath, source: "local", scope: "project", origin: "top-level", baseDir: root };
 			}
 		}
@@ -889,15 +881,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		return undefined;
-	}
-
-	private isUnderPath(target: string, root: string): boolean {
-		const normalizedRoot = resolve(root);
-		if (target === normalizedRoot) {
-			return true;
-		}
-		const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-		return target.startsWith(prefix);
 	}
 
 	private detectExtensionConflicts(extensions: Extension[]): Array<{ path: string; message: string }> {

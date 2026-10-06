@@ -13,6 +13,7 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -816,7 +817,7 @@ describe("benchmark declared source inputs", () => {
 			if (change === "mode") chmodSync(input, 0o755);
 			if (change === "nested symlink") symlinkSync(f.fake, join(f.sourceDir, "nested"));
 			if (change === "root target") {
-				rmSync(alias);
+				unlinkSync(alias);
 				symlinkSync(f.fake, alias);
 			}
 			if (change === "missing") rmSync(f.sourceDir, { recursive: true });

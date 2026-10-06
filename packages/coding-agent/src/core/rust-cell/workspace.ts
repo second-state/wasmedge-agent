@@ -13,6 +13,7 @@ import {
 	readlinkSync,
 	rmSync,
 	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
@@ -315,7 +316,8 @@ function writeSkillSymlinks(workspaceDir: string, skills: RustSkillMount[]): voi
 	for (const entry of readdirSync(mountDir)) {
 		const path = join(mountDir, entry);
 		// Inherited directories are the child's source copies, not disposable mounts.
-		if (!wanted.has(entry) && lstatSync(path).isSymbolicLink()) rmSync(path);
+		// unlinkSync, not rmSync: Node 24's rmSync rejects symlinks to directories.
+		if (!wanted.has(entry) && lstatSync(path).isSymbolicLink()) unlinkSync(path);
 	}
 	for (const skill of skills) {
 		const link = join(mountDir, skill.crateName);
@@ -323,7 +325,8 @@ function writeSkillSymlinks(workspaceDir: string, skills: RustSkillMount[]): voi
 		if (current) {
 			if (current.isDirectory() && resolve(link) === resolve(skill.cratePath)) continue;
 			if (current.isSymbolicLink() && readlinkSync(link) === skill.cratePath) continue;
-			rmSync(link, { recursive: true, force: true });
+			if (current.isSymbolicLink()) unlinkSync(link);
+			else rmSync(link, { recursive: true, force: true });
 		}
 		symlinkSync(skill.cratePath, link);
 	}

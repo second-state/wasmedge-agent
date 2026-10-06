@@ -12,7 +12,6 @@ import type {
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
-	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -24,6 +23,8 @@ import {
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
+import { withOpenCodeHeaders } from "./opencode-headers.js";
+import { applyServiceTierPricing } from "./service-tier-pricing.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -56,16 +57,12 @@ function getPromptCacheRetention(
 	return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
-// OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 }
 
-/**
- * Generate function for OpenAI Responses API
- */
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
 	model: Model<"openai-responses">,
 	context: Context,
@@ -73,7 +70,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
 
-	// Start async processing
 	(async () => {
 		const output: AssistantMessage = {
 			role: "assistant",
@@ -94,11 +90,10 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 		};
 
 		try {
-			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, options?.sessionId);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -107,7 +102,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -116,7 +110,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
-				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model.id),
 			});
 
 			if (options?.signal?.aborted) {
@@ -171,7 +165,8 @@ function createClient(
 	context: Context,
 	apiKey?: string,
 	optionsHeaders?: Record<string, string>,
-	sessionId?: string,
+	cacheSessionId?: string,
+	conversationId?: string,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -193,14 +188,13 @@ function createClient(
 		Object.assign(headers, copilotHeaders);
 	}
 
-	if (sessionId) {
+	if (cacheSessionId) {
 		if (compat.sendSessionIdHeader) {
-			headers.session_id = sessionId;
+			headers.session_id = cacheSessionId;
 		}
-		headers["x-client-request-id"] = sessionId;
+		headers["x-client-request-id"] = cacheSessionId;
 	}
 
-	// Merge options headers last so they can override defaults
 	if (optionsHeaders) {
 		Object.assign(headers, optionsHeaders);
 	}
@@ -218,7 +212,8 @@ function createClient(
 		apiKey,
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
-		defaultHeaders,
+		defaultHeaders: withOpenCodeHeaders(model.provider, conversationId, defaultHeaders),
+		maxRetries: 0,
 	});
 }
 
@@ -244,7 +239,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.temperature = options?.temperature;
 	}
 
-	if (options?.serviceTier !== undefined) {
+	// GitHub Copilot rejects the service_tier FIELD itself (400) for every value.
+	// Elsewhere it is always sent: absence means "auto" (project tier), not "default".
+	if (options?.serviceTier !== undefined && model.provider !== "github-copilot") {
 		params.service_tier = options.serviceTier;
 	}
 
@@ -267,37 +264,8 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],
 			};
 		}
+		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
 	}
 
 	return params;
-}
-
-// Multipliers per https://developers.openai.com/api/docs/pricing (retrieved 2026-08-21)
-function getServiceTierCostMultiplier(
-	model: Pick<Model<"openai-responses">, "id">,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): number {
-	switch (serviceTier) {
-		case "flex":
-			return 0.5;
-		case "priority":
-			return model.id === "gpt-5.5" ? 2.5 : 2;
-		default:
-			return 1;
-	}
-}
-
-function applyServiceTierPricing(
-	usage: Usage,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-	model: Pick<Model<"openai-responses">, "id">,
-) {
-	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
-	if (multiplier === 1) return;
-
-	usage.cost.input *= multiplier;
-	usage.cost.output *= multiplier;
-	usage.cost.cacheRead *= multiplier;
-	usage.cost.cacheWrite *= multiplier;
-	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }

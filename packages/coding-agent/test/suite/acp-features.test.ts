@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../../src/config.js";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.js";
 import { WASMEDGE_AGENT_META_NAMESPACE } from "../../src/modes/acp/acp-meta.js";
@@ -477,12 +477,13 @@ describe("ACP mode preserves wasmedge-agent features", () => {
 		expect(beforeClose).toBeGreaterThan(0);
 
 		await fixture.agent.request("session/close", { sessionId: fixture.sessionId });
+		const afterClose = fixture.updates.length;
+		expect(afterClose).toBeGreaterThanOrEqual(beforeClose);
 
-		// After close the subscription is released, so further agent activity must
-		// not reach the client.
-		await harness.session.prompt("post-close activity");
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(fixture.updates.length).toBe(beforeClose);
+		// After close the subscription is released and the backing session remains
+		// admission-fenced until its replacement is established.
+		await expect(harness.session.prompt("post-close activity")).rejects.toThrow("session input admission is paused");
+		expect(fixture.updates.length).toBe(afterClose);
 
 		// Closing frees the single-session slot, so a new session is accepted.
 		const next = await fixture.agent.request("session/new", { cwd: harness.tempDir, mcpServers: [] });
@@ -770,4 +771,78 @@ describe("ACP mode preserves wasmedge-agent features", () => {
 		expect(init.agentCapabilities?.sessionCapabilities?.close).toBeDefined();
 		harness.cleanup();
 	}, 30_000);
+});
+
+/** ACP `session/new` against an arbitrary cwd, which `connectAcp` pins to the harness temp dir. */
+async function newAcpSessionAt(harness: Harness, cwd: string) {
+	const connection = new InProcessAgentConnection(runtimeHostFor(harness.session));
+	const toAgent = new TransformStream<Uint8Array, Uint8Array>();
+	const toClient = new TransformStream<Uint8Array, Uint8Array>();
+	void runAcpModeWithConnection(connection, {
+		stream: acp.ndJsonStream(toClient.writable, toAgent.readable),
+	} as any);
+	const handle = acp.client({ name: "cwd-regression" }).connect(acp.ndJsonStream(toAgent.writable, toClient.readable));
+	await handle.agent.request("initialize", { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+	return handle.agent.request("session/new", { cwd, mcpServers: [] });
+}
+
+function cwdMeta(created: { _meta?: Record<string, unknown> | null }): unknown {
+	return (created._meta?.[WASMEDGE_AGENT_META_NAMESPACE] as { cwd?: unknown } | undefined)?.cwd;
+}
+
+function acpMcpHttpServer(name: string) {
+	return { name, type: "http" as const, url: `https://${name}.example/mcp`, headers: {} };
+}
+
+describe("ACP mode regressions", () => {
+	const acpDirectories: string[] = [];
+	const acpHarnesses: Harness[] = [];
+
+	afterEach(() => {
+		for (const directory of acpDirectories.splice(0)) {
+			rmSync(directory, { recursive: true, force: true });
+		}
+		for (const harness of acpHarnesses.splice(0)) {
+			harness.cleanup();
+		}
+	});
+
+	it("#623: compares session cwd canonically instead of textually", async () => {
+		const harness = await createHarness();
+		acpHarnesses.push(harness);
+		const aliasRoot = mkdtempSync(join(tmpdir(), "wasmedge-agent-acp-cwd-"));
+		acpDirectories.push(aliasRoot);
+		const alias = join(aliasRoot, "alias");
+		// macOS exposes /var as /private/var; a portable symlink exercises the
+		// same distinction between a displayed path and its canonical path.
+		symlinkSync(process.cwd(), alias, process.platform === "win32" ? "junction" : "dir");
+
+		const created = await newAcpSessionAt(harness, alias);
+
+		expect(created.sessionId).toBeTruthy();
+		expect(cwdMeta(created)).toBeUndefined();
+	});
+
+	it("#623: preserves mismatch metadata when canonicalization falls back", async () => {
+		const harness = await createHarness();
+		acpHarnesses.push(harness);
+		const requested = join(harness.tempDir, "missing");
+
+		const created = await newAcpSessionAt(harness, requested);
+
+		expect(created.sessionId).toBeTruthy();
+		expect(cwdMeta(created)).toEqual({ requested, actual: process.cwd() });
+	});
+
+	it("rejects ACP-provided MCP servers, which the rust-cell runtime has no transport for", async () => {
+		const harness = await createHarness();
+		acpHarnesses.push(harness);
+
+		expect(() => harness.session.replaceAcpMcpServers([acpMcpHttpServer("task")], "owner-a")).toThrow(
+			"not supported by the rust-cell runtime",
+		);
+		// An empty set is the no-op every client without MCP servers sends.
+		expect(() => harness.session.replaceAcpMcpServers([], "owner-a")).not.toThrow();
+		await expect(harness.session.releaseAcpMcpServers("owner-a", ["task"])).resolves.toBeUndefined();
+	});
 });

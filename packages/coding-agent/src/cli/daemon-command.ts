@@ -3,20 +3,22 @@ import { clearLine, createInterface, cursorTo, type Interface } from "node:readl
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
-import { spawn } from "child_process";
 import { expandTildePath } from "../config.js";
 import type { AgentSessionEvent } from "../core/agent-session.js";
 import type { AgentSessionRuntimeConfig } from "../core/agent-session-config.js";
 import { type AgentCronJob, formatAgentCronJob } from "../core/cron-jobs.js";
+import { looksLikeSessionPath } from "../core/session-resolver.js";
 import { DaemonClient, type DaemonClientMessageListener } from "../modes/daemon/daemon-client.js";
 import type { DaemonOutbound, DaemonResponse } from "../modes/daemon/daemon-protocol.js";
 import { matchesSessionIdSuffix } from "../modes/daemon/daemon-session-id.js";
 import type { SessionSummary } from "../modes/daemon/daemon-session-list.js";
-import { defaultDaemonSocketPath } from "../modes/daemon/daemon-socket.js";
+import { defaultDaemonSocketPath, normalizeSocketPath } from "../modes/daemon/daemon-socket.js";
+import { spawnHidden } from "../utils/child-process.js";
 import { isLocalPath } from "../utils/paths.js";
 import { isValidThinkingLevel } from "./args.js";
 import { formatSessionListTable } from "./daemon-list-format.js";
 import { runPs, runReap } from "./daemon-ps.js";
+import { formatSessionsTable } from "./sessions-table-format.js";
 
 interface ParsedDaemonClientCommand {
 	command: string;
@@ -29,6 +31,7 @@ const DAEMON_CLIENT_COMMANDS = new Set([
 	"start",
 	"ps",
 	"list",
+	"sessions",
 	"create",
 	"attach",
 	"detach",
@@ -107,7 +110,7 @@ function parseDaemonClientCommand(args: string[]): ParsedDaemonClientCommand {
 			if (!value) {
 				throw new Error(`${arg} requires a value`);
 			}
-			socketPath = value;
+			socketPath = normalizeSocketPath(value);
 			index++;
 			continue;
 		}
@@ -152,6 +155,9 @@ async function runDaemonClientCommand(parsed: ParsedDaemonClientCommand): Promis
 		switch (parsed.command) {
 			case "list":
 				await runList(client, parsed.positionals, parsed.json);
+				return;
+			case "sessions":
+				await runSessions(client, parsed.positionals, parsed.json);
 				return;
 			case "create":
 				await runCreate(client, parsed.positionals, parsed.json);
@@ -626,10 +632,6 @@ function parseExtensionFlagOption(
 	return { consumed: 0, daemonArg: arg };
 }
 
-function looksLikeSessionPath(value: string): boolean {
-	return value.includes("/") || value.includes("\\") || value.endsWith(".jsonl");
-}
-
 function requireOptionValue(args: string[], index: number, option: string): string {
 	const value = args[index + 1];
 	if (!value) {
@@ -696,7 +698,7 @@ async function runStart(parsed: ParsedDaemonClientCommand): Promise<void> {
 		parsed.socketPath,
 		...sessionArgs.daemonArgs.filter((arg) => arg !== "--background" && arg !== "-d"),
 	];
-	const child = spawn(process.execPath, daemonArgs, {
+	const child = spawnHidden(process.execPath, daemonArgs, {
 		cwd: sessionArgs.config?.cwd ?? process.cwd(),
 		detached: true,
 		env: process.env,
@@ -778,6 +780,42 @@ function parseListArgs(args: string[]): { all: boolean } {
 			continue;
 		}
 		throw new Error(`Unknown list option: ${arg}`);
+	}
+	return { all };
+}
+
+// The same list RPC as `wasmedge-agent list`, rendered as a one-line-per-agent table.
+async function runSessions(client: DaemonClient, args: string[], json: boolean): Promise<void> {
+	const { all } = parseSessionsArgs(args);
+	const response = await client.request({ type: "list", all });
+	const data = requireSuccess(response);
+	if (json) {
+		printJson(data);
+		return;
+	}
+
+	const sessions = getSessionSummaries(data);
+	if (!sessions) {
+		printJson(data);
+		return;
+	}
+
+	if (sessions.length === 0) {
+		console.log(all ? "No agents." : "No active agents.");
+		return;
+	}
+
+	console.log(formatSessionsTable(sessions));
+}
+
+function parseSessionsArgs(args: string[]): { all: boolean } {
+	let all = false;
+	for (const arg of args) {
+		if (arg === "-a" || arg === "--all") {
+			all = true;
+			continue;
+		}
+		throw new Error(`Unknown sessions option: ${arg}`);
 	}
 	return { all };
 }

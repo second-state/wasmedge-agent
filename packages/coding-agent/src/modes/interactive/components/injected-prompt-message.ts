@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+	Clickable,
 	Container,
 	Markdown,
 	type MarkdownTheme,
@@ -10,6 +11,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { GOAL_CONTEXT_CUSTOM_TYPE, type GoalContextDetails } from "../../../core/goals.js";
 import {
+	ASYNC_BASH_COMPLETION_CUSTOM_TYPE,
+	type AsyncBashCompletionDetails,
 	type CustomMessage,
 	HEARTBEAT_PROMPT_CUSTOM_TYPE,
 	type HeartbeatPromptDetails,
@@ -21,9 +24,11 @@ import {
 	type RustStateRestoredDetails,
 } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
-import { keyText } from "./keybinding-hints.js";
+import { expandCollapseHint } from "./keybinding-hints.js";
+import { ShellCompletionComponent } from "./shell-completion.js";
 
 type InjectedPromptDetails =
+	| AsyncBashCompletionDetails
 	| GoalContextDetails
 	| HeartbeatPromptDetails
 	| RustStateRestoredDetails
@@ -34,7 +39,8 @@ type InjectedPromptMessage = CustomMessage<InjectedPromptDetails>;
 export function isInjectedPromptMessage(message: AgentMessage): message is InjectedPromptMessage {
 	return (
 		message.role === "custom" &&
-		(message.customType === HEARTBEAT_PROMPT_CUSTOM_TYPE ||
+		(message.customType === ASYNC_BASH_COMPLETION_CUSTOM_TYPE ||
+			message.customType === HEARTBEAT_PROMPT_CUSTOM_TYPE ||
 			message.customType === GOAL_CONTEXT_CUSTOM_TYPE ||
 			message.customType === RUST_STATE_RESTORED_CUSTOM_TYPE ||
 			message.customType === RLM_CHILD_FAILURE_CUSTOM_TYPE ||
@@ -89,7 +95,7 @@ export class InjectedPromptMessageComponent extends Container {
 		private readonly markdownTheme: MarkdownTheme = getMarkdownTheme(),
 	) {
 		super();
-		this.addChild(new Spacer(1));
+		if (this.message.customType !== ASYNC_BASH_COMPLETION_CUSTOM_TYPE) this.addChild(new Spacer(1));
 		this.addChild(this.content);
 		this.updateDisplay();
 	}
@@ -109,8 +115,14 @@ export class InjectedPromptMessageComponent extends Container {
 
 	private updateDisplay(): void {
 		this.content.clear();
+		if (this.message.customType === ASYNC_BASH_COMPLETION_CUSTOM_TYPE) {
+			const shell = new ShellCompletionComponent(this.message);
+			shell.setExpanded(this.expanded);
+			this.content.addChild(shell);
+			return;
+		}
 		this.header.setText(this.headerText());
-		this.content.addChild(this.header);
+		this.content.addChild(new Clickable(this.header, () => this.setExpanded(!this.expanded)));
 		if (this.message.customType === RUST_STATE_RESTORED_CUSTOM_TYPE) {
 			const details = this.message.details as RustStateRestoredDetails | undefined;
 			for (const warning of details?.warnings ?? []) {
@@ -141,14 +153,14 @@ export class InjectedPromptMessageComponent extends Container {
 			this.message.customType === RLM_CHILD_FAILURE_CUSTOM_TYPE ||
 			this.message.customType === RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE
 		) {
-			const hint = this.expanded ? "" : ` (${keyText("app.tools.expand")} to expand)`;
+			const hint = this.expanded ? "" : ` ${expandCollapseHint("app.tools.expand", false)}`;
 			return theme.fg("muted", "RLM child status") + theme.fg("dim", hint);
 		}
 
 		const details = this.message.details;
 		const title = goalLabel(details as GoalContextDetails | undefined);
 		const meta = this.metaText();
-		const hint = this.expanded ? "" : ` (${keyText("app.tools.expand")} to expand)`;
+		const hint = this.expanded ? "" : ` ${expandCollapseHint("app.tools.expand", false)}`;
 		return theme.fg("muted", title) + meta + theme.fg("dim", hint);
 	}
 
@@ -156,7 +168,7 @@ export class InjectedPromptMessageComponent extends Container {
 		const details = this.message.details as HeartbeatPromptDetails | undefined;
 		const pulse = theme.fg("error", "♥");
 		const schedule = theme.fg("muted", heartbeatPromptSchedule(details?.schedule));
-		const hint = this.expanded ? "" : ` (${keyText("app.tools.expand")} to expand)`;
+		const hint = this.expanded ? "" : ` ${expandCollapseHint("app.tools.expand", false)}`;
 		return `${pulse} ${theme.fg("muted", "Heartbeat prompt")}${theme.fg("dim", " · ")}${schedule}${theme.fg("dim", hint)}`;
 	}
 

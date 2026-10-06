@@ -23,6 +23,7 @@ export default defineConfig({
 		setupFiles: [providerEnvSetup],
 		// Reports the scrub once per run; the scrub itself stays in setupFiles.
 		globalSetup: [providerEnvGlobalSetup],
+		env: { DO_NOT_TRACK: "1" },
 		tags: [
 			{
 				name: "process-stress",

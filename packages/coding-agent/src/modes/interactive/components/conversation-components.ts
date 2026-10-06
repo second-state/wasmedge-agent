@@ -2,10 +2,16 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Component, MarkdownTheme, TUI } from "@earendil-works/pi-tui";
 import { isAgentSessionMessage } from "../../../core/agent-messages.js";
 import {
+	ASYNC_BASH_COMPLETION_CUSTOM_TYPE,
 	COMPACTION_OUTCOME_CUSTOM_TYPE,
+	type CustomMessage,
 	isCompactionOutcomeMessage,
+	isMcpConnectionOutcomeMessage,
+	isRefinementOutcomeMessage,
 	isSessionSlashCommandMessage,
 	isSessionSlashCommandResultMessage,
+	MCP_CONNECTION_OUTCOME_CUSTOM_TYPE,
+	REFINEMENT_OUTCOME_CUSTOM_TYPE,
 	SESSION_SLASH_COMMAND_CUSTOM_TYPE,
 	SESSION_SLASH_COMMAND_RESULT_CUSTOM_TYPE,
 } from "../../../core/messages.js";
@@ -17,7 +23,16 @@ import {
 	MalformedCompactionOutcomeMessageComponent,
 } from "./compaction-outcome-message.js";
 import { InjectedPromptMessageComponent, isInjectedPromptMessage } from "./injected-prompt-message.js";
+import {
+	MalformedMcpConnectionOutcomeMessageComponent,
+	McpConnectionOutcomeMessageComponent,
+} from "./mcp-connection-outcome-message.js";
+import {
+	MalformedRefinementOutcomeMessageComponent,
+	RefinementOutcomeMessageComponent,
+} from "./refinement-outcome-message.js";
 import { RustCellComponent } from "./rust-cell.js";
+import { ShellCompletionComponent } from "./shell-completion.js";
 import { SlashCommandMessageComponent } from "./slash-command-message.js";
 import { SlashCommandResultMessageComponent } from "./slash-command-result-message.js";
 import {
@@ -35,8 +50,7 @@ export interface ConversationComponentsOptions {
 	getToolDefinition: (name: string) => ToolExecutionDefinition | undefined;
 	markdownTheme?: MarkdownTheme;
 	hideThinkingBlock?: boolean;
-	hiddenThinkingLabel?: string;
-	toolsExpanded?: boolean;
+	editDiffsExpanded?: boolean;
 	isRecognizedSlashCommand?: (name: string) => boolean;
 }
 
@@ -45,8 +59,53 @@ export function isCompactAgentMessageNeighbor(component: Component | undefined):
 		component instanceof AgentMessageComponent ||
 		component instanceof ToolExecutionComponent ||
 		component instanceof RustCellComponent ||
-		component instanceof BashExecutionComponent
+		component instanceof BashExecutionComponent ||
+		component instanceof ShellCompletionComponent
 	);
+}
+
+export interface ConversationSpacing {
+	precededByToolActivity: () => boolean;
+	shouldAddLeadingSpace: (expanded: boolean) => boolean;
+}
+
+/** Keep spacing responsive to hidden thinking and late shell attachment without rendering prior blocks again. */
+export function createConversationSpacing(previous: readonly Component[]): ConversationSpacing {
+	const last = previous.at(-1);
+	let lastIndex = previous.length - 1;
+	const getPrevious = (): { component: Component; trailingSpace: boolean } | undefined => {
+		if (!last) return undefined;
+		if (previous[lastIndex] !== last) lastIndex = previous.indexOf(last);
+		let toolSeparator: AssistantMessageComponent | undefined;
+		for (let index = lastIndex; index >= 0; index--) {
+			const component = previous[index]!;
+			if (component instanceof AssistantMessageComponent) {
+				const content = component.getSpacingContent();
+				if (content === "hidden") continue;
+				if (content === "tool-only") {
+					toolSeparator ??= component;
+					continue;
+				}
+				return toolSeparator
+					? { component: toolSeparator, trailingSpace: true }
+					: { component, trailingSpace: component.hasTrailingSpace() };
+			}
+			if (component instanceof ShellCompletionComponent && !component.isVisible()) continue;
+			if (toolSeparator && !isCompactAgentMessageNeighbor(component)) {
+				return { component: toolSeparator, trailingSpace: true };
+			}
+			return { component, trailingSpace: false };
+		}
+		return toolSeparator ? { component: toolSeparator, trailingSpace: true } : undefined;
+	};
+	return {
+		precededByToolActivity: () => isCompactAgentMessageNeighbor(getPrevious()?.component),
+		shouldAddLeadingSpace: (expanded) => {
+			const preceding = getPrevious();
+			if (preceding?.trailingSpace) return false;
+			return expanded ? preceding !== undefined : !isCompactAgentMessageNeighbor(preceding?.component);
+		},
+	};
 }
 
 function readUserText(content: string | Array<{ type: string; text?: string }>): string {
@@ -61,45 +120,58 @@ function readUserText(content: string | Array<{ type: string; text?: string }>):
 		.join("");
 }
 
-/** Build conversation components from a message list, matching tool results to their calls. */
+export function createShellCompletionComponent(
+	message: CustomMessage,
+	previous: readonly Component[],
+): ShellCompletionComponent | undefined {
+	if (message.customType !== ASYNC_BASH_COMPLETION_CUSTOM_TYPE) return undefined;
+	// Rust cells never return a background shell handle, so a completion always
+	// renders standalone instead of attaching to its launching tool call.
+	const spacing = createConversationSpacing(previous);
+	return new ShellCompletionComponent(message, false, {
+		shouldAddLeadingSpace: spacing.shouldAddLeadingSpace,
+	});
+}
+
+/** Test-only transcript replay; production replays via InteractiveMode.renderSessionContext. */
 export function buildConversationComponents(
 	messages: readonly AgentMessage[],
 	options: ConversationComponentsOptions,
 ): Component[] {
 	const components: Component[] = [];
 	const pendingTools = new Map<string, ToolExecutionComponent>();
-	const expanded = options.toolsExpanded ?? false;
+	const expanded = false;
+	const editDiffsExpanded = options.editDiffsExpanded ?? false;
 
 	for (const message of messages) {
 		if (message.role === "assistant") {
 			components.push(
-				new AssistantMessageComponent(
-					message,
-					options.hideThinkingBlock ?? false,
-					options.markdownTheme,
-					options.hiddenThinkingLabel ?? "Thinking...",
-					{
-						expanded,
-						precededByToolActivity:
-							components.at(-1) instanceof ToolExecutionComponent ||
-							components.at(-1) instanceof AgentMessageComponent,
-					},
-				),
+				new AssistantMessageComponent(message, options.hideThinkingBlock ?? false, options.markdownTheme, {
+					cwd: options.cwd,
+					expanded,
+					precededByToolActivity: createConversationSpacing(components).precededByToolActivity,
+				}),
 			);
 			for (const content of message.content) {
 				if (content.type !== "toolCall") {
 					continue;
 				}
+				const spacing = createConversationSpacing(components);
 				const tool = new ToolExecutionComponent(
 					content.name,
 					content.id,
 					content.arguments,
-					{ ...options.toolOptions, includeImageDimensions: false },
+					{
+						...options.toolOptions,
+						includeImageDimensions: false,
+						shouldAddLeadingSpace: () => spacing.shouldAddLeadingSpace(true),
+					},
 					options.getToolDefinition(content.name),
 					options.ui,
 					options.cwd,
 				);
 				tool.setExpanded(expanded);
+				tool.setEditDiffsExpanded(editDiffsExpanded);
 				tool.markExecutionStarted();
 				tool.setArgsComplete();
 				selectLatestToolExpandHint(components, tool);
@@ -136,14 +208,31 @@ export function buildConversationComponents(
 					? new CompactionOutcomeMessageComponent(message)
 					: new MalformedCompactionOutcomeMessageComponent(),
 			);
+		} else if (message.role === "custom" && message.customType === MCP_CONNECTION_OUTCOME_CUSTOM_TYPE) {
+			if (!message.display) continue;
+			const component = isMcpConnectionOutcomeMessage(message)
+				? new McpConnectionOutcomeMessageComponent(message)
+				: new MalformedMcpConnectionOutcomeMessageComponent();
+			component.setExpanded(expanded);
+			components.push(component);
+		} else if (message.role === "custom" && message.customType === REFINEMENT_OUTCOME_CUSTOM_TYPE) {
+			if (!message.display) continue;
+			const component = isRefinementOutcomeMessage(message)
+				? new RefinementOutcomeMessageComponent(message)
+				: new MalformedRefinementOutcomeMessageComponent();
+			component.setExpanded(expanded);
+			if (component instanceof RefinementOutcomeMessageComponent) component.setEditDiffsExpanded(editDiffsExpanded);
+			components.push(component);
 		} else if (isAgentSessionMessage(message) && message.display) {
 			const component = new AgentMessageComponent(message, options.markdownTheme, {
-				suppressLeadingSpace: isCompactAgentMessageNeighbor(components.at(-1)),
+				shouldAddLeadingSpace: createConversationSpacing(components).shouldAddLeadingSpace,
 			});
 			component.setExpanded(expanded);
 			components.push(component);
 		} else if (isInjectedPromptMessage(message) && message.display) {
-			const component = new InjectedPromptMessageComponent(message, options.markdownTheme);
+			const component =
+				createShellCompletionComponent(message, components) ??
+				new InjectedPromptMessageComponent(message, options.markdownTheme);
 			component.setExpanded(expanded);
 			components.push(component);
 		} else if (message.role === "user") {

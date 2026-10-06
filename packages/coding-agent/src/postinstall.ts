@@ -77,7 +77,7 @@ function oneLine(message: string): string {
 
 try {
 	if (bootstrapTools) {
-		await Promise.all([ensureTool("fd", true), ensureTool("rg", true)]);
+		await Promise.all([ensureTool("fd"), ensureTool("rg")]);
 	}
 	if (bootstrapRuntime) {
 		const toolchain = resolveToolchain();

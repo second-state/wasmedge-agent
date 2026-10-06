@@ -1,5 +1,3 @@
-import chalk from "chalk";
-import { spawnSync } from "child_process";
 import extractZip from "extract-zip";
 import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "fs";
 import { arch, platform } from "os";
@@ -7,6 +5,7 @@ import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { APP_NAME, getBinDir } from "../config.js";
+import { spawnSyncHidden } from "./child-process.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -100,7 +99,7 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check that a command both launches and reports a successful version.
 function commandWorks(cmd: string): boolean {
 	try {
-		const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: COMMAND_TIMEOUT_MS });
+		const result = spawnSyncHidden(cmd, ["--version"], { stdio: "pipe", timeout: COMMAND_TIMEOUT_MS });
 		return !result.error && result.status === 0;
 	} catch {
 		return false;
@@ -224,7 +223,7 @@ async function downloadTool(tool: ManagedTool): Promise<string> {
 
 	try {
 		if (assetName.endsWith(".tar.gz")) {
-			const extractResult = spawnSync("tar", ["xzf", archivePath, "-C", extractDir], { stdio: "pipe" });
+			const extractResult = spawnSyncHidden("tar", ["xzf", archivePath, "-C", extractDir], { stdio: "pipe" });
 			if (extractResult.error || extractResult.status !== 0) {
 				const errMsg = extractResult.error?.message ?? extractResult.stderr?.toString().trim() ?? "unknown error";
 				throw new Error(`Failed to extract ${assetName}: ${errMsg}`);
@@ -270,12 +269,6 @@ async function downloadTool(tool: ManagedTool): Promise<string> {
 	return binaryPath;
 }
 
-// Termux package names for tools
-const TERMUX_PACKAGES: Record<string, string> = {
-	fd: "fd",
-	rg: "ripgrep",
-};
-
 function getRipgrepInstallHint(platformName: string): string {
 	switch (platformName) {
 		case "darwin":
@@ -320,30 +313,22 @@ export function formatMissingRipgrepMessage(result: ToolUnavailableResult): stri
 }
 
 // Ensure a tool is available, downloading if necessary, and retain why provisioning failed.
-export async function ensureToolWithStatus(tool: ManagedTool, silent: boolean = true): Promise<ToolEnsureResult> {
+export async function ensureToolWithStatus(tool: ManagedTool): Promise<ToolEnsureResult> {
 	const existingPath = getToolPath(tool);
 	if (existingPath) {
 		return { status: "available", path: existingPath };
 	}
 
-	const config = TOOLS[tool];
 	const platformName = platform();
 	const architecture = arch();
 
 	if (isOfflineModeEnabled()) {
-		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`));
-		}
 		return { status: "unavailable", reason: "offline", platform: platformName, architecture };
 	}
 
 	// On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
 	// Users must install via pkg.
 	if (platformName === "android") {
-		const pkgName = TERMUX_PACKAGES[tool] ?? tool;
-		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
-		}
 		return {
 			status: "unavailable",
 			reason: "manual_install_required",
@@ -353,20 +338,10 @@ export async function ensureToolWithStatus(tool: ManagedTool, silent: boolean = 
 	}
 
 	// Tool not found - download it
-	if (!silent) {
-		console.log(chalk.dim(`${config.name} not found. Downloading...`));
-	}
-
 	try {
 		const path = await downloadTool(tool);
-		if (!silent) {
-			console.log(chalk.dim(`${config.name} installed to ${path}`));
-		}
 		return { status: "available", path };
 	} catch (e) {
-		if (!silent) {
-			console.log(chalk.yellow(`Failed to download ${config.name}: ${e instanceof Error ? e.message : e}`));
-		}
 		return {
 			status: "unavailable",
 			reason: e instanceof UnsupportedToolPlatformError ? "unsupported_platform" : "download_failed",
@@ -378,7 +353,7 @@ export async function ensureToolWithStatus(tool: ManagedTool, silent: boolean = 
 }
 
 // Compatibility wrapper for callers that only need the resolved executable path.
-export async function ensureTool(tool: ManagedTool, silent: boolean = true): Promise<string | undefined> {
-	const result = await ensureToolWithStatus(tool, silent);
+export async function ensureTool(tool: ManagedTool): Promise<string | undefined> {
+	const result = await ensureToolWithStatus(tool);
 	return result.status === "available" ? result.path : undefined;
 }

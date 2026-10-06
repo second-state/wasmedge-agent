@@ -144,32 +144,32 @@ describe("buildSubagentGuidance", () => {
 });
 
 describe("buildSystemPrompt", () => {
-	it("assembles doctrine, subagent guidance, and harness state in order", () => {
+	it("assembles doctrine then subagent guidance, leaving harness state to the digest", () => {
 		const prompt = buildSystemPrompt({
 			cwd: "/tmp/proj",
 			selectedTools: ["rust", "bash"],
-			harnessState: emptyHarnessState(),
 		});
 		const doctrineIndex = prompt.indexOf("The rust tool is your control environment");
 		const guidanceIndex = prompt.indexOf("# Delegating to sub-agents");
-		const harnessIndex = prompt.indexOf("# Continual Harness State");
 		expect(doctrineIndex).toBeGreaterThan(-1);
 		expect(guidanceIndex).toBeGreaterThan(doctrineIndex);
-		expect(harnessIndex).toBeGreaterThan(guidanceIndex);
+		// Harness state is delivered as a separate digest message, not in the
+		// cache-stable system prompt.
+		expect(prompt).not.toContain("# Continual Harness State");
 	});
 
 	it("uses the rust harness call contract for rust sessions and the hint-only variant otherwise", () => {
-		const rust = buildSystemPrompt({
-			cwd: "/tmp/proj",
-			selectedTools: ["rust", "bash"],
-			harnessState: emptyHarnessState(),
+		// Mirrors AgentSession's digest options: rust contract iff the rust tool
+		// is active, shell hint variant iff bash is.
+		const rust = formatHarnessStateForPrompt(emptyHarnessState(), {
+			includeRustExamples: true,
+			includeShellExamples: true,
 		});
 		expect(rust).toContain('let handle = rlm::spawn("<task>")?;');
 
-		const bashOnly = buildSystemPrompt({
-			cwd: "/tmp/proj",
-			selectedTools: ["bash"],
-			harnessState: emptyHarnessState(),
+		const bashOnly = formatHarnessStateForPrompt(emptyHarnessState(), {
+			includeRustExamples: false,
+			includeShellExamples: true,
 		});
 		expect(bashOnly).toContain("routing/context hints only in sessions without the rust tool");
 		expect(bashOnly).not.toContain('let handle = rlm::spawn("<task>")?;');

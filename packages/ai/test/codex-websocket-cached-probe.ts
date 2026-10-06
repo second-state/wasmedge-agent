@@ -1,23 +1,17 @@
 #!/usr/bin/env tsx
-/**
- * Live probe for OpenAI Codex Responses websocket-cached mode.
- *
- * Runs a simple tool loop directly against the pi-ai provider source so it does not
- * depend on built dist packages or coding-agent SDK wiring.
- */
 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import { AuthStorage } from "../../coding-agent/src/core/auth-storage.js";
-import { getModel } from "../src/models.js";
 import {
 	closeOpenAICodexWebSocketSessions,
 	getOpenAICodexWebSocketDebugStats,
 	resetOpenAICodexWebSocketDebugStats,
 	streamOpenAICodexResponses,
 } from "../src/providers/openai-codex-responses.js";
-import type { AssistantMessage, Context, Message, Model, Tool, ToolResultMessage, Transport } from "../src/types.js";
+import type { AssistantMessage, Context, Message, Tool, ToolResultMessage, Transport } from "../src/types.js";
+import { getFixtureModel } from "./fixture-models.js";
 
 type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -156,8 +150,7 @@ function percentile(values: number[], p: number): number {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const model = getModel("openai-codex", "gpt-5.5") as Model<"openai-codex-responses"> | undefined;
-	if (!model) throw new Error("Model openai-codex/gpt-5.5 not found");
+	const model = getFixtureModel<"openai-codex-responses">("openai-codex", "gpt-5.5");
 	const modelWithMaxTokens = { ...model, maxTokens: args.maxTokens };
 	const authStorage = AuthStorage.create();
 	const apiKey = (await authStorage.getApiKey("openai-codex")) ?? (await authStorage.getApiKey("openai"));

@@ -698,11 +698,19 @@ describe("ToolExecutionComponent parity", () => {
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
 		expect(expanded).toContain('hidden_side_effect = "only in full source"');
-		expect(expanded).toContain("before");
-		expect(expanded).toContain("after");
 		const expandedLines = expanded.split("\n");
-		expect(expandedLines.findIndex((line) => line.includes("hidden_side_effect ="))).toBeLessThan(
-			expandedLines.findIndex((line) => /✓ README\.md\s+\+1 -1/.test(line)),
-		);
+		const summaryIndex = expandedLines.findIndex((line) => /╰─ README\.md\s+\+1 -1/.test(line));
+		expect(expandedLines.findIndex((line) => line.includes("hidden_side_effect ="))).toBeGreaterThan(-1);
+		expect(expandedLines.findIndex((line) => line.includes("hidden_side_effect ="))).toBeLessThan(summaryIndex);
+		// Diff rows follow the global edit-diff toggle, not per-cell expansion.
+		expect(expanded).not.toMatch(/1 - before/);
+
+		component.setEditDiffsExpanded(true);
+		const withDiffs = stripAnsi(component.render(120).join("\n"));
+		const diffLines = withDiffs.split("\n");
+		const diffSummaryIndex = diffLines.findIndex((line) => /╰─ README\.md\s+\+1 -1/.test(line));
+		expect(diffSummaryIndex).toBeGreaterThan(diffLines.findIndex((line) => line.includes("hidden_side_effect =")));
+		expect(diffLines.findIndex((line) => /1 - before/.test(line))).toBeGreaterThan(diffSummaryIndex);
+		expect(diffLines.findIndex((line) => /1 \+ after/.test(line))).toBeGreaterThan(diffSummaryIndex);
 	});
 });

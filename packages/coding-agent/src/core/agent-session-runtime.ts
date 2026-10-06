@@ -7,7 +7,6 @@ import type {
 	AgentSessionRuntimeDiagnostic,
 	AgentSessionServices,
 } from "./agent-session-services.js";
-import { flushAgentTraceUpload } from "./agent-traces.js";
 import { isNoModelsAvailableMessage } from "./auth-guidance.js";
 import type { ReplacedSessionContext, SessionShutdownEvent, SessionStartEvent } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
@@ -20,24 +19,11 @@ import { SessionManager } from "./session-manager.js";
 
 export { SessionImportFileNotFoundError } from "./session-import-errors.js";
 
-/**
- * Result returned by runtime creation.
- *
- * The caller gets the created session, its cwd-bound services, and all
- * diagnostics collected during setup.
- */
 export interface CreateAgentSessionRuntimeResult extends CreateAgentSessionResult {
 	services: AgentSessionServices;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
 
-/**
- * Creates a full runtime for a target cwd and session manager.
- *
- * The factory closes over process-global fixed inputs, recreates cwd-bound
- * services for the effective cwd, resolves session options against those
- * services, and finally creates the AgentSession.
- */
 export type CreateAgentSessionRuntimeFactory = (options: {
 	cwd: string;
 	agentDir: string;
@@ -57,12 +43,49 @@ export interface AgentSessionRuntimeMetadata {
 	parentSessionFile?: string;
 	rlmChildId?: string;
 	rlmParentNodeId?: string;
-	/** Runtime restored from an already-persisted completed registry entry. */
 	rehydratedCompleted?: boolean;
 	prompt?: string;
 	/** Source of the rust cell that spawned this subagent, for display. */
 	spawnCode?: string;
 	sessionDir?: string;
+}
+
+/** Maps an RLM spawn request to child session options and runtime metadata. */
+export function rlmSubagentRuntimeSpec(options: CreateRlmSubagentRuntimeOptions): {
+	sessionOptions: AgentSessionCreationOptions;
+	runtimeMetadata: AgentSessionRuntimeMetadata;
+} {
+	return {
+		sessionOptions: {
+			model: options.model,
+			thinkingLevel: options.thinkingLevel,
+			serviceTier: options.serviceTier,
+			scopedModels: options.scopedModels,
+			initialActiveToolNames: options.activeToolNames,
+			allowedToolNames: options.allowedToolNames,
+			customTools: options.customTools,
+			includeGoals: options.includeGoals,
+			includeCompactSkill: options.includeCompactSkill,
+			rlmDepth: options.rlmDepth,
+			rlmMaxDepth: options.rlmMaxDepth,
+			rlmSessionDir: options.sessionDir,
+			rlmParentNodeId: options.rlmParentNodeId,
+			rlmParentAgent: options.parentSession.sessionName ?? options.parentSession.sessionId,
+			semanticParentSessionId: options.parentSession.sessionId,
+			semanticSpawnedByRequestId: options.spawnedByRequestId,
+		},
+		runtimeMetadata: {
+			kind: "subagent",
+			createdAt: Date.now(),
+			parentSessionId: options.parentSession.sessionId,
+			parentSessionFile: options.parentSession.sessionFile,
+			rlmChildId: options.id,
+			rlmParentNodeId: options.rlmParentNodeId,
+			prompt: options.prompt,
+			spawnCode: options.spawnCode,
+			sessionDir: options.sessionDir,
+		},
+	};
 }
 
 function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
@@ -76,13 +99,6 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 		.join("");
 }
 
-/**
- * Owns the current AgentSession plus its cwd-bound services.
- *
- * Session replacement methods tear down the current runtime first, then create
- * and apply the next runtime. If creation fails, the error is propagated to the
- * caller. The caller is responsible for user-facing error handling.
- */
 export class AgentSessionRuntime implements SubagentRuntimeHost {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
 	private readonly sessionReplacedListeners = new Set<(session: AgentSession) => void | Promise<void>>();
@@ -221,7 +237,6 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			reason,
 			targetSessionFile,
 		});
-		await flushAgentTraceUpload(this.session.sessionManager).catch(() => undefined);
 		this.beforeSessionInvalidate?.();
 		// Drain the session's async teardown before invalidating it.
 		await this.session.disposeAsync();
@@ -347,33 +362,7 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 				sessionManager,
 				sessionStartEvent: { type: "session_start", reason: "startup" },
 				sessionConfig: this.sessionConfig,
-				sessionOptions: {
-					model: options.model,
-					thinkingLevel: options.thinkingLevel,
-					serviceTier: options.serviceTier,
-					scopedModels: options.scopedModels,
-					initialActiveToolNames: options.activeToolNames,
-					allowedToolNames: options.allowedToolNames,
-					customTools: options.customTools,
-					includeGoals: options.includeGoals,
-					includeCompactSkill: options.includeCompactSkill,
-					rlmDepth: options.rlmDepth,
-					rlmMaxDepth: options.rlmMaxDepth,
-					rlmSessionDir: options.sessionDir,
-					rlmParentNodeId: options.rlmParentNodeId,
-					rlmParentAgent: options.parentSession.sessionName ?? options.parentSession.sessionId,
-				},
-				runtimeMetadata: {
-					kind: "subagent",
-					createdAt: Date.now(),
-					parentSessionId: options.parentSession.sessionId,
-					parentSessionFile: options.parentSession.sessionFile,
-					rlmChildId: options.id,
-					rlmParentNodeId: options.rlmParentNodeId,
-					prompt: options.prompt,
-					spawnCode: options.spawnCode,
-					sessionDir: options.sessionDir,
-				},
+				...rlmSubagentRuntimeSpec(options),
 			}),
 		);
 		this.subagentRuntimes.set(options.id, runtime);
@@ -714,17 +703,11 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			disposeError ??= error;
 		}
 		try {
-			await flushAgentTraceUpload(this.session.sessionManager);
-		} catch (error) {
-			disposeError ??= error;
-		}
-		try {
 			this.beforeSessionInvalidate?.();
 		} catch (error) {
 			disposeError ??= error;
 		}
 		try {
-			// Drain the session's async teardown before tearing it down.
 			await this.session.disposeAsync();
 		} catch (error) {
 			disposeError ??= error;
@@ -751,12 +734,6 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 	}
 }
 
-/**
- * Create the initial runtime from a runtime factory and initial session target.
- *
- * The same factory is stored on the returned AgentSessionRuntime and reused for
- * later /new, resume, /fork, and import flows.
- */
 export async function createAgentSessionRuntime(
 	createRuntime: CreateAgentSessionRuntimeFactory,
 	options: {

@@ -38,8 +38,8 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
-import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.js";
-import { createRustTool, createRustToolDefinition, type RustToolOptions } from "./rust.js";
+import { type BashToolOptions, createBashToolDefinition } from "./bash.js";
+import { createRustToolDefinition, type RustToolOptions } from "./rust.js";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
@@ -51,38 +51,9 @@ export interface ToolsOptions {
 	bash?: BashToolOptions;
 }
 
-export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
-	switch (toolName) {
-		case "rust":
-			return createRustToolDefinition(cwd, options?.rust);
-		case "bash":
-			return createBashToolDefinition(cwd, options?.bash);
-		default:
-			throw new Error(`Unknown tool name: ${toolName}`);
-	}
-}
-
-export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
-	switch (toolName) {
-		case "rust":
-			return createRustTool(cwd, options?.rust);
-		case "bash":
-			return createBashTool(cwd, options?.bash);
-		default:
-			throw new Error(`Unknown tool name: ${toolName}`);
-	}
-}
-
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
 		rust: createRustToolDefinition(cwd, options?.rust),
 		bash: createBashToolDefinition(cwd, options?.bash),
-	};
-}
-
-export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
-	return {
-		rust: createRustTool(cwd, options?.rust),
-		bash: createBashTool(cwd, options?.bash),
 	};
 }

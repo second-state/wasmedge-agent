@@ -19,17 +19,21 @@ export interface AppKeybindings {
 	"app.suspend": true;
 	"app.model.select": true;
 	"app.model.toggleScope": true;
-	"app.configuration.previousTab": true;
+	"app.model.cycleForward": true;
+	"app.model.cycleBackward": true;
 	"app.tools.expand": true;
-	"app.thinking.toggle": true;
 	"app.subagents.focus": true;
 	"app.heartbeats.open": true;
 	"app.heartbeats.openSelected": true;
 	"app.editor.external": true;
 	"app.prompt.stash": true;
 	"app.message.followUp": true;
-	"app.message.dequeue": true;
+	"app.message.navigateOlder": true;
+	"app.message.navigateNewer": true;
+	"app.message.moveEarlier": true;
+	"app.message.moveLater": true;
 	"app.clipboard.pasteImage": true;
+	"app.clipboard.copyLoginUrl": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -42,6 +46,7 @@ export interface AppKeybindings {
 	"app.agents.delete": true;
 	"app.agents.program": true;
 	"app.agents.rename": true;
+	"app.agents.expand": true;
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
 	"app.tree.editLabel": true;
@@ -80,12 +85,9 @@ export const KEYBINDINGS = {
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
 	"app.model.toggleScope": { defaultKeys: "alt+s", description: "Toggle model selector scope" },
-	"app.configuration.previousTab": { defaultKeys: "shift+tab", description: "Select previous configuration tab" },
-	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
-	"app.thinking.toggle": {
-		defaultKeys: "ctrl+t",
-		description: "Toggle thinking blocks",
-	},
+	"app.model.cycleForward": { defaultKeys: "alt+m", description: "Cycle to the next scoped model" },
+	"app.model.cycleBackward": { defaultKeys: "shift+alt+m", description: "Cycle to the previous scoped model" },
+	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Cycle conversation detail", defaultKeyScope: "editor" },
 	"app.subagents.focus": {
 		defaultKeys: "alt+a",
 		description: "Open child agents",
@@ -110,13 +112,29 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+enter",
 		description: "Queue follow-up message",
 	},
-	"app.message.dequeue": {
+	"app.message.navigateOlder": {
 		defaultKeys: "alt+up",
-		description: "Restore queued messages",
+		description: "Select older pending message",
+	},
+	"app.message.navigateNewer": {
+		defaultKeys: "alt+down",
+		description: "Select newer pending message or draft",
+	},
+	"app.message.moveEarlier": {
+		defaultKeys: "ctrl+alt+up",
+		description: "Move selected pending message earlier",
+	},
+	"app.message.moveLater": {
+		defaultKeys: "ctrl+alt+down",
+		description: "Move selected pending message later",
 	},
 	"app.clipboard.pasteImage": {
 		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard",
+	},
+	"app.clipboard.copyLoginUrl": {
+		defaultKeys: ["c", "alt+c"],
+		description: "Copy login URL",
 	},
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
@@ -130,6 +148,7 @@ export const KEYBINDINGS = {
 	"app.agents.delete": { defaultKeys: "ctrl+x", description: "Stop or delete selected agent" },
 	"app.agents.program": { defaultKeys: "ctrl+o", description: "Show the program that spawned subagents" },
 	"app.agents.rename": { defaultKeys: "ctrl+r", description: "Rename selected agent session" },
+	"app.agents.expand": { defaultKeys: "alt+right", description: "Expand or collapse selected agent subagents" },
 	"app.tree.foldOrUp": {
 		defaultKeys: ["ctrl+left", "alt+left"],
 		description: "Fold tree branch or move up",
@@ -201,6 +220,7 @@ export const KEYBINDINGS = {
 } as const satisfies KeybindingDefinitions;
 
 const KEYBINDING_NAME_MIGRATIONS = {
+	"app.message.dequeue": "app.message.navigateOlder",
 	cursorUp: "tui.editor.cursorUp",
 	cursorDown: "tui.editor.cursorDown",
 	cursorLeft: "tui.editor.cursorLeft",
@@ -239,11 +259,10 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	suspend: "app.suspend",
 	selectModel: "app.model.select",
 	expandTools: "app.tools.expand",
-	toggleThinking: "app.thinking.toggle",
 	focusSubagents: "app.subagents.focus",
 	externalEditor: "app.editor.external",
 	followUp: "app.message.followUp",
-	dequeue: "app.message.dequeue",
+	dequeue: "app.message.navigateOlder",
 	pasteImage: "app.clipboard.pasteImage",
 	newSession: "app.session.new",
 	tree: "app.session.tree",
@@ -365,4 +384,4 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	}
 }
 
-export type { Keybinding, KeyId, KeybindingsConfig };
+export type { Keybinding, KeybindingsConfig, KeyId };

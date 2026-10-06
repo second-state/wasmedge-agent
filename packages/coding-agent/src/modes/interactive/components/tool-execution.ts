@@ -8,11 +8,12 @@ import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/rend
 import type { AgentConnectionToolDefinition } from "../../agent-connection/index.js";
 import { type Theme, theme } from "../theme/theme.js";
 import { getWorkingPulseFrame, workingIconFrame } from "../theme/working-icon.js";
-import { FileChangeSummaryComponent, getToolFileChanges } from "./edit-summary.js";
+import { expandCollapseHint } from "./keybinding-hints.js";
 import { getRustCodeFromArgs, RustCellComponent } from "./rust-cell.js";
 import { ToolPanel } from "./tool-panel.js";
 
 export interface ToolExecutionOptions {
+	shouldAddLeadingSpace?: () => boolean;
 	showImages?: boolean;
 	/** Whether image metadata may parse dimensions from base64 data. */
 	includeImageDimensions?: boolean;
@@ -78,9 +79,11 @@ export class ToolExecutionComponent extends Container {
 	private toolCallId: string;
 	private args: any;
 	private expanded = false;
+	private editDiffsExpanded = false;
 	private showExpandHint = true;
 	private showImages: boolean;
 	private includeImageDimensions: boolean;
+	private readonly shouldAddLeadingSpace?: () => boolean;
 	private isPartial = true;
 	private toolDefinition?: ToolExecutionDefinition;
 	private builtInToolDefinition?: ToolDefinition<any, any>;
@@ -94,6 +97,7 @@ export class ToolExecutionComponent extends Container {
 		details?: any;
 	};
 	private hideComponent = false;
+	private readonly resultListeners = new Set<() => void>();
 
 	constructor(
 		toolName: string,
@@ -112,6 +116,7 @@ export class ToolExecutionComponent extends Container {
 		this.builtInToolDefinition = createReplayBuiltInToolDefinition(toolName, cwd, toolDefinition);
 		this.showImages = options.showImages ?? true;
 		this.includeImageDimensions = options.includeImageDimensions ?? true;
+		this.shouldAddLeadingSpace = options.shouldAddLeadingSpace;
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -172,6 +177,13 @@ export class ToolExecutionComponent extends Container {
 		return this.toolName === "rust" && !this.toolDefinition?.renderCall && !this.toolDefinition?.renderResult;
 	}
 
+	private isBuiltInEditTool(): boolean {
+		return (
+			this.toolName === "edit" &&
+			(this.toolDefinition === undefined || this.toolDefinition.replayBuiltInToolName === "edit")
+		);
+	}
+
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
 			args: this.args,
@@ -186,7 +198,7 @@ export class ToolExecutionComponent extends Container {
 			executionStarted: this.executionStarted,
 			argsComplete: this.argsComplete,
 			isPartial: this.isPartial,
-			expanded: this.expanded,
+			expanded: this.isBuiltInEditTool() ? this.editDiffsExpanded : this.expanded,
 			showExpandHint: this.showExpandHint,
 			showImages: this.showImages,
 			includeImageDimensions: this.includeImageDimensions,
@@ -195,7 +207,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private createCallFallback(): Component {
-		return new Text(theme.fg("toolTitle", theme.bold(this.toolName)), 0, 0);
+		return new Text(theme.fg("toolTitle", this.toolName), 0, 0);
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -203,7 +215,7 @@ export class ToolExecutionComponent extends Container {
 		if (!output) {
 			return undefined;
 		}
-		return new Text(theme.fg("toolOutput", output), 0, 0);
+		return new Text(theme.fg("toolOutput", this.formatFallbackPreview(output)), 0, 0);
 	}
 
 	updateArgs(args: any): void {
@@ -234,10 +246,28 @@ export class ToolExecutionComponent extends Container {
 		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
+		for (const listener of this.resultListeners) listener();
+	}
+
+	onResultUpdate(listener: () => void): () => void {
+		this.resultListeners.add(listener);
+		return () => this.resultListeners.delete(listener);
+	}
+
+	isResultPending(): boolean {
+		return this.isPartial;
 	}
 
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		this.updateDisplay();
+	}
+
+	setEditDiffsExpanded(expanded: boolean): void {
+		if (this.editDiffsExpanded === expanded) {
+			return;
+		}
+		this.editDiffsExpanded = expanded;
 		this.updateDisplay();
 	}
 
@@ -266,6 +296,7 @@ export class ToolExecutionComponent extends Container {
 
 	override render(width: number): string[] {
 		if (this.hideComponent) {
+			this.clickRegions = [];
 			return [];
 		}
 		// Refresh the animated glyph without rebuilding the whole panel, for as long
@@ -273,7 +304,20 @@ export class ToolExecutionComponent extends Container {
 		if (this.isStatusAnimating() && !this.usesSelfRenderShell()) {
 			this.contentPanel.setHeader(this.panelHeader());
 		}
-		return super.render(width);
+		const lines = super.render(width);
+		// The header row toggles only this component: panel header line for the
+		// default shell, the fixed summary line for self-rendered rust cells.
+		// That rust-cell shell prepends a blank row, so aggregated child regions
+		// shift with it.
+		const leadingBlank = this.expanded && this.shouldUseRustCellRenderer() && this.shouldAddLeadingSpace?.() ? 1 : 0;
+		this.clickRegions =
+			lines.length > 0
+				? [
+						...this.clickRegions.map((region) => ({ ...region, line: region.line + leadingBlank })),
+						{ line: leadingBlank, col: 0, width, height: 1, onClick: () => this.setExpanded(!this.expanded) },
+					]
+				: [];
+		return leadingBlank ? ["", ...lines] : lines;
 	}
 
 	private isStatusAnimating(): boolean {
@@ -305,6 +349,7 @@ export class ToolExecutionComponent extends Container {
 					isPartial: this.isPartial,
 					isError: this.result?.isError ?? false,
 					expanded: this.expanded,
+					editDiffsExpanded: this.editDiffsExpanded,
 					executionStarted: this.executionStarted,
 					argsComplete: this.argsComplete,
 					showExpandHint: this.showExpandHint,
@@ -359,18 +404,6 @@ export class ToolExecutionComponent extends Container {
 				);
 				this.imageComponents.push(imageComponent);
 				this.addChild(imageComponent);
-			}
-		}
-
-		const isBuiltInEdit =
-			this.toolName === "edit" &&
-			(this.toolDefinition === undefined || this.toolDefinition.replayBuiltInToolName === "edit");
-		if (!this.expanded && this.result && (isBuiltInEdit || this.shouldUseRustCellRenderer())) {
-			const changes = getToolFileChanges(this.toolName, this.args, this.result, this.cwd);
-			if (changes.length > 0) {
-				const container = this.usesSelfRenderShell() ? this.selfRenderContainer : this.contentPanel;
-				container.addChild(new FileChangeSummaryComponent(changes, this.cwd));
-				hasContent = true;
 			}
 		}
 
@@ -465,15 +498,22 @@ export class ToolExecutionComponent extends Container {
 		});
 	}
 
+	private formatFallbackPreview(text: string): string {
+		if (this.expanded) return text;
+		const lines = text.split("\n");
+		if (lines.length <= 3) return text;
+		return `${lines.slice(0, 3).join("\n")}\n${theme.fg("dim", `… ${lines.length - 3} more lines`)}${this.showExpandHint ? ` ${expandCollapseHint("app.tools.expand", false)}` : ""}`;
+	}
+
 	private formatToolExecution(): string {
 		const parts: string[] = [];
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {
-			parts.push(content);
+			parts.push(this.formatFallbackPreview(content));
 		}
 		const output = this.getTextOutput();
 		if (output) {
-			parts.push(output);
+			parts.push(this.formatFallbackPreview(output));
 		}
 		return parts.join("\n\n");
 	}
