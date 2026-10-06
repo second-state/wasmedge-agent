@@ -49,6 +49,12 @@ export class WorkspaceHistory {
 				"core.hooksPath=/dev/null",
 				"-c",
 				"core.fsmonitor=false",
+				// Upgrades copy .git immediately after snapshots; background maintenance
+				// must not keep changing its objects or lock files after Git returns.
+				"-c",
+				"maintenance.autoDetach=false",
+				"-c",
+				"gc.autoDetach=false",
 				...args,
 			],
 			{
