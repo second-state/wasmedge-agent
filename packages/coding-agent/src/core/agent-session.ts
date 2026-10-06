@@ -1035,6 +1035,12 @@ interface RetainedRlmChild {
 	run?: RlmChildRun;
 }
 
+class RlmQuiescenceCancelledError extends Error {
+	constructor() {
+		super("RLM quiescence wait cancelled");
+	}
+}
+
 /**
  * A delete receipt frees the name once the child runtime is bound and only the
  * detached deletion unwind remains. A deleted startup without a bound session
@@ -12044,8 +12050,8 @@ export class AgentSession {
 		return false;
 	}
 
-	private _rlmChildSessionSnapshot(): AgentSession[] {
-		const sessions = new Set<AgentSession>();
+	private _rlmChildSessionSnapshot(): RetainedRlmChild[] {
+		const sessions = new Map<AgentSession, RetainedRlmChild>();
 		// Accepted deletions are drained by the run's settlement promise. Recursing
 		// into that session would let its expected disposal cancel the parent wait.
 		for (const [childId, { session, run }] of this._rlmChildSessions) {
@@ -12054,20 +12060,22 @@ export class AgentSession {
 				!run?.detachedDeletion &&
 				!this._activeRlmChildRuns.get(childId)?.detachedDeletion
 			) {
-				sessions.add(session);
+				sessions.set(session, { session, run: this._activeRlmChildRuns.get(childId) ?? run });
 			}
 		}
 		for (const run of this._activeRlmChildRuns.values()) {
-			if (run.session && !run.abandonedForQuiescence && !run.detachedDeletion) sessions.add(run.session);
+			if (run.session && !run.abandonedForQuiescence && !run.detachedDeletion) {
+				sessions.set(run.session, { session: run.session, run });
+			}
 		}
-		return [...sessions];
+		return [...sessions.values()];
 	}
 
 	private _hasUnsettledRlmQuiescenceWork(): boolean {
 		if (this._hasDeferredRlmTerminalNotices()) return true;
 		if ([...this._unsettledRlmChildRuns].some((run) => !run.settled)) return true;
 		return this._rlmChildSessionSnapshot().some(
-			(child) => child.isSessionActive || child._hasUnsettledRlmQuiescenceWork(),
+			({ session }) => session.isSessionActive || session._hasUnsettledRlmQuiescenceWork(),
 		);
 	}
 
@@ -12086,7 +12094,7 @@ export class AgentSession {
 		const cancelled = new Promise<never>((_resolve, reject) => {
 			rejectCancelled = reject;
 		});
-		const onCancelled = () => rejectCancelled(new Error("RLM quiescence wait cancelled"));
+		const onCancelled = () => rejectCancelled(new RlmQuiescenceCancelledError());
 		cancellation.signal.addEventListener("abort", onCancelled, { once: true });
 		if (cancellation.signal.aborted) onCancelled();
 		const wait = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, cancelled]);
@@ -12104,7 +12112,21 @@ export class AgentSession {
 				await wait(
 					Promise.all([
 						...unsettledRuns.map((run) => run.settlement.promise),
-						...childSessions.map((child) => child.waitForRlmQuiescence(cancellation.signal)),
+						...childSessions.map(({ session, run }) =>
+							session.waitForRlmQuiescence(cancellation.signal).catch((error: unknown) => {
+								if (
+									cancellation.signal.aborted ||
+									!(error instanceof RlmQuiescenceCancelledError) ||
+									!run?.detachedDeletion
+								) {
+									throw error;
+								}
+								// Deletion can dispose the child after this recursive wait starts.
+								// The captured run still owns cleanup and terminal publication,
+								// even if deletion has already removed its lookup entries.
+								return run.settlement.promise;
+							}),
+						),
 					]),
 				);
 				// Always loop through the self-active/deferred checks again. Work may
