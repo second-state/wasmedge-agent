@@ -41,6 +41,7 @@ function renderedDiagnostics(cargoStdout: string, cargoStderr: string): string {
 
 export class CellRunner {
 	private queue: Promise<unknown> = Promise.resolve();
+	private readonly shutdown = new AbortController();
 	private mountLibReadonly = true;
 	private probed = false;
 	private readonly opts: RunnerOptions;
@@ -58,18 +59,35 @@ export class CellRunner {
 		return run;
 	}
 
+	/** Cancel active and queued cells, then wait for rollback and bridge cleanup. */
+	async dispose(): Promise<void> {
+		this.shutdown.abort(new Error("cell runner disposed"));
+		await this.queue;
+	}
+
 	private async executeInner(input: CellInput, per: PerCallOptions): Promise<CellResult> {
 		const started = Date.now();
 		const cellId = per.cellId ?? `cell-${randomBytes(6).toString("hex")}`;
 		const deadline = AbortSignal.timeout(this.opts.cellTimeoutMs);
-		const signal = per.signal ? AbortSignal.any([per.signal, deadline]) : deadline;
+		const signal = AbortSignal.any([this.shutdown.signal, deadline, ...(per.signal ? [per.signal] : [])]);
 		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
-		const interruptedStatus = () => (per.signal?.aborted ? "aborted" : "timeout");
+		const interruptedStatus = () => (this.shutdown.signal.aborted || per.signal?.aborted ? "aborted" : "timeout");
+		if (signal.aborted) {
+			return this.result(interruptedStatus(), {
+				started,
+				compileMs: 0,
+				runMs: 0,
+				libApplied: false,
+				libReverted: false,
+				stderr: "cell was cancelled before execution",
+			});
+		}
 		const ws = this.opts.workspaceDir;
 		this.checkMounts();
 		ensureStateDir(ws);
 		try {
 			await this.opts.validateSkills?.(signal, remainingMs());
+			signal.throwIfAborted();
 		} catch (error) {
 			return this.result(signal.aborted ? interruptedStatus() : "error", {
 				started,

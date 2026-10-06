@@ -162,7 +162,7 @@ export class RustCellManager {
   async listPersistentState(): Promise<PersistentStateListing>;
                                         // state keys + agent_lib pub API（compaction 通知用）
   async interrupt(): Promise<void>;     // kill 當前 cell 子進程（cargo 或 wasmedge）
-  async dispose(): Promise<void>;       // 關 BridgeServer；git commit 收尾
+  async dispose(): Promise<void>;       // 取消 cells/tests，等待來源回復與 bridge 清理
 }
 
 export interface CellInput {
@@ -186,6 +186,8 @@ export interface CellResult {
 ```
 
 執行狀態機：`idle → compiling → running → committing → idle`；`interrupt()` 在 compiling/running 態 kill 對應子進程（process group SIGKILL，參照 sandbox 範例 `detached: true` 模式）。**無 busy-reuse 流程**——cell 短命，這整類複雜度（`KernelBusyAfterInterruptError`、restart notice、5 秒等待）刪除。
+
+**Runtime 關閉實作註記（2026-10-06）**：`RustCellProvisioner.dispose()` 取消進行中與排隊的 cells、skill tests，等待失敗／中斷 build 的來源回復及 bridge 清理；舊 runner 後續呼叫回報 `aborted`，不再修改來源。啟動中的 runner 不會在關閉後重新掛回；同一 provisioner 關閉完成後可透過 `ensure()` 建立新 runner。`AgentSession.dispose()` 發起取消，`disposeAsync()` 等待清理；reload／runtime 重建須等前一 runtime 釋放 workspace 才開始 provision。關閉不刪 workspace、不額外 Git snapshot，也不回滾已發生的 runtime 副作用。同步 toolchain／scaffold 初始化仍不可中途取消；不合作的 host handlers 沿用 bridge 的有限等待，不保證其外部副作用已停止。
 
 併發治理：cargo build 吃 CPU。沿用 `boot-gate.ts` 的許可證模式做 **compile gate**：全 worker 進程內同時編譯數 `min(4, cpus/2)`，可用 `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` 覆寫（對映 `PRIME_AGENT_MAX_CONCURRENT_KERNEL_BOOTS`）。
 

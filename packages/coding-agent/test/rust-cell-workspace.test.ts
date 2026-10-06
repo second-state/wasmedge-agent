@@ -69,7 +69,7 @@ describe("cell source rollback", () => {
 		expect(readFileSync(join(ws, "agent_lib", "src", "helpers", "mod.rs"), "utf-8")).toBe("pub fn existing() {}\n");
 	});
 
-	it.each(["missing compiler", "pre-aborted"])("restores both cell and lib after %s", async (failure) => {
+	it.each(["missing compiler", "pre-aborted"])("preserves previous cell and lib after %s", async (failure) => {
 		const ws = workspace();
 		const runner = new CellRunner({
 			workspaceDir: ws,
@@ -83,7 +83,14 @@ describe("cell source rollback", () => {
 			failure === "pre-aborted" ? { signal: AbortSignal.abort() } : {},
 		);
 		if (failure === "pre-aborted") {
-			expect(await result).toMatchObject({ status: "aborted", libReverted: true });
+			expect(await result).toMatchObject({
+				status: "aborted",
+				compileMs: 0,
+				runMs: 0,
+				libApplied: false,
+				libReverted: false,
+			});
+			expect(existsSync(join(ws, "state"))).toBe(false);
 		} else {
 			await expect(result).rejects.toThrow(/ENOENT/);
 		}
