@@ -22,6 +22,8 @@ import {
 	preludeConfigurationHash,
 } from "./prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
+import { createRustdocHandler } from "./rustdoc.js";
+import { normalizeRustdocToolchain } from "./rustdoc-cache.js";
 import { SkillValidation } from "./skill-validation.js";
 import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
 import {
@@ -76,6 +78,8 @@ export {
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends CellResourceLimits {
+	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
+	rustdocToolchain?: string | null;
 	/** Test proposed lib edits in WASI before applying them; defaults to false. */
 	libraryTestGate?: boolean;
 	/** Wait for the previous runtime to release this workspace before provisioning. */
@@ -127,6 +131,7 @@ export class RustCellProvisioner {
 		validateCellResourceLimits(options);
 		this.options = {
 			...options,
+			rustdocToolchain: normalizeRustdocToolchain(options.rustdocToolchain),
 			libraryTestGate: normalizeLibraryTestGate(options.libraryTestGate),
 			preludeExtra: normalizePreludeExtra(options.preludeExtra),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(options.workspaceWritePolicy),
@@ -142,6 +147,10 @@ export class RustCellProvisioner {
 
 	get libraryTestGate(): boolean {
 		return this.options.libraryTestGate === true;
+	}
+
+	get rustdocToolchain(): string | undefined {
+		return this.options.rustdocToolchain ?? undefined;
 	}
 
 	get hasRunner(): boolean {
@@ -273,6 +282,11 @@ export class RustCellProvisioner {
 			this.bridgeServer = new BridgeServer({
 				handlers: {
 					...this.options.hostHandlers,
+					"api.describe": createRustdocHandler({
+						workspace: this.workspace,
+						toolchain: this.options.rustdocToolchain,
+						timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
+					}),
 					"deps.add": createDependencyHandler({
 						workspace: this.workspace,
 						template: templateDir,

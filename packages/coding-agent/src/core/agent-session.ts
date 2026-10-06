@@ -8421,6 +8421,7 @@ export class AgentSession {
 		const provisioner = this._rustCellProvisioner;
 		if (!provisioner?.hasWorkspace) return;
 		const listing = provisioner.listState();
+		const apiSource = listing.libApi ? "cached rustdoc JSON" : "source scan";
 		const stateDetail =
 			listing.stateKeys.length > 0
 				? ` state keys: ${listing.stateKeys.join(", ")}.`
@@ -8430,14 +8431,19 @@ export class AgentSession {
 		const blobDetail = listing.blobNames.length > 0 ? ` state blobs: ${listing.blobNames.join(", ")}.` : "";
 		const libDetail =
 			listing.libFunctions.length > 0
-				? ` agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`
+				? ` agent_lib functions (${apiSource}): ${listing.libFunctions.join(", ")}.`
 				: "";
 		const typeDetail = listing.libTypes?.length
-			? ` agent_lib types (source scan): ${listing.libTypes.join(", ")}.`
+			? ` agent_lib types (${apiSource}): ${listing.libTypes.join(", ")}.`
 			: "";
 		const content = [
 			"<rust_state>",
 			`Your workspace persisted through compaction.${stateDetail}${blobDetail}${libDetail}${typeDetail}`,
+			...(listing.libApi
+				? [
+						`API cache: ${listing.libApi.toolchain}, wasm32-wasip1. ${listing.libApi.omitted} names omitted. With rustdocToolchain configured, browse with rlm::api::list(path) or query declarations with rlm::api::describe(path).`,
+					]
+				: []),
 			...(listing.warnings ?? []).map((warning) => `State inventory warning: ${warning}`),
 			"</rust_state>",
 		].join("\n");
@@ -8471,18 +8477,24 @@ export class AgentSession {
 			listing.stateKeys.length === 0 &&
 			listing.libFunctions.length === 0 &&
 			!listing.libTypes?.length &&
+			!listing.libApi &&
 			listing.blobNames.length === 0 &&
 			!listing.warnings?.length
 		) {
 			return;
 		}
 		const lines = ["<rust_state_restored>"];
+		const apiSource = listing.libApi ? "cached rustdoc JSON" : "source scan";
 		lines.push("Your persistent workspace was restored from your previous session.");
 		if (listing.stateKeys.length > 0) lines.push(`state keys: ${listing.stateKeys.join(", ")}.`);
 		if (listing.blobNames.length > 0) lines.push(`state blobs: ${listing.blobNames.join(", ")}.`);
 		if (listing.libFunctions.length > 0)
-			lines.push(`agent_lib functions (source scan): ${listing.libFunctions.join(", ")}.`);
-		if (listing.libTypes?.length) lines.push(`agent_lib types (source scan): ${listing.libTypes.join(", ")}.`);
+			lines.push(`agent_lib functions (${apiSource}): ${listing.libFunctions.join(", ")}.`);
+		if (listing.libTypes?.length) lines.push(`agent_lib types (${apiSource}): ${listing.libTypes.join(", ")}.`);
+		if (listing.libApi)
+			lines.push(
+				`API cache: ${listing.libApi.toolchain}, wasm32-wasip1. ${listing.libApi.omitted} names omitted. With rustdocToolchain configured, browse with rlm::api::list(path) or query declarations with rlm::api::describe(path).`,
+			);
 		for (const warning of listing.warnings ?? []) lines.push(`State inventory warning: ${warning}`);
 		lines.push("</rust_state_restored>");
 		void this.sendCustomMessage(
@@ -10604,6 +10616,7 @@ export class AgentSession {
 				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
 				workspaceWritePolicy: this.settingsManager.getRustCellWorkspaceWritePolicy(),
 				libraryTestGate: this.settingsManager.getRustCellLibraryTestGate(),
+				rustdocToolchain: this.settingsManager.getRustCellRustdocToolchain(),
 				preludeExtra: this.settingsManager.getRustCellPreludeExtra(),
 				...this.settingsManager.getRustCellResourceLimits(),
 				hostHandlers: this._createHostRequestHandlers(),

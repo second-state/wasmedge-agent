@@ -102,12 +102,69 @@ interrupted-write staging directories, are omitted. Legacy `.tmp` files may be
 leftover writes or saved blobs; both are listed because the name cannot tell
 them apart. Listing does not repair, delete, or overwrite saved data.
 
-These notices are labeled **source scan**. They do not compile the library or
-report fields, variants, signatures, associated items, re-exports, or generated
-API. Items with `cfg`, `cfg_attr`, or custom `path` attributes are omitted rather
-than evaluated. Full rustdoc JSON introspection remains planned.
+Without a matching API cache, these notices are labeled **source scan**. They do
+not compile the library or report fields, variants, signatures, associated items,
+re-exports, or generated API. Items with `cfg`, `cfg_attr`, or custom `path`
+attributes are omitted rather than evaluated. A source-matched rustdoc cache
+supplies the names instead and is labeled **cached rustdoc JSON**, with its
+toolchain and a query hint. Notices show at most 64 function and 64 type names
+from that cache and report the number omitted. Unreadable, malformed, or stale
+caches fall back to source scanning; restore and compaction never invoke Cargo.
 
-Toolchain resolution:
+### API introspection
+
+With `rustCell.rustdocToolchain` configured, cells can query documented public
+APIs without guessing signatures or reading private implementation details:
+
+```rust
+use agent_lib::prelude::*;
+fn main() -> Result<()> {
+    println!("{}", rlm::api::list("agent_lib::helpers")?);
+    println!("{}", rlm::api::describe("rlm::state::get")?);
+    Ok(())
+}
+```
+
+`list` returns public paths and item kinds below a module or type. Continue with
+`list_page(path, nextOffset)` when `nextOffset` is non-null. `describe` returns
+one exact path's documentation and **structured rustdoc declarations** (separate
+type/value namespaces can share a path), including
+function inputs/output, qualifiers, generics and bounds. Fields, variants,
+inherent methods, trait items and explicit trait implementations have queryable
+child paths. `impl#...` paths identify documentation entries, not Rust call
+syntax. Macro-generated items, local aliases/globs and mounted skill re-exports
+are resolved from rustdoc output. Raw keyword names retain their `r#` prefix.
+Third-party re-exports without local JSON are labeled `external_reexport`;
+unresolved globs use `*#...` entries. Synthetic and blanket impl inventories are
+omitted. This is not a complete index of every external dependency or std trait.
+
+Each list page has at most 50 entries and 32,000 bytes of item data. Long docs
+are capped at 8,000 characters with `docsTruncated: true`; declarations are never
+silently truncated. Oversized declarations return an error with a hint to query
+smaller child items. Each JSON input/cache is limited to 32 MiB, and the index to
+20,000 entries. Rustdoc JSON is unstable; this implementation accepts format 61,
+tested with `nightly-2026-09-25`. Missing toolchains or unsupported formats return
+errors rather than switching compilers or presenting a source scan as rustdoc.
+
+On a cache miss, the host snapshots the workspace, then runs release/offline/
+locked `cargo doc --target wasm32-wasip1 --no-deps --lib` for `agent_lib`, `rlm`
+and mounted skills using the selected toolchain. Build admission, generation and
+cleanup share the active cell's cancellation and deadline. Documentation does
+not execute functions or doctests, but Cargo build scripts and proc macros still
+run with host permissions. Rustdoc enables `cfg(doc)` and does not fully check
+function bodies; this is API documentation, not proof that a cell compiles or
+that code is correct. Guest gas/memory limits do not bound rustdoc or Cargo.
+
+The cache is stored under `target/.agent-api.json`, outside Git snapshots. Queries
+reuse it only when source fingerprints, selected toolchain and compiler version
+match. Fingerprints include manifests, Cargo.lock, Cargo configuration, library,
+runtime and mounted skill sources; generation rejects changes in either the
+live workspace or its snapshot. Source rollback can make the prior cache valid
+again. Vendor content, arbitrary external build inputs and host environment are
+not fingerprinted; this does not provide cross-process file locking. Resume and
+compaction only verify sources and report the toolchain that produced the cache.
+
+### Toolchain resolution
 
 1. `WASMEDGE_AGENT_CARGO`, else `cargo` on PATH, else `~/.cargo/bin/cargo`;
 2. `WASMEDGE_AGENT_WASMEDGE`, else `wasmedge` on PATH, else `~/.wasmedge/bin/wasmedge`;

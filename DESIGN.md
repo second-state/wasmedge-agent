@@ -369,7 +369,7 @@ Your persistent workspace was restored. state keys: {keys}. state blobs: {blobs}
 </rust_state_restored>
 ```
 
-（Host 從 `agent_lib/src/lib.rs` 沿公開模組宣告做來源掃描，列出相對於 `agent_lib` 的路徑。`{fns}` 包含公開自由函式（含 async／const／unsafe）；`{types}` 包含公開 struct／enum／union／type alias／trait（含 unsafe trait）。兩者都涵蓋巢狀、inline modules；resume 與 compaction 通知均標示為 source scan。只列型別名稱，不列欄位、variants、方法或簽名，也不是完整 API 內省或編譯驗證。不解析 re-exports、macro 產物，以及帶 cfg／cfg_attr／path 屬性的項目；Phase 2 rustdoc JSON backend 仍未落實。）
+（沒有有效 API cache 時，Host 從 `agent_lib/src/lib.rs` 沿公開模組宣告做來源掃描，列出相對於 `agent_lib` 的路徑。`{fns}` 包含公開自由函式（含 async／const／unsafe）；`{types}` 包含公開 struct／enum／union／type alias／trait（含 unsafe trait）。兩者都涵蓋巢狀、inline modules，標示 source scan；不解析 re-exports、macro 產物，以及帶 cfg／cfg_attr／path 屬性的項目。已有來源指紋相符的 rustdoc JSON cache 時，改列其公開函式／associated functions 與型別名稱、標示 cached rustdoc JSON 及產生時 toolchain；每類最多 64 個名稱並回報省略數。恢復／compaction 只讀 cache，不觸發 Cargo；缺失、失效或損壞時回退 source scan。按需宣告查詢見 §8.2。）
 
 ### 2.9 Rich output 與串流
 
@@ -521,7 +521,7 @@ emits a diff to the user); write whole files with std::fs when generating them.
    `.skills-hash` 同時比對實際掛載的類型／symlink 目標、workspace 與 agent_lib manifests、skills re-export 檔；這些設定異動時，reload 重新同步掛載並執行 probe，不因 skill 來源未變就略過。完成同步後才保存新指紋。
 5. 掛載範圍（定案）：發現到的 skills **全部掛載**（對映現制全裝進 venv + 全 pre-import）；bundled skills 預編譯進模板，user/project skills 首次進 session 時編譯一次。
 
-**Prompt 呈現**：`<available_skills>` XML 沿用，`<type>rust</type>`、`<rust_use>agent_lib::skills::websearch</rust_use>`；`help()` 內省的替代＝SKILL.md 記載簽名（skill-creator 模板強制）+ Phase 2 rustdoc JSON 查詢。
+**Prompt 呈現**：`<available_skills>` XML 沿用，`<type>rust</type>`、`<rust_use>agent_lib::skills::websearch</rust_use>`；SKILL.md 記載簽名（skill-creator 模板強制）。已配置 rustdoc toolchain 時，可透過 `rlm::api::list(rust_use)`／`describe(path)` 查詢 JSON 宣告（§8.2），prompt 指引按需查詢，不預先注入所有 skill API。
 
 **Bundled skills 的處置**（REPORT §3.4 的表格落地）：
 
@@ -743,7 +743,7 @@ wasmedge-agent/
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。
 - **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
-- **rustdoc JSON 內省（未落實）**：`listPersistentState` 與 skills XML 的 API 列表預計改由 rustdoc JSON 供給。目前 resume／compaction 的 source scan 已列公開函式與型別名稱（§2.8）；不涵蓋完整簽名、associated items 或 re-exports。
+- **rustdoc JSON 按需查詢（2026-10-07）**：`rustCell.rustdocToolchain` 預設 null；指定已安裝 toolchain 後，`rlm::api::{list,list_page,describe}` 透過 `api.describe` host handler 回傳 `agent_lib`／掛載 skills／`rlm` 的公開路徑與結構化宣告，包含 signatures、generics、fields、variants、associated items、local re-exports、macro 產物與 WASI target cfg。固定 `nightly-2026-09-25` 驗證 JSON format 61；其他格式明確拒絕，不自動安裝／下載／換 compiler。Host 在 disposable snapshot release/offline/locked 產生文件，前後比對來源指紋；失敗、取消或來源變更不發布 cache。快取於 `target/.agent-api.json`，查詢比對 source／toolchain／rustc version，resume／compaction 僅比對 source 並標示 cache 來源；資料不納入 Git。Query 分頁、檔案與索引大小有界。第三方依賴缺少 JSON 時標 external re-export；不枚舉 synthetic／blanket impls。Rustdoc 的 `cfg(doc)`、不完整函式本體檢查與 nightly compiler 不等於 cell build 驗證；Cargo／proc macros 仍有 host 權限，guest gas／memory 上限不限制文件編譯。外部 build inputs、vendor 內容與跨進程檔案鎖不在指紋保證內。操作與限制見 `packages/coding-agent/docs/rlm-runtime.md`。
 - **Workspace 唯讀模式（已落實，2026-10-05）**：`rustCell.workspaceWritePolicy: "rw" | "ro"`，預設 rw；ro 時以 WasmEdge `:readonly` 掛載 `/workspace`，教義改為產 patch，由既有 host bash 套用；無 bash 時交回 caller。設定經 session／child／SDK／runner 傳遞，修改後 restart 或 `/reload`；無效值拒絕啟動。`/agent/state`、`/scratch` 與宣告式 lib 修改仍可寫。編譯與執行前檢查 state/scratch 不得與 project 重疊（含 symlink root），拒絕含冒號的 host mount 路徑以避免 CLI 解析歧義，沒有 rw fallback。此限制只涵蓋 guest execution；Cargo、bash、host handlers 保留 host 權限，host hard links／並行 filesystem 變更不在保證內。未增加 patch approval gate，也尚未實作 trajectory replay。
 - **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。Project-local `skills.package` scaffold 已落實，reload 與登錄測試仍分開執行；一般 cell 已共用 import 白名單並改用 stdio bridge（§2.7）。
 - Windows 評估、polars wasm 驗證（研究場景擴張的前提）、component model 追蹤（skills as components）。

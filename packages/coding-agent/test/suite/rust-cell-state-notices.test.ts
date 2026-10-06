@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RustCellProvisioner } from "../../src/core/rust-cell/index.js";
+import { RUSTDOC_CACHE_PATH, rustdocFingerprint } from "../../src/core/rust-cell/rustdoc-cache.js";
+import { RUSTDOC_FORMAT_VERSION, RUSTDOC_TEST_TOOLCHAIN } from "../../src/core/rust-cell/rustdoc-index.js";
 import { SessionManager } from "../../src/core/session-manager.js";
 import { createHarness, getMessageText, type Harness } from "./harness.js";
 
@@ -109,6 +111,48 @@ describe("Rust workspace state notices", () => {
 		await harness.session.prompt("two");
 		return harness;
 	}
+
+	it.each(["resume", "compaction"])("uses a matching rustdoc cache on %s without provisioning", async (mode) => {
+		const { artifacts, workspace: dir } = workspace(
+			"mod private { pub struct Saved; } pub use private::Saved as Alias;",
+		);
+		writeFileSync(join(dir, "agent_lib/Cargo.toml"), '[package]\nname = "agent_lib"\n');
+		mkdirSync(join(dir, "target"));
+		writeFileSync(
+			join(dir, RUSTDOC_CACHE_PATH),
+			JSON.stringify({
+				schema: 1,
+				formatVersion: RUSTDOC_FORMAT_VERSION,
+				target: "wasm32-wasip1",
+				toolchain: RUSTDOC_TEST_TOOLCHAIN,
+				rustcVersion: "test compiler",
+				fingerprint: rustdocFingerprint(dir, []),
+				items: [{ path: "agent_lib::Alias", kind: "struct", docs: null, declaration: { struct: {} } }],
+			}),
+		);
+		const ensure = vi.spyOn(RustCellProvisioner.prototype, "ensure");
+		let harness: Harness;
+		if (mode === "compaction") {
+			harness = await compactionHarness(artifacts);
+			await harness.session.compact();
+		} else {
+			const artifactDir = vi.spyOn(SessionManager.prototype, "getSessionArtifactDir").mockReturnValue(artifacts);
+			harness = await createHarness();
+			harnesses.push(harness);
+			artifactDir.mockRestore();
+		}
+		let received = "";
+		harness.setResponses([
+			(context) => {
+				received = context.messages.map(getMessageText).join("\n");
+				return fauxAssistantMessage("using the documented alias");
+			},
+		]);
+		await harness.session.prompt("continue");
+		expect(received).toContain("agent_lib types (cached rustdoc JSON): Alias.");
+		expect(received).toContain(RUSTDOC_TEST_TOOLCHAIN);
+		expect(ensure).not.toHaveBeenCalled();
+	});
 
 	it("lists current disk state after compaction before the first cell and persists the notice", async () => {
 		const { artifacts, workspace: dir } = workspace("pub struct Old;");

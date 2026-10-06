@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { listLibraryApi } from "./library-api.js";
+import { readRustdocCache } from "./rustdoc-cache.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
 
@@ -191,16 +192,18 @@ function regenerateHelpersModRs(workspaceDir: string, declared: LibFile[]): void
 export interface PersistentStateListing {
 	stateKeys: string[];
 	blobNames: string[];
-	/** Source-discovered public free functions, relative to agent_lib. Not a complete API inventory. */
+	/** Public functions relative to agent_lib; source scan fallback or cached rustdoc items. */
 	libFunctions: string[];
-	/** Source-discovered public structs, enums, unions, aliases, and traits. Optional for older callers. */
+	/** Public structs, enums, unions, aliases, and traits. Optional for older callers. */
 	libTypes?: string[];
+	/** An existing source-matched rustdoc cache; never generated while listing state. */
+	libApi?: { source: "rustdoc-json"; toolchain: string; omitted: number };
 	/** Incomplete state/blob inventory; absent for readable or missing stores. */
 	warnings?: string[];
 }
 
 /** Host-side view of guest-persistent state for compaction/resume notices
- * (DESIGN.md §2.8). Source scan; rustdoc JSON is the Phase 2 upgrade. */
+ * (DESIGN.md §2.8). Reuse a matching rustdoc cache, otherwise scan sources. */
 export function listPersistentState(workspaceDir: string): PersistentStateListing {
 	const listing: PersistentStateListing = { stateKeys: [], blobNames: [], libFunctions: [] };
 	const warnings: string[] = [];
@@ -231,6 +234,27 @@ export function listPersistentState(workspaceDir: string): PersistentStateListin
 	const api = listLibraryApi(join(workspaceDir, "agent_lib", "src"));
 	listing.libFunctions = api.functions;
 	listing.libTypes = api.types;
+	try {
+		const cached = readRustdocCache(workspaceDir, mountedSkillCrates(workspaceDir));
+		if (cached) {
+			const publicItems = cached.items.filter((item) => item.path.startsWith("agent_lib::"));
+			listing.libFunctions = publicItems
+				.filter((item) => item.kind === "function")
+				.map((item) => item.path.slice(11));
+			listing.libTypes = publicItems
+				.filter((item) => ["struct", "enum", "union", "type_alias", "trait"].includes(item.kind))
+				.map((item) => item.path.slice(11));
+			listing.libApi = {
+				source: "rustdoc-json",
+				toolchain: cached.toolchain,
+				omitted: Math.max(0, listing.libFunctions.length - 64) + Math.max(0, listing.libTypes.length - 64),
+			};
+			listing.libFunctions = listing.libFunctions.slice(0, 64);
+			listing.libTypes = listing.libTypes.slice(0, 64);
+		}
+	} catch {
+		// A malformed manifest/cache must not prevent source-only restore notices.
+	}
 	if (warnings.length > 0) listing.warnings = warnings;
 	return listing;
 }

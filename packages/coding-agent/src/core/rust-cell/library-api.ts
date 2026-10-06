@@ -82,7 +82,7 @@ function isIdentifier(token: Token | undefined): token is string {
 
 /** A source-only inventory of public free functions and types reachable through ordinary
  * public modules. No compiler, macro expansion, cfg evaluation, re-export or
- * associated-item resolution: those require the planned rustdoc backend. */
+ * associated-item resolution: those require the optional rustdoc backend. */
 export function listLibraryApi(sourceDir: string): { functions: string[]; types: string[] } {
 	const functions = new Set<string>();
 	const types = new Set<string>();

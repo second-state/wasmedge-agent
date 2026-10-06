@@ -399,6 +399,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
 		"Read a skill's file in a rust cell when the task matches its description.",
 		'Skills with type rust are mounted as crates: call the functions their SKILL.md documents via the rust_use path (e.g. agent_lib::skills::websearch::run("query")?).',
+		"When rustdoc introspection is configured, rlm::api::list(rust_use) and rlm::api::describe(path) expose their public API declarations.",
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
 		"<available_skills>",

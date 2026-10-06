@@ -39,6 +39,8 @@ export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
 export interface RustToolOptions extends CellResourceLimits {
+	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
+	rustdocToolchain?: string | null;
 	/** Test proposed lib edits in WASI before applying them; defaults to false. */
 	libraryTestGate?: boolean;
 	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */
@@ -68,6 +70,7 @@ export function createRustToolDefinition(
 		options?.provisioner ??
 		new RustCellProvisioner({
 			cwd,
+			rustdocToolchain: options?.rustdocToolchain,
 			libraryTestGate: options?.libraryTestGate,
 			workspaceWritePolicy: options?.workspaceWritePolicy,
 			workspaceDir: options?.workspaceDir,
@@ -87,6 +90,9 @@ export function createRustToolDefinition(
 			"(extend it by passing lib files alongside your code), and files. Project imports, " +
 			"tests, scripts, CLIs, and dependency checks must run through the project's own " +
 			"environment via the bash tool." +
+			(provisioner.rustdocToolchain
+				? ' Public API introspection is available: rlm::api::list("agent_lib")? lists paths; rlm::api::describe(path)? returns structured signatures, generics, fields, variants, and associated items. Mounted skills are under agent_lib::skills; the rlm crate can also be queried. Calls may compile documentation on the host and share the cell deadline.'
+				: "") +
 			(provisioner.workspaceWritePolicy === "ro"
 				? " /workspace is read-only for guest execution. Produce a patch for host-side application; /agent/state and /scratch remain writable. Cargo and host tools retain host permissions."
 				: "") +
