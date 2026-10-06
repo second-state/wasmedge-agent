@@ -6,7 +6,7 @@ import { createDependencyHandler } from "../src/core/rust-cell/dependencies.js";
 import { readCellDependencies } from "../src/core/rust-cell/dependency-catalog.js";
 import { dependencyTransactionDir } from "../src/core/rust-cell/dependency-transaction.js";
 import { type ProcOutcome, runProcess } from "../src/core/rust-cell/process.js";
-import { resolveTemplateDir } from "../src/core/rust-cell/workspace.js";
+import { resolveTemplateDir, syncRustSkills } from "../src/core/rust-cell/workspace.js";
 
 vi.mock("../src/core/rust-cell/process.js", () => ({ runProcess: vi.fn() }));
 const success: ProcOutcome = { exitCode: 0, stdout: "", stderr: "", timedOut: false, aborted: false };
@@ -34,6 +34,11 @@ function fixture() {
 		join(skill, "Cargo.toml"),
 		'[package]\nname="example"\nversion="0.1.0"\n[dependencies]\nunapproved="1"\n',
 	);
+	syncRustSkills(workspace, [
+		{ name: "example", crateName: "example", cratePath: skill, cargoTomlPath: join(skill, "Cargo.toml") },
+	]);
+	mkdirSync(join(workspace, "skills/unmounted"));
+	writeFileSync(join(workspace, "skills/unmounted/Cargo.toml"), "[package\n");
 	const handler = createDependencyHandler({
 		workspace,
 		template,
@@ -67,6 +72,7 @@ describe("curated dependency fetching", () => {
 				expect(options.timeoutMs).toBeGreaterThan(0);
 				expect(options.timeoutMs).toBeLessThanOrEqual(10_000);
 				const stagedManifest = readFileSync(join(options.cwd, "Cargo.toml"), "utf-8");
+				expect(stagedManifest).not.toContain("skills/unmounted");
 				if (args[0] === "metadata") return { ...success, exitCode: 101, stderr: "missing crate" };
 				if (args[0] === "vendor") {
 					expect(args).toEqual(["vendor", "--no-delete", "vendor"]);
@@ -103,6 +109,7 @@ describe("curated dependency fetching", () => {
 				expect(readCellDependencies(workspace)).toEqual([]);
 			}
 			expect(readFileSync(join(workspace, "vendor/retained"), "utf-8")).toBe("old source");
+			expect(readFileSync(join(workspace, "skills/unmounted/Cargo.toml"), "utf-8")).toBe("[package\n");
 			expect(existsSync(dependencyTransactionDir(workspace))).toBe(false);
 		},
 	);

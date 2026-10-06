@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
 import * as skillTests from "../src/core/rust-cell/skill-tests.js";
 import { SkillValidation } from "../src/core/rust-cell/skill-validation.js";
+import { syncRustSkills } from "../src/core/rust-cell/workspace.js";
 
 const reference = { type: "rust", use: "agent_lib::skills::example" };
 const tempDirs: string[] = [];
@@ -21,11 +22,33 @@ function fixture() {
 	writeFileSync(join(crate, "Cargo.toml"), "[package]\nname = 'example'\n");
 	const source = join(crate, "src/lib.rs");
 	writeFileSync(source, "pub fn value() -> u32 { 42 }");
+	mkdirSync(join(workspaceDir, "agent_lib"));
+	writeFileSync(join(workspaceDir, "Cargo.toml"), '[workspace]\nmembers = ["agent_lib", "cell", "rlm"]\n');
+	writeFileSync(join(workspaceDir, "agent_lib/Cargo.toml"), '[package]\nname = "agent_lib"\n[dependencies]\n');
+	const skill = { name: "example", crateName: "example", cratePath: crate, cargoTomlPath: join(crate, "Cargo.toml") };
+	syncRustSkills(workspaceDir, [skill]);
 	const options = { workspaceDir, cargoBin: "cargo", wasmedgeBin: "wasmedge", timeoutMs: 30_000 };
-	return { source, options, gate: new SkillValidation(options) };
+	return { source, skill, options, gate: new SkillValidation(options) };
 }
 
 describe("skill source revalidation", () => {
+	it("skips unmounted source copies and resumes validation after remounting", async () => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.test(reference);
+		writeFileSync(f.source, "not Rust");
+		syncRustSkills(f.options.workspaceDir, []);
+		await f.gate.revalidate([reference], signal, 30_000);
+		await new SkillValidation(f.options).revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(1);
+		expect(readFileSync(f.source, "utf8")).toBe("not Rust");
+		writeFileSync(f.source, "pub fn value() -> u32 { 43 }");
+		syncRustSkills(f.options.workspaceDir, [f.skill]);
+		await f.gate.revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(2);
+	});
+
 	it("caches successful tests but retests changed sources and dependency context", async () => {
 		const f = fixture();
 		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();

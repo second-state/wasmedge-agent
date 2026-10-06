@@ -210,6 +210,8 @@ The fingerprint covers mounted skill files (including tests, fixtures, and symli
 
 A failed or interrupted revalidation prevents that cell from running or applying its source edits, and preserves the harness entry. Repair the skill through host file tools and retry; reload unmounts skills that fail the compile probe. Concurrent source changes detected during snapshotting or testing reject validation.
 
+Mount status comes from the host-managed skill dependencies in `agent_lib/Cargo.toml`. Child source directories retained after unmounting remain available for repair; they do not trigger automatic revalidation or qualify for registration tests. Test snapshots and dependency updates preserve the current mount set. Repair the source and reload to remount it.
+
 Ordinary cell/library edits and unregistered, untested installed skills retain their compile-only behavior. Guest harness mutations go through the host; harness directories are no longer preopened, and writable mount roots must be separate from the configured stores. Host bash and Cargo build scripts/proc macros retain their existing host permissions. Passing tests does not guarantee task correctness. See the [Rust skill authoring guide](../skills/skill-creator/references/rust-skills.md#quality-gate).
 
 Configured `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` also apply to each WasmEdge test module. Exceeding gas or failing a test due to memory exhaustion rejects registration. These optional limits do not constrain Cargo or total host memory; the existing wall-time budget still covers queueing, compilation, and execution.

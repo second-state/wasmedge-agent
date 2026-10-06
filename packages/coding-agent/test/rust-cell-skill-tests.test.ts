@@ -67,6 +67,10 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		const incompleteSource = join(f.workspace, "skills/incomplete/src/lib.rs");
 		mkdirSync(join(incompleteSource, ".."), { recursive: true });
 		writeFileSync(incompleteSource, "unfinished child skill without a manifest");
+		const unmounted = join(f.workspace, "skills/unmounted");
+		mkdirSync(join(unmounted, "src"), { recursive: true });
+		writeFileSync(join(unmounted, "Cargo.toml"), "[package\n");
+		writeFileSync(join(unmounted, "src/lib.rs"), "not Rust");
 		const processes = vi.spyOn(cellProcess, "runProcess");
 		try {
 			await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
@@ -194,6 +198,13 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 
 	it("rejects unmounted crates and invalid reference paths", async () => {
 		const f = fixture("#[test] fn works() {}");
+		const unmounted = join(f.workspace, "skills/unmounted");
+		mkdirSync(join(unmounted, "src"), { recursive: true });
+		writeFileSync(join(unmounted, "Cargo.toml"), '[package]\nname = "unmounted"\nversion = "0.1.0"\n');
+		writeFileSync(join(unmounted, "src/lib.rs"), "#[test] fn works() {}");
+		await expect(testRustSkill({ ...reference, use: "agent_lib::skills::unmounted" }, f.options)).rejects.toThrow(
+			"not mounted",
+		);
 		await expect(testRustSkill({ ...reference, use: "agent_lib::skills::missing" }, f.options)).rejects.toThrow(
 			"not mounted",
 		);

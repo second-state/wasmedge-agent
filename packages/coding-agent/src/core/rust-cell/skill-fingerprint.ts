@@ -40,6 +40,7 @@ export function skillSourceFingerprint(root: string, paths: string[] = ["."]): s
 export function skillTestFingerprint(workspace: string): string {
 	return skillSourceFingerprint(workspace, [
 		"Cargo.toml",
+		"agent_lib/Cargo.toml",
 		"Cargo.lock",
 		".cargo",
 		".workspace-version",

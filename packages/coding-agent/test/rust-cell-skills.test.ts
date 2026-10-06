@@ -20,7 +20,12 @@ import { afterAll, describe, expect, it } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
 import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
-import { ensureWorkspaceAt, type RustSkillMount, syncRustSkills } from "../src/core/rust-cell/workspace.js";
+import {
+	ensureWorkspaceAt,
+	mountedSkillCrates,
+	type RustSkillMount,
+	syncRustSkills,
+} from "../src/core/rust-cell/workspace.js";
 import { snapshotWorkspace, withInheritedSkills } from "../src/core/rust-cell/workspace-snapshot.js";
 
 function writeFakeWorkspace(root: string): string {
@@ -64,6 +69,7 @@ describe("syncRustSkills (unit)", () => {
 		expect(result.changed).toBe(true);
 		expect(result.mounted).toEqual(["word_count"]);
 		expect(result.failed).toEqual([]);
+		expect(mountedSkillCrates(workspace)).toEqual(["word_count"]);
 
 		const rootManifest = readFileSync(join(workspace, "Cargo.toml"), "utf-8");
 		expect(rootManifest).toContain('"agent_lib", "cell", "rlm", "skills/word_count"');
@@ -136,11 +142,30 @@ describe("syncRustSkills (unit)", () => {
 		writeFileSync(join(workspace, ".inherited-workspace"), "1\n");
 		syncRustSkills(workspace, [skill]);
 		expect(syncRustSkills(workspace, []).mounted).toEqual([]);
+		expect(mountedSkillCrates(workspace)).toEqual([]);
 		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toBe("not Rust\n");
 		expect(readFileSync(join(workspace, "agent_lib/src/skills/mod.rs"), "utf-8")).not.toContain("pub use local");
 		writeFileSync(join(skill.cratePath, "src/lib.rs"), "pub fn repaired() {}\n");
 		expect(syncRustSkills(workspace, withInheritedSkills(workspace, [])).mounted).toEqual(["local"]);
 		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf-8")).toBe("pub fn repaired() {}\n");
+	});
+
+	it("rejects damaged mount declarations instead of treating them as an empty set", () => {
+		const root = mkdtempSync(join(tmpdir(), "skills-mount-metadata-"));
+		tempDirs.push(root);
+		const workspace = writeFakeWorkspace(root);
+		expect(mountedSkillCrates(workspace)).toEqual([]);
+		syncRustSkills(workspace, [writeSkillCrate(root, "alpha", "pub fn run() {}\n")]);
+		const path = join(workspace, "agent_lib/Cargo.toml");
+		const manifest = readFileSync(path, "utf-8");
+		for (const invalid of [
+			manifest.replace("# --- end skills ---", ""),
+			manifest.replace("# --- skills (managed by wasmedge-agent; do not edit) ---", ""),
+			manifest.replace("../skills/alpha", "../skills/another"),
+		]) {
+			writeFileSync(path, invalid);
+			expect(() => mountedSkillCrates(workspace)).toThrow("Invalid managed skills block");
+		}
 	});
 });
 
@@ -210,6 +235,7 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 				writeFileSync(join(localSkill, "src/lib.rs"), "pub fn value() -> u32 { 77 }\n");
 				rmSync(localManifest);
 				writeFileSync(join(skill.cratePath, "src/lib.rs"), "pub fn value() -> u32 { 99 }\n");
+				const unused = writeSkillCrate(join(root, "child/skills"), "unused", "not Rust\n");
 				const reloaded = await child.ensure();
 				expect(lstatSync(localSkill).isDirectory()).toBe(true);
 				expect(readFileSync(join(localSkill, "src/lib.rs"), "utf-8")).toContain("77");
@@ -222,6 +248,7 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 				});
 				expect(independent.status, independent.compileDiagnostics ?? independent.stderr).toBe("ok");
 				expect(independent.stdout.trim()).toBe("independent");
+				expect(readFileSync(join(unused.cratePath, "src/lib.rs"), "utf-8")).toBe("not Rust\n");
 				await child.dispose();
 				writeFileSync(localManifest, manifest);
 				const repaired = await (await child.ensure()).execute({
