@@ -153,7 +153,7 @@ describe("syncRustSkills (unit)", () => {
 			expect(lstatSync(broken.cratePath).isDirectory()).toBe(true);
 			expect(lstatSync(link).isSymbolicLink()).toBe(true);
 		}
-		rmSync(link);
+		unlinkSync(link);
 		expect(syncRustSkills(workspace, skills)).toMatchObject({ mounted: ["healthy", "broken"], failed: [] });
 		expect(syncRustSkills(workspace, skills).changed).toBe(false);
 	});
