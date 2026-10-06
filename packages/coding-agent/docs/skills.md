@@ -168,6 +168,8 @@ At session start (and on `/reload`) the skill directory is linked into the works
 
 Reload also checks the actual mount links, workspace and library manifests, and generated skill re-exports before reusing the mount cache. Missing or redirected skill links and edited mount declarations trigger synchronization and another probe even when the skill sources are unchanged.
 
+If a skill's source scan fails (for example, a dangling symlink, symlink cycle, or unreadable file), mounting reports a diagnostic and excludes that skill before probing the others. Repair the source and reload to retry. Inherited child source directories are retained for repair. This isolates mount scanning errors; snapshots and registration tests can still reject unreadable filesystem data.
+
 Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
 ## Creating Skills with WasmEdge Agent

@@ -130,8 +130,31 @@ describe("syncRustSkills (unit)", () => {
 			writeFileSync(join(skill.cratePath, ignored, "output"), "ignored");
 		}
 		expect(syncRustSkills(workspace, [skill]).changed).toBe(false);
-		symlinkSync(skill.cratePath, join(skill.cratePath, "src/cycle"));
-		expect(() => syncRustSkills(workspace, [skill])).toThrow("symlink cycle");
+	});
+
+	it.each(["dangling", "cycle"])("isolates %s source links and remounts repaired local skills", (kind) => {
+		const root = mkdtempSync(join(tmpdir(), "skills-source-error-"));
+		tempDirs.push(root);
+		const workspace = writeFakeWorkspace(root);
+		const healthy = writeSkillCrate(root, "healthy", "pub fn value() -> u32 { 42 }\n");
+		const broken = writeSkillCrate(join(workspace, "skills"), "broken", "pub fn value() -> u32 { 7 }\n");
+		const skills = [healthy, broken];
+		syncRustSkills(workspace, skills);
+		const link = join(broken.cratePath, "fixture");
+		symlinkSync(kind === "cycle" ? broken.cratePath : join(root, "missing"), link);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const result = syncRustSkills(workspace, skills);
+			expect(result.mounted).toEqual(["healthy"]);
+			expect(result.failed).toEqual([
+				{ name: "broken", message: expect.stringMatching(kind === "cycle" ? /symlink cycle/ : /ENOENT/) },
+			]);
+			expect(mountedSkillCrates(workspace)).toEqual(["healthy"]);
+			expect(lstatSync(broken.cratePath).isDirectory()).toBe(true);
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		}
+		rmSync(link);
+		expect(syncRustSkills(workspace, skills)).toMatchObject({ mounted: ["healthy", "broken"], failed: [] });
+		expect(syncRustSkills(workspace, skills).changed).toBe(false);
 	});
 
 	it("repairs changed mount links and configuration even when skill sources are unchanged", () => {
@@ -270,9 +293,7 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 				expect(lstatSync(localSkill).isDirectory()).toBe(true);
 				expect(readFileSync(join(localSkill, "src/lib.rs"), "utf-8")).toContain("77");
 				expect(existsSync(localManifest)).toBe(false);
-				expect(diagnostics).toContainEqual(
-					expect.stringContaining('rust skill "shared" failed to compile and was unmounted'),
-				);
+				expect(diagnostics).toContainEqual(expect.stringContaining('rust skill "shared" was unmounted'));
 				const independent = await reloaded.execute({
 					code: 'use agent_lib::prelude::*; fn main() -> Result<()> { rlm::deps::add("itoa")?; println!("independent"); Ok(()) }',
 				});
@@ -307,10 +328,13 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 			'pub fn greet(name: &str) -> String {\n    format!("hello {name}")\n}\n',
 		);
 		const broken = writeSkillCrate(root, "broken-skill", "pub fn nope() -> { this is not rust }\n");
+		const unreadable = writeSkillCrate(root, "unreadable", "pub fn value() -> u32 { 7 }\n");
+		symlinkSync(join(root, "missing"), join(unreadable.cratePath, "fixture"));
 
-		const sync = syncRustSkills(workspace, [healthy, broken], { cargoBin: toolchain?.cargoBin });
+		const sync = syncRustSkills(workspace, [healthy, broken, unreadable], { cargoBin: toolchain?.cargoBin });
 		expect(sync.mounted).toEqual(["greeter"]);
-		expect(sync.failed.map((f) => f.name)).toEqual(["broken-skill"]);
+		expect(sync.failed.map((f) => f.name)).toEqual(["unreadable", "broken-skill"]);
+		expect(existsSync(join(workspace, "skills/unreadable"))).toBe(false);
 
 		rmSync(join(workspace, "skills/greeter"));
 		rmSync(join(workspace, "agent_lib/src/skills/mod.rs"));
@@ -330,6 +354,10 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 		});
 		expect(result.status).toBe("ok");
 		expect(result.stdout).toContain("hello workspace");
+
+		writeFileSync(join(workspace, "agent_lib/src/lib.rs"), "not Rust\n");
+		const failedLibrary = syncRustSkills(workspace, [healthy, unreadable], { cargoBin: toolchain?.cargoBin });
+		expect(failedLibrary.failed.map((failure) => failure.name)).toEqual(["unreadable", "agent_lib"]);
 	});
 
 	it(

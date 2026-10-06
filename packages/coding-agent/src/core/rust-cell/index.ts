@@ -230,9 +230,7 @@ export class RustCellProvisioner {
 			onProgress?.("Mounting rust skills...");
 			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });
 			for (const failure of sync.failed) {
-				this.options.onDiagnostic?.(
-					`rust skill "${failure.name}" failed to compile and was unmounted: ${failure.message}`,
-				);
+				this.options.onDiagnostic?.(`rust skill "${failure.name}" was unmounted: ${failure.message}`);
 			}
 		}
 		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
