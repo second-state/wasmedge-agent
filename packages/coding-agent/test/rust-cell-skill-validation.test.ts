@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,28 @@ function fixture() {
 }
 
 describe("skill source revalidation", () => {
+	it.each(["dangling", "cycle"])("ignores %s links only in unmounted sources", async (kind) => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.test(reference);
+		const unmounted = join(f.options.workspaceDir, "skills/unmounted");
+		mkdirSync(unmounted);
+		const link = join(unmounted, "fixture");
+		symlinkSync(kind === "cycle" ? unmounted : join(unmounted, "missing"), link);
+		await f.gate.revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(1);
+		writeFileSync(join(unmounted, "notes"), "work in progress");
+		await f.gate.revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(1);
+		const mountedLink = join(f.skill.cratePath, "fixture");
+		symlinkSync(kind === "cycle" ? f.skill.cratePath : join(f.skill.cratePath, "missing"), mountedLink);
+		await expect(f.gate.revalidate([reference], signal, 30_000)).rejects.toThrow(
+			kind === "cycle" ? /symlink cycle/ : /ENOENT/,
+		);
+		expect(tests).toHaveBeenCalledTimes(1);
+	});
+
 	it("skips unmounted source copies and resumes validation after remounting", async () => {
 		const f = fixture();
 		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
@@ -66,6 +88,27 @@ describe("skill source revalidation", () => {
 		expect(tests).toHaveBeenCalledTimes(3);
 		const resumed = new SkillValidation(f.options);
 		await resumed.revalidate([reference], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(4);
+	});
+
+	it("retests library source and fixtures without tracking its build output", async () => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.test(reference);
+		for (const path of ["src/helper.rs", "fixtures/expected.txt", "build.rs"]) {
+			const file = join(f.options.workspaceDir, "agent_lib", path);
+			mkdirSync(join(file, ".."), { recursive: true });
+			writeFileSync(file, "changed");
+			await f.gate.revalidate([], signal, 30_000);
+		}
+		expect(tests).toHaveBeenCalledTimes(4);
+		for (const ignored of ["target", ".git"]) {
+			const path = join(f.options.workspaceDir, "agent_lib", ignored);
+			mkdirSync(path);
+			writeFileSync(join(path, "output"), "ignored");
+		}
+		await f.gate.revalidate([], signal, 30_000);
 		expect(tests).toHaveBeenCalledTimes(4);
 	});
 

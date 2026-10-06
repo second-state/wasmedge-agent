@@ -168,6 +168,8 @@ At session start (and on `/reload`) the skill directory is linked into the works
 
 Reload also checks the actual mount links, workspace and library manifests, and generated skill re-exports before reusing the mount cache. Missing or redirected skill links and edited mount declarations trigger synchronization and another probe even when the skill sources are unchanged.
 
+If a skill's source scan fails (for example, a dangling symlink, symlink cycle, or unreadable file), mounting reports a diagnostic and excludes that skill before probing the others. Repair the source and reload to retry. Inherited child source directories are retained for repair. Mounted sources must still be readable for testing; full child snapshots still reject sources that cannot be copied.
+
 Dependencies must come from the workspace's locked set — declare them with `{ workspace = true }` (`anyhow`, `serde`, `serde_json`, `regex`, `walkdir`, and the `rlm` bridge crate). The template's dependency sources are vendored for hermetic builds, so a crates-io dependency outside that set fails the probe build; capabilities that need the network go through a typed host request instead (the `websearch` crate is the reference example). A legacy `pyproject.toml` skill still loads as a markdown skill, with a diagnostic explaining that its Python package is ignored.
 
 ## Creating Skills with WasmEdge Agent
@@ -208,11 +210,13 @@ Before executing any test module, the host inspects every artifact against an ex
 
 Successful tests are cached by content within the runtime. Before each cell, mounted skills previously tested in this runtime or referenced by local/global harness entries are revalidated when their inputs change. Reload/resume starts a fresh cache, so registered skills are tested before the next cell.
 
-The fingerprint covers mounted skill files (including tests, fixtures, and symlink target contents), workspace manifests/lockfile/configuration, runtime sources, and the scaffold version; `.git` and crate-root `target` output are excluded. This is not a filesystem lock, and it does not fingerprint external build inputs, vendored dependency contents, or the host environment.
+The fingerprint covers mounted skill files (including tests, fixtures, and symlink target contents), workspace manifests/lockfile/configuration, runtime sources, the complete `agent_lib` crate, and the scaffold version; `.git` and crate-root `target` output are excluded. Skill tests can use `agent_lib` as a dev-dependency, so library edits invalidate the shared cache and trigger revalidation before the next cell. Library changes detected during snapshotting or testing also reject validation. This is not a filesystem lock, and it does not fingerprint external build inputs, vendored dependency contents, or the host environment.
 
 A failed or interrupted revalidation prevents that cell from running or applying its source edits, and preserves the harness entry. Repair the skill through host file tools and retry; reload unmounts skills that fail the compile probe. Concurrent source changes detected during snapshotting or testing reject validation.
 
-Mount status comes from the host-managed skill dependencies in `agent_lib/Cargo.toml`. Child source directories retained after unmounting remain available for repair; they do not trigger automatic revalidation or qualify for registration tests. Test snapshots and dependency updates preserve the current mount set. Repair the source and reload to remount it.
+Mount status comes from the host-managed skill dependencies in `agent_lib/Cargo.toml`. Child source directories retained after unmounting remain available for repair; they do not trigger automatic revalidation or qualify for registration tests. Test fingerprints, test snapshots, and dependency-update staging include only mounted skills, so broken links in unmounted sources do not block these operations. The original workspace retains those sources. Repair the source and reload to remount it.
+
+Child, test, and dependency-update snapshots omit crate-root `target/` output in `agent_lib`, `rlm`, and skill crates, matching the source fingerprint exclusions. They still copy the workspace-level `target/` cache and nested source fixtures such as `fixtures/target/`. Build output remains untouched in the original workspace.
 
 Ordinary cell/library edits and unregistered, untested installed skills retain their compile-only behavior. Guest harness mutations go through the host; harness directories are no longer preopened, and writable mount roots must be separate from the configured stores. Host bash and Cargo build scripts/proc macros retain their existing host permissions. Passing tests does not guarantee task correctness. See the [Rust skill authoring guide](../skills/skill-creator/references/rust-skills.md#quality-gate).
 

@@ -251,7 +251,7 @@ export interface RustSkillMount {
 export interface SyncRustSkillsResult {
 	/** Crate names mounted and (when probed) compiling. */
 	mounted: string[];
-	/** Skills unmounted because their probe build failed. */
+	/** Skills unmounted because their sources could not be read or compiled. */
 	failed: Array<{ name: string; message: string }>;
 	/** False when the skill set and sources were already in sync (no writes). */
 	changed: boolean;
@@ -282,16 +282,16 @@ export function mountedSkillCrates(workspaceDir: string): string[] {
 	});
 }
 
-function skillsFingerprint(workspaceDir: string, skills: RustSkillMount[]): string {
-	const entries = [...skills]
-		.sort((a, b) => a.crateName.localeCompare(b.crateName))
-		.map((skill) => {
+function skillsFingerprint(workspaceDir: string, sources: Map<RustSkillMount, string>): string {
+	const entries = [...sources]
+		.sort(([a], [b]) => a.crateName.localeCompare(b.crateName))
+		.map(([skill, sourceFingerprint]) => {
 			const path = join(workspaceDir, "skills", skill.crateName);
 			const mount = lstatSync(path, { throwIfNoEntry: false });
 			return [
 				skill.crateName,
 				skill.cratePath,
-				skillSourceFingerprint(skill.cratePath),
+				sourceFingerprint,
 				{ mode: mount?.mode, link: mount?.isSymbolicLink() ? readlinkSync(path) : null },
 			];
 		});
@@ -404,21 +404,33 @@ export function syncRustSkills(
 	skills: RustSkillMount[],
 	options?: { cargoBin?: string },
 ): SyncRustSkillsResult {
+	const sources = new Map<RustSkillMount, string>();
+	const failed: SyncRustSkillsResult["failed"] = [];
+	for (const skill of skills) {
+		try {
+			sources.set(skill, skillSourceFingerprint(skill.cratePath));
+		} catch (error) {
+			failed.push({
+				name: skill.name,
+				message: `Cannot read skill sources: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+	}
 	const hashPath = join(workspaceDir, SKILLS_HASH_FILE);
-	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, skills)}`;
+	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, sources)}`;
 	const previous = existsSync(hashPath) ? readFileSync(hashPath, "utf-8").trim() : undefined;
-	if (previous === fingerprint) {
+	if (previous === fingerprint && failed.length === 0) {
 		return { mounted: skills.map((skill) => skill.crateName), failed: [], changed: false };
 	}
 
-	let active = [...skills];
+	let active = [...sources.keys()];
 	applySkillMounts(workspaceDir, active);
-	const failed: SyncRustSkillsResult["failed"] = [];
 
 	if (options?.cargoBin && active.length > 0) {
 		const agentLib = probeBuild(workspaceDir, options.cargoBin, "agent_lib");
 		if (!agentLib.ok) {
 			// Attribute the breakage per skill, then remount only the healthy ones.
+			const failuresBeforeProbes = failed.length;
 			for (const skill of [...active]) {
 				// Cargo resolves all members even with -p. Keep only this skill in the
 				// generated config, but retain source mounts for its path dependencies.
@@ -430,14 +442,16 @@ export function syncRustSkills(
 				}
 			}
 			applySkillMounts(workspaceDir, active);
-			if (failed.length === 0) {
+			if (failed.length === failuresBeforeProbes) {
 				// agent_lib itself is broken (e.g. stale helpers); surface that.
 				failed.push({ name: "agent_lib", message: agentLib.message });
 			}
 		}
 	}
 
-	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, active)}\n`);
+	// Keep the pre-probe source hashes so concurrent edits require another probe.
+	const activeSources = new Map([...sources].filter(([skill]) => active.includes(skill)));
+	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, activeSources)}\n`);
 	return { mounted: active.map((skill) => skill.crateName), failed, changed: true };
 }
 

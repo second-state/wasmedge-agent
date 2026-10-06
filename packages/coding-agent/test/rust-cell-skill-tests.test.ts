@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +15,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
 import * as cellProcess from "../src/core/rust-cell/process.js";
 import { testRustSkill } from "../src/core/rust-cell/skill-tests.js";
+import { SkillValidation } from "../src/core/rust-cell/skill-validation.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt, syncRustSkills } from "../src/core/rust-cell/workspace.js";
 import { socketClient } from "./fixtures/rust-cell-network.js";
@@ -60,6 +70,9 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
     std::fs::write("/scratch/result", "ok").unwrap();
 }`;
 		const f = fixture(source);
+		mkdirSync(join(f.cratePath, "target"));
+		const unusedBuildLink = join(f.cratePath, "target/dangling");
+		symlinkSync(join(f.root, "missing-build-output"), unusedBuildLink);
 		mkdirSync(join(f.cratePath, "tests"));
 		const integration = join(f.cratePath, "tests/integration.rs");
 		writeFileSync(integration, "#[test] fn integration() { assert_eq!(example::value(), 42); }");
@@ -71,6 +84,8 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		mkdirSync(join(unmounted, "src"), { recursive: true });
 		writeFileSync(join(unmounted, "Cargo.toml"), "[package\n");
 		writeFileSync(join(unmounted, "src/lib.rs"), "not Rust");
+		symlinkSync(join(f.root, "missing"), join(unmounted, "dangling"));
+		symlinkSync(unmounted, join(unmounted, "cycle"));
 		const processes = vi.spyOn(cellProcess, "runProcess");
 		try {
 			await expect(testRustSkill(reference, f.options)).resolves.toBeUndefined();
@@ -82,7 +97,9 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		}
 		expect(readFileSync(join(f.workspace, "cell/src/main.rs"), "utf8")).toBe("not compilable cell source");
 		expect(readFileSync(join(f.cratePath, "src/lib.rs"), "utf8")).toBe(source);
+		expect(lstatSync(unusedBuildLink).isSymbolicLink()).toBe(true);
 		expect(readFileSync(incompleteSource, "utf8")).toBe("unfinished child skill without a manifest");
+		for (const link of ["dangling", "cycle"]) expect(lstatSync(join(unmounted, link)).isSymbolicLink()).toBe(true);
 		expect(existsSync(join(f.root, "result"))).toBe(false);
 		writeFileSync(integration, '#[test] fn integration() { panic!("integration failure"); }');
 		await expect(testRustSkill(reference, f.options)).rejects.toThrow(
@@ -161,22 +178,54 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		await expect(testRustSkill(reference, f.options)).rejects.toThrow(/at least one passing/);
 	});
 
-	it("rejects live source edits while the snapshot tests are running", { timeout: 180_000 }, async () => {
-		const f = fixture("pub fn value() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(value(), 42); }");
-		const original = cellProcess.runProcess;
-		const processes = vi.spyOn(cellProcess, "runProcess").mockImplementation(async (bin, args, options) => {
-			const result = await original(bin, args, options);
-			if (bin === toolchain!.wasmedgeBin) {
-				writeFileSync(join(f.cratePath, "src/lib.rs"), "pub fn value() -> u32 { 43 }");
-			}
-			return result;
+	it("retests skill dev-dependencies after workspace library edits", { timeout: 180_000 }, async () => {
+		const f = fixture("#[test] fn library_value() { assert_eq!(agent_lib::test_value(), 42); }");
+		const manifest = join(f.cratePath, "Cargo.toml");
+		writeFileSync(
+			manifest,
+			`${readFileSync(manifest, "utf8")}\n[dev-dependencies]\nagent_lib = { path = "../../agent_lib" }\n`,
+		);
+		const library = join(f.workspace, "agent_lib/src/lib.rs");
+		const original = readFileSync(library, "utf8");
+		writeFileSync(library, `${original}\npub fn test_value() -> u32 { 42 }\n`);
+		const gate = new SkillValidation(f.options);
+		await gate.test(reference);
+		writeFileSync(library, `${original}\npub fn test_value() -> u32 { 43 }\n`);
+		const runner = new CellRunner({
+			...f.options,
+			cwd: f.root,
+			cellTimeoutMs: f.options.timeoutMs,
+			validateSkills: (signal, timeoutMs) => gate.revalidate([], signal, timeoutMs),
 		});
-		try {
-			await expect(testRustSkill(reference, f.options)).rejects.toThrow("changed during testing");
-		} finally {
-			processes.mockRestore();
-		}
+		const result = await runner.execute({ code: 'fn main() { println!("executed"); }' });
+		expect(result).toMatchObject({ status: "error", compileMs: 0, runMs: 0, libApplied: false });
+		expect(result.stderr).toContain("requires passing tests");
+		expect(result.stderr).toContain("sandboxed skill tests failed");
+		expect(result.stdout).toBe("");
 	});
+
+	it.each(["skill", "library"])(
+		"rejects live %s edits while the snapshot tests are running",
+		{ timeout: 180_000 },
+		async (changed) => {
+			const f = fixture("pub fn value() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(value(), 42); }");
+			const original = cellProcess.runProcess;
+			const processes = vi.spyOn(cellProcess, "runProcess").mockImplementation(async (bin, args, options) => {
+				const result = await original(bin, args, options);
+				if (bin === toolchain!.wasmedgeBin) {
+					const source =
+						changed === "skill" ? join(f.cratePath, "src/lib.rs") : join(f.workspace, "agent_lib/src/lib.rs");
+					writeFileSync(source, "pub fn value() -> u32 { 43 }");
+				}
+				return result;
+			});
+			try {
+				await expect(testRustSkill(reference, f.options)).rejects.toThrow("changed during testing");
+			} finally {
+				processes.mockRestore();
+			}
+		},
+	);
 
 	it("bounds hanging tests and propagates cancellation", { timeout: 180_000 }, async () => {
 		const f = fixture("#[test] fn hangs() { loop { std::hint::black_box(1); } }");

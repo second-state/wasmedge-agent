@@ -75,6 +75,8 @@ export {
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends CellResourceLimits {
+	/** Wait for the previous runtime to release this workspace before provisioning. */
+	beforeStart?: Promise<void>;
 	/** Guest /workspace access; defaults to rw. Fixed until the runtime is rebuilt. */
 	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Project directory mounted at /workspace. */
@@ -114,6 +116,9 @@ export class RustCellProvisioner {
 	private workspace: string | undefined;
 	private bridgeServer: BridgeServer | undefined;
 	private skillValidation: SkillValidation | undefined;
+	private lifetime = new AbortController();
+	private stopping: Promise<void> | undefined;
+	private readonly pendingSkillTests = new Set<Promise<void>>();
 
 	constructor(options: RustCellProvisionerOptions) {
 		validateCellResourceLimits(options);
@@ -122,6 +127,9 @@ export class RustCellProvisioner {
 			preludeExtra: normalizePreludeExtra(options.preludeExtra),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(options.workspaceWritePolicy),
 		};
+		// A lazy runtime may not start until long after its predecessor closes.
+		// Observe rejection now; ensure() still propagates it to the caller.
+		void options.beforeStart?.catch(() => {});
 	}
 
 	get workspaceWritePolicy(): WorkspaceWritePolicy {
@@ -129,7 +137,7 @@ export class RustCellProvisioner {
 	}
 
 	get hasRunner(): boolean {
-		return this.runner !== undefined;
+		return this.runner !== undefined && !this.stopping;
 	}
 
 	/** An on-disk workspace can be listed before runtime/toolchain initialization. */
@@ -156,24 +164,42 @@ export class RustCellProvisioner {
 
 	async testSkill(reference: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
+		await this.stopping;
+		const lifetime = this.lifetime.signal;
+		const combined = signal ? AbortSignal.any([lifetime, signal]) : lifetime;
+		combined.throwIfAborted();
 		await this.ensure();
-		await this.skillValidation!.test(reference, signal);
+		combined.throwIfAborted();
+		const testing = this.skillValidation!.test(reference, combined);
+		this.pendingSkillTests.add(testing);
+		try {
+			await testing;
+		} finally {
+			this.pendingSkillTests.delete(testing);
+		}
 	}
 
 	ensure(onProgress?: (message: string) => void): Promise<CellRunner> {
+		if (this.stopping) return this.stopping.then(() => this.ensure(onProgress));
 		if (this.runner) return Promise.resolve(this.runner);
 		if (this.starting) return this.starting;
-		this.starting = this.start(onProgress).then(
-			(runner) => {
+		const lifetime = this.lifetime.signal;
+		this.starting = Promise.resolve(this.options.beforeStart)
+			.then(() => {
+				lifetime.throwIfAborted();
+				return this.start(onProgress);
+			})
+			.then(async (runner) => {
 				this.runner = runner;
-				this.starting = undefined;
+				if (lifetime.aborted) {
+					await runner.dispose();
+					lifetime.throwIfAborted();
+				}
 				return runner;
-			},
-			(error) => {
+			})
+			.finally(() => {
 				this.starting = undefined;
-				throw error;
-			},
-		);
+			});
 		return this.starting;
 	}
 
@@ -230,9 +256,7 @@ export class RustCellProvisioner {
 			onProgress?.("Mounting rust skills...");
 			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });
 			for (const failure of sync.failed) {
-				this.options.onDiagnostic?.(
-					`rust skill "${failure.name}" failed to compile and was unmounted: ${failure.message}`,
-				);
+				this.options.onDiagnostic?.(`rust skill "${failure.name}" was unmounted: ${failure.message}`);
 			}
 		}
 		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
@@ -296,11 +320,25 @@ export class RustCellProvisioner {
 		return listPersistentState(workspace);
 	}
 
-	async dispose(): Promise<void> {
-		this.runner = undefined;
-		this.starting = undefined;
-		const bridge = this.bridgeServer;
-		this.bridgeServer = undefined;
-		await bridge?.dispose();
+	dispose(): Promise<void> {
+		if (this.stopping) return this.stopping;
+		this.lifetime.abort(new Error("Rust cell runtime disposed"));
+		const runnerStopped = this.runner?.dispose();
+		this.stopping = (async () => {
+			await this.starting?.catch(() => undefined);
+			await this.options.beforeStart;
+			await runnerStopped;
+			await this.runner?.dispose();
+			await Promise.allSettled(this.pendingSkillTests);
+			await this.bridgeServer?.dispose();
+		})().finally(() => {
+			this.runner = undefined;
+			this.starting = undefined;
+			this.bridgeServer = undefined;
+			this.skillValidation = undefined;
+			this.lifetime = new AbortController();
+			this.stopping = undefined;
+		});
+		return this.stopping;
 	}
 }

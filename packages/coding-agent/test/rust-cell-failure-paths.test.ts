@@ -3,11 +3,12 @@
  * mid-run aborts. Skipped without the Rust/WasmEdge toolchain + warm template. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { isTemplateWarm, resolveToolchain, type ToolchainInfo } from "../src/core/rust-cell/toolchain.js";
 import { ensureWorkspaceAt } from "../src/core/rust-cell/workspace.js";
 
@@ -117,5 +118,54 @@ describe.skipIf(!available)("rust cell failure paths", () => {
 		const tight = makeRunner(cwd, workspace, 12_000);
 		const spin = await tight.execute({ code: "fn main() { loop { std::hint::spin_loop(); } }" });
 		expect(spin.status).toBe("timeout");
+	});
+
+	it("stops a running guest and queued cells before restarting the workspace", { timeout: 180_000 }, async () => {
+		const { cwd, workspace } = makeWorkspace();
+		const provisioner = new RustCellProvisioner({ cwd, workspaceDir: workspace, cellTimeoutMs: 120_000 });
+		const emergency = new AbortController();
+		try {
+			const runner = await provisioner.ensure();
+			let ready!: () => void;
+			const running = new Promise<void>((resolve) => {
+				ready = resolve;
+			});
+			const code =
+				'use std::io::Write; fn main() { println!("running"); std::io::stdout().flush().unwrap(); loop { std::hint::spin_loop(); } }';
+			let output = "";
+			const active = runner.execute(
+				{ code },
+				{
+					signal: emergency.signal,
+					onChunk: (chunk, stream) => {
+						if (stream === "stdout") output += chunk;
+						if (output.includes("running")) ready();
+					},
+				},
+			);
+			const queued = runner.execute(
+				{ code: 'fn main() { std::fs::write("/workspace/queued", "ran").unwrap(); }' },
+				{ signal: emergency.signal },
+			);
+			await Promise.race([
+				running,
+				active.then((result) => {
+					throw new Error(`Guest exited before readiness: ${JSON.stringify(result)}`);
+				}),
+			]);
+			await provisioner.dispose();
+			expect(await active).toMatchObject({ status: "aborted", stdout: "running\n" });
+			expect(await queued).toMatchObject({ status: "aborted", compileMs: 0, runMs: 0, libApplied: false });
+			expect(existsSync(join(cwd, "queued"))).toBe(false);
+			expect(readFileSync(join(workspace, "cell/src/main.rs"), "utf8")).toBe(code);
+			const restarted = await provisioner.ensure();
+			expect(restarted).not.toBe(runner);
+			const result = await restarted.execute({ code: 'fn main() { println!("restarted"); }' });
+			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+			expect(result.stdout.trim()).toBe("restarted");
+		} finally {
+			emergency.abort();
+			await provisioner.dispose();
+		}
 	});
 });

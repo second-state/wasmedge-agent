@@ -14,10 +14,15 @@ export class SkillValidation {
 		timeoutMs = this.options.timeoutMs,
 	): Promise<void> {
 		const crate = skillReferenceCrate(reference);
-		const fingerprint = skillTestFingerprint(this.options.workspaceDir);
+		const fingerprint = skillTestFingerprint(
+			this.options.workspaceDir,
+			mountedSkillCrates(this.options.workspaceDir),
+		);
 		await testRustSkill(reference, { ...this.options, signal, timeoutMs });
 		signal?.throwIfAborted();
-		if (skillTestFingerprint(this.options.workspaceDir) !== fingerprint) {
+		if (
+			skillTestFingerprint(this.options.workspaceDir, mountedSkillCrates(this.options.workspaceDir)) !== fingerprint
+		) {
 			throw new Error(`Skill sources changed during testing: ${crate}; retry validation`);
 		}
 		this.passed.set(crate, fingerprint);
@@ -35,7 +40,7 @@ export class SkillValidation {
 			if (!mounted.has(crate)) crates.delete(crate);
 		}
 		if (crates.size === 0) return;
-		const fingerprint = skillTestFingerprint(this.options.workspaceDir);
+		const fingerprint = skillTestFingerprint(this.options.workspaceDir, [...mounted]);
 		for (const crate of crates) {
 			signal.throwIfAborted();
 			if (this.passed.get(crate) === fingerprint) continue;

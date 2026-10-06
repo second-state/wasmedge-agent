@@ -10,8 +10,8 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
-import type { RustSkillMount } from "./workspace.js";
+import { dirname, join, relative, sep } from "node:path";
+import { mountedSkillCrates, type RustSkillMount } from "./workspace.js";
 
 export const WORKSPACE_SEED_DIR = ".rust-workspace-seed";
 const INHERITED_MARKER = ".inherited-workspace";
@@ -30,19 +30,38 @@ const SNAPSHOT_PATHS = [
 ];
 
 /** Capture before spawn admission, while the parent cell still owns its
- * workspace. Skills are materialized so child edits cannot reach the parent. */
-export function snapshotWorkspace(source: string, destination: string): void {
+ * workspace. Skills are materialized so child edits cannot reach the parent.
+ * Test/dependency workspaces can omit unmounted sources retained for repair. */
+export function snapshotWorkspace(
+	source: string,
+	destination: string,
+	options?: { mountedSkillsOnly?: boolean },
+): void {
 	mkdirSync(dirname(destination), { recursive: true });
 	const staging = mkdtempSync(join(dirname(destination), ".workspace-snapshot-"));
 	try {
-		for (const path of SNAPSHOT_PATHS) {
+		const paths = SNAPSHOT_PATHS.flatMap((path) =>
+			path === "skills" && options?.mountedSkillsOnly
+				? mountedSkillCrates(source).map((crate) => `skills/${crate}`)
+				: [path],
+		);
+		for (const path of paths) {
 			if (!lstatSync(join(source, path), { throwIfNoEntry: false })) continue;
 			cpSync(join(source, path), join(staging, path), {
 				recursive: true,
 				dereference: true,
 				preserveTimestamps: true,
 				mode: constants.COPYFILE_FICLONE,
-				filter: (entry) => !entry.split(/[\\/]/).includes(".git"),
+				filter: (entry) => {
+					const parts = relative(source, entry).split(sep);
+					if (parts.includes(".git")) return false;
+					// Reuse the workspace cache, not standalone crate build output.
+					return !(
+						parts.at(-1) === "target" &&
+						((parts.length === 2 && (parts[0] === "agent_lib" || parts[0] === "rlm")) ||
+							(parts.length === 3 && parts[0] === "skills"))
+					);
+				},
 			});
 		}
 		mkdirSync(join(staging, "cell", "src"), { recursive: true });

@@ -21,7 +21,7 @@ export function skillSourceFingerprint(root: string, paths: string[] = ["."]): s
 			ancestors.add(real);
 			hash.update("directory");
 			for (const name of readdirSync(absolute).sort()) {
-				const crateRoot = path === "." || path === "rlm" || /^skills\/[^/]+$/.test(path);
+				const crateRoot = path === "." || path === "rlm" || path === "agent_lib" || /^skills\/[^/]+$/.test(path);
 				if (name !== ".git" && !(name === "target" && crateRoot)) visit(`${path}/${name}`);
 			}
 			ancestors.delete(real);
@@ -36,15 +36,15 @@ export function skillSourceFingerprint(root: string, paths: string[] = ["."]): s
 	return hash.digest("hex");
 }
 
-/** All mounted crates can be path dependencies of the skill under test. */
-export function skillTestFingerprint(workspace: string): string {
+/** Mounted crates and agent_lib can be path/dev-dependencies of skill tests. */
+export function skillTestFingerprint(workspace: string, mountedSkills: readonly string[]): string {
 	return skillSourceFingerprint(workspace, [
 		"Cargo.toml",
-		"agent_lib/Cargo.toml",
+		"agent_lib",
 		"Cargo.lock",
 		".cargo",
 		".workspace-version",
 		"rlm",
-		"skills",
+		...[...mountedSkills].sort().map((crate) => `skills/${crate}`),
 	]);
 }
