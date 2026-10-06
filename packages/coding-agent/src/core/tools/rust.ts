@@ -39,6 +39,8 @@ export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
 export interface RustToolOptions extends CellResourceLimits {
+	/** Test proposed lib edits in WASI before applying them; defaults to false. */
+	libraryTestGate?: boolean;
 	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */
 	workspaceWritePolicy?: WorkspaceWritePolicy;
 	/** Persistent workspace dir (session artifacts); temp dir when omitted. */
@@ -66,6 +68,7 @@ export function createRustToolDefinition(
 		options?.provisioner ??
 		new RustCellProvisioner({
 			cwd,
+			libraryTestGate: options?.libraryTestGate,
 			workspaceWritePolicy: options?.workspaceWritePolicy,
 			workspaceDir: options?.workspaceDir,
 			cellTimeoutMs: options?.cellTimeoutMs,
@@ -86,6 +89,9 @@ export function createRustToolDefinition(
 			"environment via the bash tool." +
 			(provisioner.workspaceWritePolicy === "ro"
 				? " /workspace is read-only for guest execution. Produce a patch for host-side application; /agent/state and /scratch remain writable. Cargo and host tools retain host permissions."
+				: "") +
+			(provisioner.libraryTestGate
+				? " Library test gate is enabled: lib edits must pass agent_lib's WASI unit/integration tests before being applied. Include at least one non-ignored test; tests have only /scratch access, without project, state, or bridge access. Failed validation leaves the submitted source edits unapplied."
 				: ""),
 		promptSnippet: "rust - sandboxed Rust cells with explicit persistence (rlm::state, agent_lib)",
 		// Cells share one workspace and one target dir — never two cells at once.

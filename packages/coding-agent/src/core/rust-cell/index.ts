@@ -14,6 +14,7 @@ import { CellRunner } from "./cell-runner.js";
 import { createDependencyHandler } from "./dependencies.js";
 import { readCellDependencies, workspaceDependencies } from "./dependency-catalog.js";
 import { recoverDependencyUpdate } from "./dependency-transaction.js";
+import { normalizeLibraryTestGate } from "./library-tests.js";
 import {
 	configurePreludeExtra,
 	normalizePreludeExtra,
@@ -75,6 +76,8 @@ export {
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends CellResourceLimits {
+	/** Test proposed lib edits in WASI before applying them; defaults to false. */
+	libraryTestGate?: boolean;
 	/** Wait for the previous runtime to release this workspace before provisioning. */
 	beforeStart?: Promise<void>;
 	/** Guest /workspace access; defaults to rw. Fixed until the runtime is rebuilt. */
@@ -124,6 +127,7 @@ export class RustCellProvisioner {
 		validateCellResourceLimits(options);
 		this.options = {
 			...options,
+			libraryTestGate: normalizeLibraryTestGate(options.libraryTestGate),
 			preludeExtra: normalizePreludeExtra(options.preludeExtra),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(options.workspaceWritePolicy),
 		};
@@ -134,6 +138,10 @@ export class RustCellProvisioner {
 
 	get workspaceWritePolicy(): WorkspaceWritePolicy {
 		return this.options.workspaceWritePolicy;
+	}
+
+	get libraryTestGate(): boolean {
+		return this.options.libraryTestGate === true;
 	}
 
 	get hasRunner(): boolean {
@@ -286,6 +294,7 @@ export class RustCellProvisioner {
 			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
 		});
 		return new CellRunner({
+			libraryTestGate: this.libraryTestGate,
 			workspaceWritePolicy: this.workspaceWritePolicy,
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,

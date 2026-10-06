@@ -41,6 +41,19 @@ Each `rust` tool call runs one complete program:
 5. Execution has explicit preopens: the project at `/workspace` (writable by default, read-only with `rustCell.workspaceWritePolicy: "ro"`), persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks library readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
 6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
 
+With `rustCell.libraryTestGate: true` (default: false), nonempty `lib` edits are
+first applied to a disposable workspace snapshot. The host builds `agent_lib`
+unit/integration tests with `cargo test --release --offline --target wasm32-wasip1
+--no-run --lib --tests -p agent_lib`, validates all artifacts with the same import
+allowlist, and runs them in WasmEdge with only `/scratch`. All modules must pass
+and at least one non-ignored test must run. Validation shares the cell deadline,
+cancellation, gas and memory limits. It checks source fingerprints before and
+after testing, including the edited snapshot, and publishes no source edits on
+failure. The normal cell build and its rollback behavior follow successful
+validation. Library tests are not cached between edits; doctests and dependent
+skill test suites are not included. Cargo retains host permissions, and the
+fingerprint has the same external-input limitations as skill validation.
+
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and code promoted into `agent_lib`, are available to every later cell.
 
 Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example.
