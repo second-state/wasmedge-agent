@@ -70,6 +70,9 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
     std::fs::write("/scratch/result", "ok").unwrap();
 }`;
 		const f = fixture(source);
+		mkdirSync(join(f.cratePath, "target"));
+		const unusedBuildLink = join(f.cratePath, "target/dangling");
+		symlinkSync(join(f.root, "missing-build-output"), unusedBuildLink);
 		mkdirSync(join(f.cratePath, "tests"));
 		const integration = join(f.cratePath, "tests/integration.rs");
 		writeFileSync(integration, "#[test] fn integration() { assert_eq!(example::value(), 42); }");
@@ -94,6 +97,7 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		}
 		expect(readFileSync(join(f.workspace, "cell/src/main.rs"), "utf8")).toBe("not compilable cell source");
 		expect(readFileSync(join(f.cratePath, "src/lib.rs"), "utf8")).toBe(source);
+		expect(lstatSync(unusedBuildLink).isSymbolicLink()).toBe(true);
 		expect(readFileSync(incompleteSource, "utf8")).toBe("unfinished child skill without a manifest");
 		for (const link of ["dangling", "cycle"]) expect(lstatSync(join(unmounted, link)).isSymbolicLink()).toBe(true);
 		expect(existsSync(join(f.root, "result"))).toBe(false);

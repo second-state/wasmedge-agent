@@ -10,7 +10,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { mountedSkillCrates, type RustSkillMount } from "./workspace.js";
 
 export const WORKSPACE_SEED_DIR = ".rust-workspace-seed";
@@ -52,7 +52,16 @@ export function snapshotWorkspace(
 				dereference: true,
 				preserveTimestamps: true,
 				mode: constants.COPYFILE_FICLONE,
-				filter: (entry) => !entry.split(/[\\/]/).includes(".git"),
+				filter: (entry) => {
+					const parts = relative(source, entry).split(sep);
+					if (parts.includes(".git")) return false;
+					// Reuse the workspace cache, not standalone crate build output.
+					return !(
+						parts.at(-1) === "target" &&
+						((parts.length === 2 && (parts[0] === "agent_lib" || parts[0] === "rlm")) ||
+							(parts.length === 3 && parts[0] === "skills"))
+					);
+				},
 			});
 		}
 		mkdirSync(join(staging, "cell", "src"), { recursive: true });

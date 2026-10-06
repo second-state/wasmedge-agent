@@ -84,6 +84,40 @@ describe("child workspace snapshots", () => {
 		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
 
+	it.each([false, true])("omits crate build output but preserves cache and fixtures (selected: %s)", (selected) => {
+		const { root, parent, seed, write, skill } = fixture();
+		const crates = ["agent_lib", "rlm", "skills/tool"];
+		for (const crate of crates) {
+			write(join(parent, crate, "target/debug/output"), "unused build output");
+			symlinkSync(join(root, "missing"), join(parent, crate, "target/dangling"));
+			symlinkSync(join(parent, crate, "target"), join(parent, crate, "target/cycle"));
+			write(join(parent, crate, "fixtures/target/input"), "test input");
+		}
+		write(join(parent, "target/release/cached"), "workspace cache");
+		write(join(parent, "vendor/dependency/target/input"), "vendored input");
+		snapshotWorkspace(parent, seed, { mountedSkillsOnly: selected });
+		for (const crate of crates) {
+			expect(existsSync(join(seed, crate, "target"))).toBe(false);
+			expect(readFileSync(join(seed, crate, "fixtures/target/input"), "utf8")).toBe("test input");
+			expect(readFileSync(join(parent, crate, "target/debug/output"), "utf8")).toBe("unused build output");
+			for (const link of ["dangling", "cycle"])
+				expect(lstatSync(join(parent, crate, "target", link)).isSymbolicLink()).toBe(true);
+		}
+		expect(readFileSync(join(seed, "target/release/cached"), "utf8")).toBe("workspace cache");
+		expect(readFileSync(join(seed, "vendor/dependency/target/input"), "utf8")).toBe("vendored input");
+		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf8")).toBe("parent skill");
+	});
+
+	it.each(["dangling", "cycle"])("does not dereference a %s crate target link", (kind) => {
+		const { root, parent, seed, skill } = fixture();
+		const target = join(skill.cratePath, "target");
+		symlinkSync(kind === "cycle" ? skill.cratePath : join(root, "missing"), target);
+		snapshotWorkspace(parent, seed);
+		expect(existsSync(join(seed, "skills/tool/target"))).toBe(false);
+		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf8")).toBe("parent skill");
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+	});
+
 	it.each(["dangling", "cycle"])("excludes %s unmounted sources from selected snapshots", (kind) => {
 		const { root, parent, seed, write } = fixture();
 		const unmounted = join(parent, "skills/unmounted");
