@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 
@@ -56,6 +56,54 @@ describe("session workspace history", () => {
 		history.snapshot("tool-1");
 		expect(git("ls-tree", "-r", "--name-only", "HEAD")).not.toContain("private.txt");
 		expect(git("diff", "--cached", "--name-only")).toBe("private.txt");
+	});
+
+	it.each(["initial", "cell", "dependency"])("waits for automatic maintenance during %s snapshots", (kind) => {
+		const { root, ws, write, git, history } = fixture();
+		git("init", "--quiet", "--template=");
+		git("config", "maintenance.autoDetach", "true");
+		git("config", "gc.autoDetach", "true");
+		git("config", "maintenance.gc.enabled", "false");
+		git("config", "maintenance.commit-graph.enabled", "true");
+		git("config", "maintenance.commit-graph.auto", "-1");
+		const trace = join(root, "git-trace.jsonl");
+		const realGit = execFileSync("which", ["git"], { encoding: "utf-8" }).trim();
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		// Observe real Git's child processes after the runtime strips inherited GIT_* variables.
+		writeFileSync(
+			join(bin, "git"),
+			`#!${process.execPath}
+const { spawnSync } = require("node:child_process");
+const result = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), {
+  stdio: "inherit",
+  env: { ...process.env, GIT_TRACE2_EVENT: ${JSON.stringify(trace)} },
+});
+process.exit(result.status ?? 1);
+`,
+			{ mode: 0o755 },
+		);
+		vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH}`);
+		history.ensure();
+		if (kind !== "initial") {
+			writeFileSync(trace, "");
+			write("state/state.json", '{"counter":1}');
+			if (kind === "cell") history.snapshot("maintenance-cell");
+			else history.snapshotDependency("itoa");
+		}
+		const events = readFileSync(trace, "utf-8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { event: string; argv?: string[] });
+		const maintenance = events.filter(
+			(event) => event.event === "child_start" && event.argv?.includes("maintenance"),
+		);
+		expect(maintenance).toHaveLength(1);
+		expect(maintenance[0].argv).not.toContain("--detach");
+		expect(existsSync(join(ws, ".git", "objects", "maintenance.lock"))).toBe(false);
+		expect(existsSync(join(ws, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"))).toBe(true);
+		expect(git("commit-graph", "verify")).toBe("");
+		expect(git("fsck", "--no-dangling")).toBe("");
 	});
 
 	it("ignores inherited Git destinations and hooks without touching the enclosing project", () => {
