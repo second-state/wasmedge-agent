@@ -44,31 +44,30 @@ describe.skipIf(!available)("skill packaging (real WasmEdge, faux provider)", ()
 		return getMessageText(result);
 	}
 
-	it(
-		"scaffolds through the bridge, mounts on reload, and retains the registration test gate",
-		{ timeout: 300_000 },
-		async () => {
-			agentDir = mkdtempSync(join(tmpdir(), "skill-package-agent-"));
-			process.env.WASMEDGE_AGENT_CODING_AGENT_DIR = agentDir;
-			const resources = { skills: [] as Skill[] };
-			const resourceLoader = createTestResourceLoader(resources);
-			resourceLoader.reload = async () => {
-				const loaded = loadSkillsFromDir({
-					dir: join(harness!.tempDir, CONFIG_DIR_NAME, "skills"),
-					source: "project",
-				});
-				expect(loaded.diagnostics).toEqual([]);
-				resources.skills = loaded.skills;
-			};
-			harness = await createHarness({
-				persistSession: true,
-				isolateSessionStorage: true,
-				settings: { rustCell: { cellTimeoutMs: 240_000 } },
-				resourceLoader,
+	it("scaffolds through the bridge, mounts on reload, and retains the registration test gate", {
+		timeout: 300_000,
+	}, async () => {
+		agentDir = mkdtempSync(join(tmpdir(), "skill-package-agent-"));
+		process.env.WASMEDGE_AGENT_CODING_AGENT_DIR = agentDir;
+		const resources = { skills: [] as Skill[] };
+		const resourceLoader = createTestResourceLoader(resources);
+		resourceLoader.reload = async () => {
+			const loaded = loadSkillsFromDir({
+				dir: join(harness!.tempDir, CONFIG_DIR_NAME, "skills"),
+				source: "project",
 			});
-			const source =
-				'pub fn run(text: &str) -> usize { text.split_whitespace().count() }\n#[test] fn words() { assert_eq!(run("one two"), 2); }';
-			await cell(`use agent_lib::prelude::*;
+			expect(loaded.diagnostics).toEqual([]);
+			resources.skills = loaded.skills;
+		};
+		harness = await createHarness({
+			persistSession: true,
+			isolateSessionStorage: true,
+			settings: { rustCell: { cellTimeoutMs: 240_000 } },
+			resourceLoader,
+		});
+		const source =
+			'pub fn run(text: &str) -> usize { text.split_whitespace().count() }\n#[test] fn words() { assert_eq!(run("one two"), 2); }';
+		await cell(`use agent_lib::prelude::*;
 fn main() -> Result<()> {
     let source = r#"${source}"#;
     let skill = rlm::skills::package("word-count", "Count words.", "Call run(text: &str) -> usize.", source)?;
@@ -79,13 +78,13 @@ fn main() -> Result<()> {
     rlm::skills::package("bad-count", "Failing tests.", "Call run(text: &str) -> usize.", &source.replace(", 2)", ", 3)"))?;
     Ok(())
 }`);
-			const local = getLocalHarnessStateDir(harness.sessionManager.getSessionArtifactDir())!;
-			expect(loadHarnessState(local, "local").entries.skill).toEqual({});
-			await harness.session.reload();
-			// Reload resets the provider registry, including the harness's faux API.
-			reloadedFaux = registerFauxProvider({ api: harness.faux.api });
-			expect(resources.skills.map((skill) => skill.name).sort()).toEqual(["bad-count", "word-count"]);
-			const output = await cell(`use agent_lib::prelude::*;
+		const local = getLocalHarnessStateDir(harness.sessionManager.getSessionArtifactDir())!;
+		expect(loadHarnessState(local, "local").entries.skill).toEqual({});
+		await harness.session.reload();
+		// Reload resets the provider registry, including the harness's faux API.
+		reloadedFaux = registerFauxProvider({ api: harness.faux.api });
+		expect(resources.skills.map((skill) => skill.name).sort()).toEqual(["bad-count", "word-count"]);
+		const output = await cell(`use agent_lib::prelude::*;
 fn main() -> Result<()> {
     assert_eq!(agent_lib::skills::word_count::run("one two three"), 3);
     let mut harness = rlm::harness::local()?;
@@ -94,8 +93,7 @@ fn main() -> Result<()> {
     println!("{error}");
     Ok(())
 }`);
-			expect(output).toContain("sandboxed skill tests failed");
-			expect(Object.keys(loadHarnessState(local, "local").entries.skill)).toEqual(["word_count"]);
-		},
-	);
+		expect(output).toContain("sandboxed skill tests failed");
+		expect(Object.keys(loadHarnessState(local, "local").entries.skill)).toEqual(["word_count"]);
+	});
 });

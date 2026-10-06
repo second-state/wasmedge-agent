@@ -173,28 +173,27 @@ describe.skipIf(!toolchain || !isTemplateWarm())("workspace rights in real WasmE
 		expect(existsSync(join(cwd, "escaped.txt"))).toBe(false);
 	});
 
-	it(
-		"denies guest mutations while retaining reads, state, scratch, and declared library edits",
-		{ timeout: 180_000 },
-		async () => {
-			const root = fixture();
-			const cwd = join(root, "project");
-			mkdirSync(cwd);
-			mkdirSync(join(cwd, "empty"));
-			writeFileSync(join(cwd, "source.txt"), "original");
-			const workspaceDir = ensureWorkspaceAt(join(root, "session"));
-			const options = {
-				cwd,
-				workspaceDir,
-				...toolchain!,
-				cellTimeoutMs: 120_000,
-				workspaceWritePolicy: "ro" as WorkspaceWritePolicy,
-			};
-			const runner = new CellRunner(options);
-			options.workspaceWritePolicy = "rw";
-			const result = await runner.execute({
-				lib: [{ path: "src/helpers/policy.rs", content: "pub fn answer() -> u32 { 42 }" }],
-				code: `use agent_lib::prelude::*;
+	it("denies guest mutations while retaining reads, state, scratch, and declared library edits", {
+		timeout: 180_000,
+	}, async () => {
+		const root = fixture();
+		const cwd = join(root, "project");
+		mkdirSync(cwd);
+		mkdirSync(join(cwd, "empty"));
+		writeFileSync(join(cwd, "source.txt"), "original");
+		const workspaceDir = ensureWorkspaceAt(join(root, "session"));
+		const options = {
+			cwd,
+			workspaceDir,
+			...toolchain!,
+			cellTimeoutMs: 120_000,
+			workspaceWritePolicy: "ro" as WorkspaceWritePolicy,
+		};
+		const runner = new CellRunner(options);
+		options.workspaceWritePolicy = "rw";
+		const result = await runner.execute({
+			lib: [{ path: "src/helpers/policy.rs", content: "pub fn answer() -> u32 { 42 }" }],
+			code: `use agent_lib::prelude::*;
 fn main() -> Result<()> {
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -217,26 +216,25 @@ fn main() -> Result<()> {
     println!("read-only checks passed");
     Ok(())
 }`,
-			});
-			expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
-			expect(result.stdout).toContain("read-only checks passed");
-			expect(readFileSync(join(cwd, "source.txt"), "utf-8")).toBe("original");
-			expect(existsSync(join(cwd, "new.txt"))).toBe(false);
-			expect(readFileSync(join(workspaceDir, "state/result.txt"), "utf-8")).toBe("state");
-			const again = await runner.execute({
-				code: `use agent_lib::prelude::*; fn main() -> Result<()> {
+		});
+		expect(result.status, result.compileDiagnostics ?? result.stderr).toBe("ok");
+		expect(result.stdout).toContain("read-only checks passed");
+		expect(readFileSync(join(cwd, "source.txt"), "utf-8")).toBe("original");
+		expect(existsSync(join(cwd, "new.txt"))).toBe(false);
+		expect(readFileSync(join(workspaceDir, "state/result.txt"), "utf-8")).toBe("state");
+		const again = await runner.execute({
+			code: `use agent_lib::prelude::*; fn main() -> Result<()> {
     assert_eq!(rlm::state::get::<u32>("answer")?, Some(42));
     assert!(std::fs::write("/workspace/source.txt", "retry").is_err());
     Ok(())
 }`,
-			});
-			expect(again.status, again.compileDiagnostics ?? again.stderr).toBe("ok");
-			const writable = new CellRunner({ ...options, workspaceWritePolicy: undefined });
-			const edited = await writable.execute({
-				code: 'fn main() { std::fs::write("/workspace/source.txt", "edited").unwrap(); }',
-			});
-			expect(edited.status, edited.stderr).toBe("ok");
-			expect(readFileSync(join(cwd, "source.txt"), "utf-8")).toBe("edited");
-		},
-	);
+		});
+		expect(again.status, again.compileDiagnostics ?? again.stderr).toBe("ok");
+		const writable = new CellRunner({ ...options, workspaceWritePolicy: undefined });
+		const edited = await writable.execute({
+			code: 'fn main() { std::fs::write("/workspace/source.txt", "edited").unwrap(); }',
+		});
+		expect(edited.status, edited.stderr).toBe("ok");
+		expect(readFileSync(join(cwd, "source.txt"), "utf-8")).toBe("edited");
+	});
 });

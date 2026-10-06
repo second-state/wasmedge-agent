@@ -170,48 +170,47 @@ fn main() -> Result<()> {
 		expect(seenTypes).toHaveLength(callsBefore);
 	});
 
-	it(
-		"renews a timed-out stdio request without replaying it or accepting a stale reply",
-		{ timeout: 180_000 },
-		async () => {
-			const root = mkdtempSync(join(tmpdir(), "bridge-stdio-timeout-"));
-			tempDirs.push(root);
-			const cwd = join(root, "project");
-			mkdirSync(cwd);
-			const workspace = ensureWorkspaceAt(join(root, "workspace"));
-			let mutations = 0;
-			let cancelled = 0;
-			const bridge = new BridgeServer({
-				handlers: {
-					"harness.request": async (payload, context) => {
-						if (payload.operation === "open") return { value: true };
-						mutations++;
-						await new Promise<void>((resolve) =>
-							context!.signal.addEventListener(
-								"abort",
-								() => {
-									cancelled++;
-									resolve();
-								},
-								{ once: true },
-							),
-						);
-						return { value: { id: "stale" } };
-					},
-					echo: async () => ({ fresh: true }),
+	it("renews a timed-out stdio request without replaying it or accepting a stale reply", {
+		timeout: 180_000,
+	}, async () => {
+		const root = mkdtempSync(join(tmpdir(), "bridge-stdio-timeout-"));
+		tempDirs.push(root);
+		const cwd = join(root, "project");
+		mkdirSync(cwd);
+		const workspace = ensureWorkspaceAt(join(root, "workspace"));
+		let mutations = 0;
+		let cancelled = 0;
+		const bridge = new BridgeServer({
+			handlers: {
+				"harness.request": async (payload, context) => {
+					if (payload.operation === "open") return { value: true };
+					mutations++;
+					await new Promise<void>((resolve) =>
+						context!.signal.addEventListener(
+							"abort",
+							() => {
+								cancelled++;
+								resolve();
+							},
+							{ once: true },
+						),
+					);
+					return { value: { id: "stale" } };
 				},
-			});
-			servers.push(bridge);
-			const runner = new CellRunner({
-				cwd,
-				workspaceDir: workspace,
-				wasmedgeBin: toolchain!.wasmedgeBin,
-				cargoBin: toolchain!.cargoBin,
-				cellTimeoutMs: 120_000,
-				bridge,
-			});
-			const result = await runner.execute({
-				code: `use agent_lib::prelude::*;
+				echo: async () => ({ fresh: true }),
+			},
+		});
+		servers.push(bridge);
+		const runner = new CellRunner({
+			cwd,
+			workspaceDir: workspace,
+			wasmedgeBin: toolchain!.wasmedgeBin,
+			cargoBin: toolchain!.cargoBin,
+			cellTimeoutMs: 120_000,
+			bridge,
+		});
+		const result = await runner.execute({
+			code: `use agent_lib::prelude::*;
 fn main() -> Result<()> {
     std::env::set_var("RLM_CELL_TIMEOUT_MS", "100");
     let mut harness = rlm::harness::local()?;
@@ -222,14 +221,13 @@ fn main() -> Result<()> {
     println!("recovered");
     Ok(())
 }`,
-			});
-			expect(result, result.compileDiagnostics ?? result.stderr).toMatchObject({
-				status: "ok",
-				stdout: "recovered\n",
-			});
-			expect(mutations).toBe(1);
-			expect(cancelled).toBe(1);
-			expect(bridge.isStarted).toBe(false);
-		},
-	);
+		});
+		expect(result, result.compileDiagnostics ?? result.stderr).toMatchObject({
+			status: "ok",
+			stdout: "recovered\n",
+		});
+		expect(mutations).toBe(1);
+		expect(cancelled).toBe(1);
+		expect(bridge.isStarted).toBe(false);
+	});
 });

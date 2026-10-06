@@ -4,7 +4,6 @@
 
 import { buildChildAgentDoctrine, buildRlmPrompt, buildSubagentGuidance } from "./prompts/index.js";
 import { readonlyWorkspacePrompt } from "./prompts/rust-rlm.js";
-import { formatHarnessStateForPrompt, type HarnessState } from "./refinement/index.js";
 import type { WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
@@ -46,8 +45,6 @@ export interface BuildSystemPromptOptions {
 	rlmCapabilities?: string[];
 	/** Authed MCP servers reachable from cells via rlm::mcp (DESIGN.md §5.3). */
 	mcpServers?: Array<{ server: string; label: string }>;
-	/** Global harness state to inject as compact persistent context. */
-	harnessState?: HarnessState;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -62,7 +59,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
 		allowRecursion,
-		harnessState,
 	} = options;
 	const promptCwd = cwd.replace(/\\/g, "/");
 	const promptMessagesPath = (messagesPath ?? "not persisted").replace(/\\/g, "/");
@@ -122,10 +118,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			prompt += `\n\n${childDoctrine}`;
 		}
 
-		if (harnessState) {
-			prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRefineCapability })}`;
-		}
-
 		if (appendSection) {
 			prompt += appendSection;
 		}
@@ -145,19 +137,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		parentAgent: options.rlmParentAgent,
 	});
 
-	// Appended AFTER the trained buildRlmPrompt prefix, and before the harness-state
-	// menu, so the model reads when/why to delegate and then sees the concrete subagent
-	// specs it can match against — the same ordering as Claude Code's Agent tool.
+	// Appended AFTER the trained buildRlmPrompt prefix: delegation doctrine precedes the subagent specs delivered via the harness digest.
 	if ((allowRecursion ?? true) && hasRust) {
 		prompt += `\n\n${buildSubagentGuidance({
 			includeRefineExamples: hasRefineCapability,
 			hasAgentMessage: rlmCapabilities.includes("agent_message"),
 			hasAgentObserve: rlmCapabilities.includes("agent_observe"),
 		})}`;
-	}
-
-	if (harnessState) {
-		prompt += `\n\n${formatHarnessStateForPrompt(harnessState, { includeRustExamples: hasRust, includeShellExamples: hasBash, includeRefineExamples: hasRefineCapability })}`;
 	}
 
 	const guidelines = formatPromptGuidelines(promptGuidelines);

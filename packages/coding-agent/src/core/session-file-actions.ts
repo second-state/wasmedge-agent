@@ -1,12 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename } from "node:path";
+import { spawnSyncHidden } from "../utils/child-process.js";
+import { getSessionArtifactPathForFile } from "./session-manager.js";
 
 export type DeleteSessionFileResult = { ok: true; method: "trash" | "unlink" } | { ok: false; error: string };
 
 export interface DeleteSessionFileOptions {
-	afterFileRemoved?: () => void;
+	afterFileRemoved?: () => void | Promise<void>;
 }
 
 /**
@@ -15,17 +16,16 @@ export interface DeleteSessionFileOptions {
  * `<dirname(sessionDir)>/session-artifacts/<id>`.
  * Only invoked on delete, never on deactivation.
  */
-async function deleteSessionArtifacts(sessionPath: string): Promise<void> {
-	const sessionId = basename(sessionPath).replace(/\.jsonl$/, "");
-	if (!sessionId) return;
-	const artifactDir = join(dirname(dirname(sessionPath)), "session-artifacts", sessionId);
-	await rm(artifactDir, { recursive: true, force: true });
+export async function deleteSessionArtifacts(sessionPath: string): Promise<void> {
+	// A degenerate name (".jsonl") would resolve to the artifacts root itself.
+	if (!basename(sessionPath).replace(/\.jsonl$/, "")) return;
+	await rm(getSessionArtifactPathForFile(sessionPath), { recursive: true, force: true });
 }
 
 /** Remove the session `.jsonl`, trying the `trash` CLI first, then falling back to unlink. */
 async function removeSessionFile(sessionPath: string): Promise<DeleteSessionFileResult> {
 	const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
-	const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+	const trashResult = spawnSyncHidden("trash", trashArgs, { encoding: "utf-8" });
 
 	const getTrashErrorHint = (): string | null => {
 		const parts: string[] = [];
@@ -67,7 +67,7 @@ export async function deleteSessionFile(
 ): Promise<DeleteSessionFileResult> {
 	const result = await removeSessionFile(sessionPath);
 	if (result.ok) {
-		options.afterFileRemoved?.();
+		await options.afterFileRemoved?.();
 		await deleteSessionArtifacts(sessionPath);
 	}
 	return result;

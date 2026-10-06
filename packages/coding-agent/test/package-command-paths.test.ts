@@ -3,8 +3,15 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { APP_NAME, ENV_AGENT_DIR, PACKAGE_NAME, SELF_UPDATE_INTERACTIVE_CHILD_ENV, VERSION } from "../src/config.js";
+import {
+	ENV_AGENT_DIR,
+	PACKAGE_NAME,
+	SELF_UPDATE_INTERACTIVE_CHILD_ENV,
+	SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE,
+	VERSION,
+} from "../src/config.js";
 import { main } from "../src/main.js";
+import { handlePackageCommand } from "../src/package-manager-cli.js";
 import { packReleaseTarball } from "./release-tarball.js";
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -70,6 +77,7 @@ describe("package commands", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		process.chdir(originalCwd);
 		process.exitCode = originalExitCode;
@@ -108,383 +116,113 @@ describe("package commands", () => {
 		expect(removedSettings.packages ?? []).toHaveLength(0);
 	});
 
-	it("shows install subcommand help", async () => {
+	it("rejects combining --nightly and --stable", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(main(["update", "--nightly", "--stable"])).resolves.toBeUndefined();
+
+			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stderr).toContain("--nightly and --stable cannot be combined");
+			expect(process.exitCode).toBe(1);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("refuses to switch to the nightly channel without a TTY or --force and changes nothing", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		try {
+			await expect(main(["update", "--nightly"])).resolves.toBeUndefined();
+
+			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stderr).toContain("Switching to the nightly channel needs confirmation");
+			expect(process.exitCode).toBe(1);
+			const settingsPath = join(agentDir, "settings.json");
+			if (existsSync(settingsPath)) {
+				expect(JSON.parse(readFileSync(settingsPath, "utf8")).updateChannel).toBeUndefined();
+			}
+		} finally {
+			errorSpy.mockRestore();
+			logSpy.mockRestore();
+		}
+	});
+
+	it("keeps a successful extension update when the nightly manifest is missing for an all target", async () => {
+		process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = "https://downloads.example.test/wasmedge-agent";
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("", { status: 404 })),
+		);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
-			await expect(main(["package", "install", "--help"])).resolves.toBeUndefined();
+			await expect(handlePackageCommand(["update", "--nightly", "--force"])).resolves.toBe(true);
 
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stdout).toContain("Usage:");
-			expect(stdout).toContain(`${APP_NAME} package install <source> [--local]`);
-			expect(errorSpy).not.toHaveBeenCalled();
+			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stdout).toContain("Updated packages");
+			expect(stderr).toContain("Could not resolve a nightly release");
+			expect(stderr).toContain("was not updated and the update channel was not changed");
 			expect(process.exitCode).toBeUndefined();
+			const settingsPath = join(agentDir, "settings.json");
+			if (existsSync(settingsPath)) {
+				expect(JSON.parse(readFileSync(settingsPath, "utf-8")).updateChannel).toBeUndefined();
+			}
 		} finally {
 			logSpy.mockRestore();
 			errorSpy.mockRestore();
 		}
 	});
 
-	it("shows a friendly error for unknown install options", async () => {
+	it("rejects --nightly for extension-only updates instead of silently ignoring it", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
-			await expect(main(["package", "install", "--unknown"])).resolves.toBeUndefined();
+			await expect(handlePackageCommand(["update", "--extensions", "--nightly"])).resolves.toBe(true);
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain('Unknown option --unknown for "install".');
-			expect(stderr).toContain(`Use "${APP_NAME} --help" or "${APP_NAME} package install <source> [--local]".`);
+			expect(stderr).toContain("--nightly and --stable only apply to WasmEdge Agent itself");
 			expect(process.exitCode).toBe(1);
 		} finally {
 			errorSpy.mockRestore();
 		}
 	});
 
-	it("directs the removed -l package option to --local", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+	interface SelfUpdateFixtureOptions {
+		/** Scope the running CLI is installed under; drives the rename/alias paths. */
+		scope?: string;
+		/** Body the update manifest fetch returns. */
+		manifest: Record<string, unknown>;
+		downloadBaseUrl?: string;
+		/** Also write a project-scoped npmCommand, to prove the global one wins. */
+		projectNpmCommand?: boolean;
+		/** Make the fake npm fail `install`, like a broken registry package. */
+		failInstall?: boolean;
+		/** Bytes served for a `.tgz` request: the artifact the manifest names. */
+		tarball?: Buffer;
+	}
 
-		try {
-			await expect(main(["package", "install", packageDir, "-l"])).resolves.toBeUndefined();
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain('Option -l was removed. Use "--local".');
-			expect(process.exitCode).toBe(1);
-			expect(existsSync(join(agentDir, "settings.json"))).toBe(false);
-		} finally {
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("treats -l as an unknown option for package update", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(main(["package", "update", "-l"])).resolves.toBeUndefined();
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain('Unknown option -l for "update".');
-			expect(stderr).not.toContain('Use "--local".');
-			expect(process.exitCode).toBe(1);
-		} finally {
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("shows a friendly error for missing install source", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(main(["package", "install"])).resolves.toBeUndefined();
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("Missing install source.");
-			expect(stderr).toContain(`Usage: ${APP_NAME} package install <source> [--local]`);
-			expect(stderr).not.toContain("at ");
-			expect(process.exitCode).toBe(1);
-		} finally {
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("uses global npmCommand and the release manifest install spec for forced self updates", async () => {
+	/**
+	 * Self-update shares one fixture: a fake npm that records every invocation, an
+	 * installed-package directory for the running CLI, and a stubbed update manifest.
+	 * Installing the wrong package or prefix is the footgun these cases guard.
+	 */
+	function setupSelfUpdate(options: SelfUpdateFixtureOptions) {
 		const globalPrefix = join(tempDir, "global-prefix");
 		const projectPrefix = join(tempDir, "project-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
+		const selfPackageDir = join(
+			globalPrefix,
+			"lib",
+			"node_modules",
+			options.scope ?? "@earendil-works",
+			"pi-coding-agent",
+		);
 		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
 		const recordPath = join(tempDir, "self-update.json");
-		const tarballUrl = "https://downloads.example.test/wasmedge-agent/wasmedge-agent-current.tgz";
-		mkdirSync(selfPackageDir, { recursive: true });
-		mkdirSync(join(projectDir, ".wasmedge-agent"), { recursive: true });
-		writeFileSync(
-			fakeNpmPath,
-			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
-if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
-else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
-`,
-		);
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
-		);
-		writeFileSync(
-			join(projectDir, ".wasmedge-agent", "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", projectPrefix] }, null, 2),
-		);
-		process.env.PI_PACKAGE_DIR = selfPackageDir;
-		Object.defineProperty(process, "execPath", {
-			value: join(selfPackageDir, "dist", "cli.js"),
-			configurable: true,
-		});
-		// The manifest has to carry the tarball's digest now: the update path
-		// verifies the bytes before the package manager sees them, so the stub
-		// answers the artifact request as well as the manifest one.
-		const tarballBytes = packReleaseTarball({ name: PACKAGE_NAME, version: VERSION });
-		const fetchMock = vi.fn(async (input: string) =>
-			String(input).endsWith(".tgz")
-				? new Response(tarballBytes)
-				: Response.json({
-						tarball: tarballUrl,
-						tarballs: [
-							{
-								file: "wasmedge-agent-current.tgz",
-								sha256: createHash("sha256").update(tarballBytes).digest("hex"),
-							},
-						],
-						version: VERSION,
-					}),
-		);
-		vi.stubGlobal("fetch", fetchMock);
-
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(runSelfUpdateInstallChild(["update", "--self", "--force"])).resolves.toBeUndefined();
-
-			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
-			// The manifest, then the artifact it names.
-			expect(fetchMock).toHaveBeenCalledTimes(2);
-			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
-			expect(recordedArgs).toContain(globalPrefix);
-			expect(recordedArgs).not.toContain(projectPrefix);
-			// The verified copy, not the URL: npm never fetches this itself.
-			expect(recordedArgs).not.toContain(tarballUrl);
-			expect(recordedArgs.some((arg) => arg.endsWith("wasmedge-agent-current.tgz"))).toBe(true);
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("refuses to self-update from a manifest that names neither a tarball nor a package", async () => {
-		const globalPrefix = join(tempDir, "global-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@mariozechner", "pi-coding-agent");
-		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
-		const recordPath = join(tempDir, "self-update.json");
-		mkdirSync(selfPackageDir, { recursive: true });
-		writeFileSync(
-			fakeNpmPath,
-			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
-if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
-else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
-`,
-		);
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
-		);
-		process.env.PI_PACKAGE_DIR = selfPackageDir;
-		Object.defineProperty(process, "execPath", {
-			value: join(selfPackageDir, "dist", "cli.js"),
-			configurable: true,
-		});
-		const fetchMock = vi.fn(async () => Response.json({ version: getNewerPatchVersion() }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			// This test used to assert the opposite -- that a version-only
-			// manifest installs PACKAGE_NAME -- which is the hazard itself: the
-			// only spec available there is our own constant, and nothing
-			// published under it on a registry is ours. The manifest has to name
-			// what to install.
-			await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-			expect(process.exitCode).toBe(1);
-			expect(fetchMock).toHaveBeenCalledOnce();
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("neither a tarball nor a package");
-			// The real package manager was never reached, so it recorded nothing.
-			expect(existsSync(recordPath)).toBe(false);
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("installs the active package name from the update check during self-update", async () => {
-		const globalPrefix = join(tempDir, "global-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@mariozechner", "pi-coding-agent");
-		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
-		const recordPath = join(tempDir, "self-update.json");
-		mkdirSync(selfPackageDir, { recursive: true });
-		writeFileSync(
-			fakeNpmPath,
-			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
-if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
-else {
-	const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.readFileSync(${JSON.stringify(recordPath)},"utf-8")):[];
-	records.push(args);
-	fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(records));
-}
-`,
-		);
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
-		);
-		process.env.PI_PACKAGE_DIR = selfPackageDir;
-		Object.defineProperty(process, "execPath", {
-			value: join(selfPackageDir, "dist", "cli.js"),
-			configurable: true,
-		});
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
-		);
-
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
-			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
-			expect(recordedCalls).toEqual([
-				expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-				expect.arrayContaining(["install", "-g", activePackageName]),
-			]);
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("installs the WasmEdge Agent tarball from the update manifest during self-update", async () => {
-		const globalPrefix = join(tempDir, "global-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
-		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
-		const recordPath = join(tempDir, "self-update.json");
-		const baseUrl = "https://downloads.example.test/wasmedge-agent";
-		const tarballPath = "releases/v0.73.0/wasmedge-agent-0.73.0.tgz";
-		mkdirSync(selfPackageDir, { recursive: true });
-		writeFileSync(
-			fakeNpmPath,
-			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
-if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
-else {
-	const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.readFileSync(${JSON.stringify(recordPath)},"utf-8")):[];
-	records.push(args);
-	fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(records));
-}
-`,
-		);
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
-		);
-		process.env.PI_PACKAGE_DIR = selfPackageDir;
-		process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = baseUrl;
-		Object.defineProperty(process, "execPath", {
-			value: join(selfPackageDir, "dist", "cli.js"),
-			configurable: true,
-		});
-		const tarballBytes = packReleaseTarball({ name: "wasmedge-agent", version: "0.73.0" });
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (input: string) =>
-				String(input).endsWith(".tgz")
-					? new Response(tarballBytes)
-					: Response.json({
-							package: "wasmedge-agent",
-							tarball: tarballPath,
-							tarballs: [
-								{
-									file: "wasmedge-agent-0.73.0.tgz",
-									sha256: createHash("sha256").update(tarballBytes).digest("hex"),
-								},
-							],
-							version: "0.73.0",
-						}),
-			),
-		);
-
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
-			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
-			// Installed from the verified copy this process wrote, not from the
-			// manifest's URL -- which is what the package manager used to be
-			// handed and fetch for itself.
-			expect(recordedCalls).toHaveLength(2);
-			expect(recordedCalls[0]).toEqual(expect.arrayContaining(["install", "-g"]));
-			expect(recordedCalls[0]).not.toContain(`${baseUrl}/${tarballPath}`);
-			expect(recordedCalls[0]?.some((arg) => arg.endsWith("wasmedge-agent-0.73.0.tgz"))).toBe(true);
-			expect(recordedCalls[1]).toEqual(expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]));
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("does not self-update when the same-version manifest uses the WasmEdge Agent package alias", async () => {
-		const globalPrefix = join(tempDir, "global-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
-		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
-		const recordPath = join(tempDir, "self-update.json");
-		const baseUrl = "https://downloads.example.test/wasmedge-agent";
-		mkdirSync(selfPackageDir, { recursive: true });
-		writeFileSync(
-			fakeNpmPath,
-			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
-if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
-else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
-`,
-		);
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
-		);
-		process.env.PI_PACKAGE_DIR = selfPackageDir;
-		process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = baseUrl;
-		Object.defineProperty(process, "execPath", {
-			value: join(selfPackageDir, "dist", "cli.js"),
-			configurable: true,
-		});
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () =>
-				Response.json({
-					package: "wasmedge-agent",
-					tarball: "releases/current/wasmedge-agent.tgz",
-					version: VERSION,
-				}),
-			),
-		);
-
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(main(["update"])).resolves.toBeUndefined();
-
-			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
-			expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain("is already up to date");
-			expect(existsSync(recordPath)).toBe(false);
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("fails self-update when renamed npm package installation fails", async () => {
-		const globalPrefix = join(tempDir, "global-prefix");
-		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@mariozechner", "pi-coding-agent");
-		const fakeNpmPath = join(tempDir, "fake-npm-fail.cjs");
-		const recordPath = join(tempDir, "self-update-fail.json");
 		mkdirSync(selfPackageDir, { recursive: true });
 		writeFileSync(
 			fakeNpmPath,
@@ -496,44 +234,217 @@ if(args.includes("root")) {
 const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.readFileSync(${JSON.stringify(recordPath)},"utf-8")):[];
 records.push(args);
 fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(records));
-if(args.includes("install")) process.exit(23);
+${options.failInstall ? 'if(args.includes("install")) process.exit(23);' : ""}
 `,
 		);
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
 		);
+		if (options.projectNpmCommand) {
+			mkdirSync(join(projectDir, ".wasmedge-agent"), { recursive: true });
+			writeFileSync(
+				join(projectDir, ".wasmedge-agent", "settings.json"),
+				JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", projectPrefix] }, null, 2),
+			);
+		}
 		process.env.PI_PACKAGE_DIR = selfPackageDir;
+		if (options.downloadBaseUrl) process.env.WASMEDGE_AGENT_DOWNLOAD_BASE_URL = options.downloadBaseUrl;
 		Object.defineProperty(process, "execPath", {
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
+		const fetchMock = vi.fn(async (input: string) =>
+			options.tarball && String(input).endsWith(".tgz")
+				? new Response(options.tarball)
+				: Response.json(options.manifest),
 		);
-
+		vi.stubGlobal("fetch", fetchMock);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		try {
-			await expect(main(["update"])).resolves.toBeUndefined();
+		return {
+			globalPrefix,
+			projectPrefix,
+			fetchMock,
+			errorSpy,
+			stdout: () => logSpy.mock.calls.map(([message]) => String(message)).join("\n"),
+			stderr: () => errorSpy.mock.calls.map(([message]) => String(message)).join("\n"),
+			/** Every argv the fake npm saw, in order. */
+			npmCalls: () => JSON.parse(readFileSync(recordPath, "utf-8")) as string[][],
+			ranNpm: () => existsSync(recordPath),
+		};
+	}
 
-			expect(process.exitCode).toBe(1);
-			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stdout).not.toContain(`Updated pi`);
-			expect(stderr).toContain("exited with code 23");
-			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
-			expect(recordedCalls).toEqual([
-				expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-				expect.arrayContaining(["install", "-g", activePackageName]),
-			]);
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
+	it("uses global npmCommand and the release manifest install spec for forced self updates", async () => {
+		const tarballUrl = "https://downloads.example.test/wasmedge-agent/wasmedge-agent-current.tgz";
+		// The manifest has to carry the tarball's digest now: the update path
+		// verifies the bytes before the package manager sees them, so the stub
+		// answers the artifact request as well as the manifest one.
+		const tarballBytes = packReleaseTarball({ name: PACKAGE_NAME, version: VERSION });
+		const fixture = setupSelfUpdate({
+			manifest: {
+				tarball: tarballUrl,
+				tarballs: [
+					{
+						file: "wasmedge-agent-current.tgz",
+						sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+					},
+				],
+				version: VERSION,
+			},
+			tarball: tarballBytes,
+			projectNpmCommand: true,
+		});
+
+		await expect(runSelfUpdateInstallChild(["update", "--self", "--force"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBeUndefined();
+		expect(fixture.errorSpy).not.toHaveBeenCalled();
+		// The manifest, then the artifact it names.
+		expect(fixture.fetchMock).toHaveBeenCalledTimes(2);
+		const recordedArgs = fixture.npmCalls().flat();
+		expect(recordedArgs).toContain(fixture.globalPrefix);
+		expect(recordedArgs).not.toContain(fixture.projectPrefix);
+		// The verified copy, not the URL: npm never fetches this itself.
+		expect(recordedArgs).not.toContain(tarballUrl);
+		expect(recordedArgs.some((arg) => arg.endsWith("wasmedge-agent-current.tgz"))).toBe(true);
+	});
+
+	it("refuses to self-update from a manifest that names neither a tarball nor a package", async () => {
+		const fixture = setupSelfUpdate({ scope: "@mariozechner", manifest: { version: getNewerPatchVersion() } });
+
+		// This test used to assert the opposite -- that a version-only
+		// manifest installs PACKAGE_NAME -- which is the hazard itself: the
+		// only spec available there is our own constant, and nothing
+		// published under it on a registry is ours. The manifest has to name
+		// what to install.
+		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBe(1);
+		expect(fixture.fetchMock).toHaveBeenCalledOnce();
+		expect(fixture.stderr()).toContain("neither a tarball nor a package");
+		// The real package manager was never reached, so it recorded nothing.
+		expect(fixture.ranNpm()).toBe(false);
+	});
+
+	it("installs the active package name from the update check during self-update", async () => {
+		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
+		const fixture = setupSelfUpdate({
+			scope: "@mariozechner",
+			manifest: { packageName: activePackageName, version: "0.73.0" },
+		});
+
+		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBeUndefined();
+		expect(fixture.errorSpy).not.toHaveBeenCalled();
+		expect(fixture.npmCalls()).toEqual([
+			expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
+			expect.arrayContaining(["install", "-g", activePackageName]),
+		]);
+	});
+
+	it("installs the WasmEdge Agent tarball from the update manifest during self-update", async () => {
+		const baseUrl = "https://downloads.example.test/wasmedge-agent";
+		const tarballPath = "releases/v0.73.0/wasmedge-agent-0.73.0.tgz";
+		const tarballBytes = packReleaseTarball({ name: "wasmedge-agent", version: "0.73.0" });
+		const fixture = setupSelfUpdate({
+			manifest: {
+				package: "wasmedge-agent",
+				tarball: tarballPath,
+				tarballs: [
+					{
+						file: "wasmedge-agent-0.73.0.tgz",
+						sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+					},
+				],
+				version: "0.73.0",
+			},
+			tarball: tarballBytes,
+			downloadBaseUrl: baseUrl,
+		});
+
+		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBeUndefined();
+		expect(fixture.errorSpy).not.toHaveBeenCalled();
+		const recordedCalls = fixture.npmCalls();
+		// Installed from the verified copy this process wrote, not from the
+		// manifest's URL -- which is what the package manager used to be
+		// handed and fetch for itself.
+		expect(recordedCalls).toHaveLength(2);
+		expect(recordedCalls[0]).toEqual(expect.arrayContaining(["install", "-g"]));
+		expect(recordedCalls[0]).not.toContain(`${baseUrl}/${tarballPath}`);
+		expect(recordedCalls[0]?.some((arg) => arg.endsWith("wasmedge-agent-0.73.0.tgz"))).toBe(true);
+		expect(recordedCalls[1]).toEqual(expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]));
+	});
+
+	it("treats a channel that is behind the installed version as nothing to update", async () => {
+		const fixture = setupSelfUpdate({
+			manifest: {
+				package: "wasmedge-agent",
+				tarball: "releases/v0.0.1/wasmedge-agent-0.0.1.tgz",
+				version: "0.0.1",
+			},
+			downloadBaseUrl: "https://downloads.example.test/wasmedge-agent",
+		});
+
+		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(fixture.stdout()).toContain("is ahead of the stable channel");
+		expect(process.exitCode).toBe(SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE);
+		expect(fixture.ranNpm()).toBe(false);
+	});
+
+	it("refuses a downgrade even with --nightly --force and leaves the channel unchanged", async () => {
+		const fixture = setupSelfUpdate({
+			manifest: {
+				package: "wasmedge-agent",
+				tarball: "releases/v0.0.1-beta.1.1.abcdef0/wasmedge-agent-0.0.1-beta.1.1.abcdef0.tgz",
+				version: "0.0.1-beta.1.1.abcdef0",
+			},
+			downloadBaseUrl: "https://downloads.example.test/wasmedge-agent",
+		});
+
+		await expect(runSelfUpdateInstallChild(["update", "--self", "--nightly", "--force"])).resolves.toBeUndefined();
+
+		expect(fixture.stderr()).toContain("that is a downgrade");
+		expect(fixture.ranNpm()).toBe(false);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).updateChannel).toBeUndefined();
+	});
+
+	it("does not self-update when the same-version manifest uses the WasmEdge Agent package alias", async () => {
+		const fixture = setupSelfUpdate({
+			manifest: { package: "wasmedge-agent", tarball: "releases/current/wasmedge-agent.tgz", version: VERSION },
+			downloadBaseUrl: "https://downloads.example.test/wasmedge-agent",
+		});
+
+		await expect(main(["update"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBeUndefined();
+		expect(fixture.errorSpy).not.toHaveBeenCalled();
+		expect(fixture.stdout()).toContain("is already up to date");
+		expect(fixture.ranNpm()).toBe(false);
+	});
+
+	it("fails self-update when renamed npm package installation fails", async () => {
+		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
+		const fixture = setupSelfUpdate({
+			scope: "@mariozechner",
+			manifest: { packageName: activePackageName, version: "0.73.0" },
+			failInstall: true,
+		});
+
+		await expect(main(["update"])).resolves.toBeUndefined();
+
+		expect(process.exitCode).toBe(1);
+		expect(fixture.stdout()).not.toContain("Updated pi");
+		expect(fixture.stderr()).toContain("exited with code 23");
+		expect(fixture.npmCalls()).toEqual([
+			expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
+			expect.arrayContaining(["install", "-g", activePackageName]),
+		]);
 	});
 
 	it("suggests the configured source when update input omits the npm prefix", async () => {

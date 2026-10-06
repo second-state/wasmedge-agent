@@ -2,8 +2,8 @@
 
 Delegate tasks to specialized subprocess agents with isolated context windows.
 
-WasmEdge Agent also provides native recursive delegation through `rlm.call()` and
-`rlm.run_async()`. This extension is a separate example for users who want
+WasmEdge Agent also provides native recursive delegation through `rlm::spawn()`
+from a rust cell. This extension is a separate example for users who want
 file-defined agent profiles and explicit single, parallel, or chained workflows.
 
 ## Features

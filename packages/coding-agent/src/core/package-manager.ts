@@ -1,4 +1,4 @@
-import { type ChildProcess, type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -22,16 +22,16 @@ function getEnv(): NodeJS.ProcessEnv {
 	}
 }
 
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import type { Readable } from "node:stream";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { globSync } from "glob";
-import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { getBundledSkillsDir, getProjectConfigDir } from "../config.js";
-import { shouldUseWindowsShell } from "../utils/child-process.js";
+import { shouldUseWindowsShell, spawnHidden, spawnSyncHidden } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
-import { canonicalizePath, isLocalPath } from "../utils/paths.js";
+import { canonicalizePath, isLocalPath, toPosixPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { collectExtensionEntries, resolveExtensionEntries } from "./extensions/discovery.js";
+import { addIgnoreRules, createIgnoreMatcher, type IgnoreMatcher } from "./ignore-rules.js";
 import { isStdoutTakenOver } from "./output-guard.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
 
@@ -202,61 +202,8 @@ const FILE_PATTERNS: Record<ResourceType, RegExp> = {
 	themes: /\.json$/,
 };
 
-const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
-
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
-function toPosixPath(p: string): string {
-	return p.split(sep).join("/");
-}
-
 function getHomeDir(): string {
 	return process.env.HOME || homedir();
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
-	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
-		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
-		} catch {
-			// Unreadable ignore file: skip it rather than failing resource loading.
-		}
-	}
 }
 
 function isPattern(s: string): boolean {
@@ -295,7 +242,7 @@ function collectFiles(
 	if (!existsSync(dir)) return files;
 
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
+	const ig = ignoreMatcher ?? createIgnoreMatcher();
 	addIgnoreRules(ig, dir, root);
 
 	try {
@@ -329,7 +276,7 @@ function collectFiles(
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Ignore unreadable directories during file discovery.
 	}
 
 	return files;
@@ -347,7 +294,7 @@ function collectSkillEntries(
 	if (!existsSync(dir)) return entries;
 
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
+	const ig = ignoreMatcher ?? createIgnoreMatcher();
 	addIgnoreRules(ig, dir, root);
 
 	try {
@@ -405,7 +352,7 @@ function collectSkillEntries(
 			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
 		}
 	} catch {
-		// Ignore errors
+		// Ignore unreadable directories during skill discovery.
 	}
 
 	return entries;
@@ -454,7 +401,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
+	const ig = createIgnoreMatcher();
 	addIgnoreRules(ig, dir, dir);
 
 	try {
@@ -481,7 +428,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Ignore unreadable directories during prompt discovery.
 	}
 
 	return entries;
@@ -491,7 +438,7 @@ function collectAutoThemeEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
+	const ig = createIgnoreMatcher();
 	addIgnoreRules(ig, dir, dir);
 
 	try {
@@ -518,104 +465,15 @@ function collectAutoThemeEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Ignore unreadable directories during theme discovery.
 	}
 
 	return entries;
-}
-
-function readPiManifestFile(packageJsonPath: string): PiManifest | null {
-	try {
-		const content = readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { pi?: PiManifest };
-		return pkg.pi ?? null;
-	} catch {
-		return null;
-	}
-}
-
-function resolveExtensionEntries(dir: string): string[] | null {
-	const packageJsonPath = join(dir, "package.json");
-	if (existsSync(packageJsonPath)) {
-		const manifest = readPiManifestFile(packageJsonPath);
-		if (manifest?.extensions?.length) {
-			const entries: string[] = [];
-			for (const extPath of manifest.extensions) {
-				const resolvedExtPath = resolve(dir, extPath);
-				if (existsSync(resolvedExtPath)) {
-					entries.push(resolvedExtPath);
-				}
-			}
-			if (entries.length > 0) {
-				return entries;
-			}
-		}
-	}
-
-	const indexTs = join(dir, "index.ts");
-	const indexJs = join(dir, "index.js");
-	if (existsSync(indexTs)) {
-		return [indexTs];
-	}
-	if (existsSync(indexJs)) {
-		return [indexJs];
-	}
-
-	return null;
 }
 
 function collectAutoExtensionEntries(dir: string): string[] {
-	const entries: string[] = [];
-	if (!existsSync(dir)) return entries;
-
-	// First check if this directory itself has explicit extension entries (package.json or index)
-	const rootEntries = resolveExtensionEntries(dir);
-	if (rootEntries) {
-		return rootEntries;
-	}
-
-	// Otherwise, discover extensions from directory contents
-	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
-
-	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
-		for (const entry of dirEntries) {
-			if (entry.name.startsWith(".")) continue;
-			if (entry.name === "node_modules") continue;
-
-			const fullPath = join(dir, entry.name);
-			let isDir = entry.isDirectory();
-			let isFile = entry.isFile();
-
-			if (entry.isSymbolicLink()) {
-				try {
-					const stats = statSync(fullPath);
-					isDir = stats.isDirectory();
-					isFile = stats.isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(dir, fullPath));
-			const ignorePath = isDir ? `${relPath}/` : relPath;
-			if (ig.ignores(ignorePath)) continue;
-
-			if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
-				entries.push(fullPath);
-			} else if (isDir) {
-				const resolvedEntries = resolveExtensionEntries(fullPath);
-				if (resolvedEntries) {
-					entries.push(...resolvedEntries);
-				}
-			}
-		}
-	} catch {
-		// Ignore errors
-	}
-
-	return entries;
+	if (!existsSync(dir)) return [];
+	return resolveExtensionEntries(dir) ?? collectExtensionEntries(dir);
 }
 
 /**
@@ -733,21 +591,16 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
 			includes.push(p);
 		}
 	}
-
-	// Step 1: Apply includes (or all if no includes)
+	// Apply patterns in order: includes, excludes, force-includes, then force-excludes.
 	let result: string[];
 	if (includes.length === 0) {
 		result = [...allPaths];
 	} else {
 		result = allPaths.filter((filePath) => matchesAnyPattern(filePath, includes, baseDir));
 	}
-
-	// Step 2: Apply excludes
 	if (excludes.length > 0) {
 		result = result.filter((filePath) => !matchesAnyPattern(filePath, excludes, baseDir));
 	}
-
-	// Step 3: Force-include (add back from allPaths, overriding exclusions)
 	if (forceIncludes.length > 0) {
 		for (const filePath of allPaths) {
 			if (!result.includes(filePath) && matchesAnyExactPattern(filePath, forceIncludes, baseDir)) {
@@ -755,8 +608,6 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
 			}
 		}
 	}
-
-	// Step 4: Force-exclude (remove even if included or force-included)
 	if (forceExcludes.length > 0) {
 		result = result.filter((filePath) => !matchesAnyExactPattern(filePath, forceExcludes, baseDir));
 	}
@@ -864,8 +715,7 @@ export class DefaultPackageManager implements PackageManager {
 		const accumulator = this.createAccumulator();
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
-
-		// Collect all packages with scope (project first so cwd resources win collisions)
+		// Project resources win collisions with global resources.
 		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
 		for (const pkg of projectSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "project" });
@@ -873,8 +723,7 @@ export class DefaultPackageManager implements PackageManager {
 		for (const pkg of globalSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "user" });
 		}
-
-		// Dedupe: project scope wins over global for same package identity
+		// Deduplicate by package identity after recording project precedence.
 		const packageSources = this.dedupePackages(allPackages);
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
 
@@ -1106,7 +955,7 @@ export class DefaultPackageManager implements PackageManager {
 			const latestVersion = await this.getLatestNpmVersion(source.name);
 			return latestVersion !== installedVersion;
 		} catch {
-			// Preserve existing update behavior when version lookup fails.
+			// Preserve the existing update policy when version lookup fails.
 			return true;
 		}
 	}
@@ -1394,8 +1243,6 @@ export class DefaultPackageManager implements PackageManager {
 		if (isLocalPath(source)) {
 			return { type: "local", path: source };
 		}
-
-		// Try parsing as git URL
 		const gitParsed = parseGitUrl(source);
 		if (gitParsed) {
 			return gitParsed;
@@ -1648,11 +1495,8 @@ export class DefaultPackageManager implements PackageManager {
 			if (!existing) {
 				seen.set(identity, entry);
 			} else if (entry.scope === "project" && existing.scope === "user") {
-				// Project wins over user
 				seen.set(identity, entry);
 			}
-			// If existing is project and new is global, keep existing (project)
-			// If both are same scope, keep first one
 		}
 
 		return Array.from(seen.values());
@@ -1750,7 +1594,6 @@ export class DefaultPackageManager implements PackageManager {
 
 		const target = await this.getLocalGitUpdateTarget(targetDir);
 
-		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
 		await this.runCommand("git", target.fetchArgs, { cwd: targetDir });
 
 		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
@@ -1767,7 +1610,7 @@ export class DefaultPackageManager implements PackageManager {
 
 		await this.runCommand("git", ["reset", "--hard", target.ref], { cwd: targetDir });
 
-		// Clean untracked files (extensions should be pristine)
+		// Extension checkouts must be pristine after an update.
 		await this.runCommand("git", ["clean", "-fdx"], { cwd: targetDir });
 
 		const packageJsonPath = join(targetDir, "package.json");
@@ -1785,7 +1628,7 @@ export class DefaultPackageManager implements PackageManager {
 				await this.updateGit(source, "temporary");
 			});
 		} catch {
-			// Keep cached temporary checkout if refresh fails.
+			// Keep the cached temporary checkout if refresh fails.
 		}
 	}
 
@@ -1969,7 +1812,6 @@ export class DefaultPackageManager implements PackageManager {
 		for (const resourceType of RESOURCE_TYPES) {
 			const dir = join(packageRoot, resourceType);
 			if (existsSync(dir)) {
-				// Collect all files from the directory (all enabled by default)
 				const files = collectResourceFiles(dir, resourceType);
 				for (const f of files) {
 					this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
@@ -1994,7 +1836,6 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		const dir = join(packageRoot, resourceType);
 		if (existsSync(dir)) {
-			// Collect all files from the directory (all enabled by default)
 			const files = collectResourceFiles(dir, resourceType);
 			for (const f of files) {
 				this.addResource(target, f, metadata, true);
@@ -2011,15 +1852,13 @@ export class DefaultPackageManager implements PackageManager {
 	): void {
 		const { allFiles } = this.collectManifestFiles(packageRoot, resourceType);
 
+		// An explicit empty list disables this resource type.
 		if (userPatterns.length === 0) {
-			// Empty array explicitly disables all resources of this type
 			for (const f of allFiles) {
 				this.addResource(target, f, metadata, false);
 			}
 			return;
 		}
-
-		// Apply user patterns
 		const enabledByUser = applyPatterns(allFiles, userPatterns, packageRoot);
 
 		for (const f of allFiles) {
@@ -2115,16 +1954,10 @@ export class DefaultPackageManager implements PackageManager {
 		baseDir: string,
 	): void {
 		if (entries.length === 0) return;
-
-		// Collect all files from plain entries (non-pattern entries)
 		const { plain, patterns } = splitPatterns(entries);
 		const resolvedPlain = plain.map((p) => this.resolvePathFromBase(p, baseDir));
 		const allFiles = this.collectFilesFromPaths(resolvedPlain, resourceType);
-
-		// Determine which files are enabled based on patterns
 		const enabledPaths = applyPatterns(allFiles, patterns, baseDir);
-
-		// Add all files with their enabled state
 		for (const f of allFiles) {
 			this.addResource(target, f, metadata, enabledPaths.has(f));
 		}
@@ -2249,9 +2082,7 @@ export class DefaultPackageManager implements PackageManager {
 				baseDir: this.bundledSkillsDir,
 			};
 			const builtinEntries = collectAutoSkillEntries(this.bundledSkillsDir, "pi");
-			// Built-in skills (websearch, skill-creator) are expected to ship with the package. A
-			// packaging slip that drops the skills/ dir from the build output would
-			// otherwise degrade silently to zero skills (ENG-4220); surface it loudly.
+			// Bundled skills must ship with the package; warn instead of silently exposing none.
 			if (builtinEntries.length === 0) {
 				accumulator.diagnostics.push({
 					type: "warning",
@@ -2263,7 +2094,7 @@ export class DefaultPackageManager implements PackageManager {
 			}
 			const builtinSkillOverrides = [
 				...userOverrides.skills,
-				// Disable the bundled websearch skill unless explicitly enabled.
+				// Web search stays disabled until explicitly enabled.
 				...(this.settingsManager.getBundledWebsearchEnabled() ? [] : ["-websearch/SKILL.md"]),
 			];
 			addResources("skills", builtinEntries, builtinMetadata, builtinSkillOverrides, this.bundledSkillsDir);
@@ -2297,7 +2128,7 @@ export class DefaultPackageManager implements PackageManager {
 					files.push(...collectResourceFiles(p, resourceType));
 				}
 			} catch {
-				// Ignore errors
+				// Ignore inaccessible resource paths.
 			}
 		}
 		return files;
@@ -2385,9 +2216,9 @@ export class DefaultPackageManager implements PackageManager {
 		command: string,
 		args: string[],
 		options?: { cwd?: string; env?: Record<string, string> },
-	): ChildProcessByStdio<null, Readable, Readable> {
+	): ChildProcess {
 		const baseEnv = getEnv();
-		return spawn(command, args, {
+		return spawnHidden(command, args, {
 			cwd: options?.cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: shouldUseWindowsShell(command),
@@ -2454,7 +2285,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private runCommandSync(command: string, args: string[]): string {
-		const result = spawnSync(command, args, {
+		const result = spawnSyncHidden(command, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
 			shell: shouldUseWindowsShell(command),

@@ -10,6 +10,12 @@ export const MAX_THREAD_GOAL_OBJECTIVE_CHARS = 4000;
 export type GoalStatus = "idle" | "active" | "paused" | "budget_limited" | "complete" | "error";
 export type GoalContextKind = "continuation" | "budget_limit" | "objective_updated";
 
+const GOAL_CONTEXT_KIND_LABELS: Record<GoalContextKind, string> = {
+	continuation: "continuation",
+	budget_limit: "budget-limit",
+	objective_updated: "objective-updated",
+};
+
 export interface GoalState {
 	active: boolean;
 	status: GoalStatus;
@@ -160,7 +166,7 @@ export function createGoalContextMessage(
 		throw new Error("Cannot create goal context without an objective.");
 	}
 	const prompt = goalContextPrompt(goal, kind);
-	const text = `<goal_context>\n${prompt}\n</goal_context>`;
+	const text = `[goal: ${GOAL_CONTEXT_KIND_LABELS[kind]}]\n\n${prompt}`;
 	const content: string | (TextContent | ImageContent)[] =
 		images && images.length > 0 ? [{ type: "text", text }, ...images] : text;
 	return {

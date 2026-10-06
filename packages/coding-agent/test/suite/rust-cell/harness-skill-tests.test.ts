@@ -69,14 +69,13 @@ describe.skipIf(!available)("guest harness skill gate (real WasmEdge, faux provi
 		return getMessageText(result);
 	}
 
-	it(
-		"retests edited registered skills before cells and preserves harness entries on failure",
-		{ timeout: 300_000 },
-		async () => {
-			const f = await setup("pub fn run() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
-			await cell(
-				f.h,
-				`use agent_lib::prelude::*;
+	it("retests edited registered skills before cells and preserves harness entries on failure", {
+		timeout: 300_000,
+	}, async () => {
+		const f = await setup("pub fn run() -> u32 { 42 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
+		await cell(
+			f.h,
+			`use agent_lib::prelude::*;
 fn main() -> Result<()> {
     let reference = serde_json::json!({"type":"rust","use":"agent_lib::skills::example","callable":"run"});
     let mut local = rlm::harness::local()?;
@@ -88,26 +87,26 @@ fn main() -> Result<()> {
     rlm::harness::global()?.create_skill("Example", "global", reference, serde_json::json!({}))?;
     Ok(())
 }`,
-			);
-			const before = loadHarnessState(f.local, "local");
-			expect(before.entries.skill.example).toMatchObject({
-				version: 3,
-				content: "v3",
-				arguments: { input: "optional" },
-				source: "agent",
-			});
-			expect(Object.keys(before.entries.memory).sort()).toEqual(["after", "before"]);
-			expect(loadHarnessState(f.global, "global").entries.skill.example).toMatchObject({
-				scope: "global",
-				version: 1,
-			});
-			const tests = vi.spyOn(skillTests, "testRustSkill");
-			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 42); }");
-			expect(tests).not.toHaveBeenCalled();
-			writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
-			const output = await cell(
-				f.h,
-				`use agent_lib::prelude::*;
+		);
+		const before = loadHarnessState(f.local, "local");
+		expect(before.entries.skill.example).toMatchObject({
+			version: 3,
+			content: "v3",
+			arguments: { input: "optional" },
+			source: "agent",
+		});
+		expect(Object.keys(before.entries.memory).sort()).toEqual(["after", "before"]);
+		expect(loadHarnessState(f.global, "global").entries.skill.example).toMatchObject({
+			scope: "global",
+			version: 1,
+		});
+		const tests = vi.spyOn(skillTests, "testRustSkill");
+		await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 42); }");
+		expect(tests).not.toHaveBeenCalled();
+		writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 42); }");
+		const output = await cell(
+			f.h,
+			`use agent_lib::prelude::*;
 fn main() -> Result<()> {
     let reference = serde_json::json!({"type":"rust","use":"agent_lib::skills::example","callable":"run"});
     let mut local = rlm::harness::local()?;
@@ -117,20 +116,19 @@ fn main() -> Result<()> {
     local.create_memory("After Failure", "still writable")?;
     Ok(())
 }`,
-				"error",
-			);
-			expect(output).toContain("sandboxed skill tests failed");
-			expect(tests).toHaveBeenCalledTimes(1);
-			const after = loadHarnessState(f.local, "local");
-			expect(after.entries.skill).toEqual(before.entries.skill);
-			expect(after.entries.memory.after_failure).toBeUndefined();
-			writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 43); }");
-			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
-			expect(tests).toHaveBeenCalledTimes(2);
-			await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
-			expect(tests).toHaveBeenCalledTimes(2);
-		},
-	);
+			"error",
+		);
+		expect(output).toContain("sandboxed skill tests failed");
+		expect(tests).toHaveBeenCalledTimes(1);
+		const after = loadHarnessState(f.local, "local");
+		expect(after.entries.skill).toEqual(before.entries.skill);
+		expect(after.entries.memory.after_failure).toBeUndefined();
+		writeFileSync(f.lib, "pub fn run() -> u32 { 43 }\n#[test] fn answer() { assert_eq!(run(), 43); }");
+		await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
+		expect(tests).toHaveBeenCalledTimes(2);
+		await cell(f.h, "fn main() { assert_eq!(agent_lib::skills::example::run(), 43); }");
+		expect(tests).toHaveBeenCalledTimes(2);
+	});
 
 	it("cancels an in-flight host test when the calling cell is aborted", { timeout: 300_000 }, async () => {
 		const f = await setup("pub fn run() {}\n#[test] fn hangs() { loop { std::hint::black_box(1); } }");

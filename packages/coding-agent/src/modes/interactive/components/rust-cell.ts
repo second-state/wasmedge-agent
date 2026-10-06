@@ -1,11 +1,10 @@
 /** Self-rendering TUI block for the rust tool (DESIGN.md §2.9): the WP4
  * replacement for the kernel-era ipython-cell component. One fixed top line
  * (status marker · language · preview · line counts · compile/run timing ·
- * error label · expand hint) that never shifts when toggling; expansion
- * attaches the highlighted cell source, lib/display diff cards, and the
+ * error label) that never shifts when toggling; per-file change summaries stay
+ * visible, and expansion attaches the highlighted cell source and the
  * stdout/stderr or rustc diagnostics below it. */
 
-import { isAbsolute, relative } from "node:path";
 import {
 	type Component,
 	truncateToWidth,
@@ -16,12 +15,12 @@ import {
 import { formatAgentMessageParticipant } from "../../../core/agent-messages.js";
 import { previewRustCode } from "../../../core/tools/code-preview.js";
 import { generateDiffString } from "../../../core/tools/edit-diff.js";
-import { shortenPath } from "../../../core/tools/render-utils.js";
 import { getLanguageFromPath, highlightCode, theme } from "../theme/theme.js";
 import { getWorkingPulseFrame, WORKING_ICON_FRAMES, workingIconFrame } from "../theme/working-icon.js";
+import { agentMessageBodyLines, agentMessageSummaryLine } from "./agent-message.js";
 import { normalizeErrorDetails } from "./collapsible-error.js";
 import { renderDiffSeparator, renderRichDiff } from "./diff.js";
-import { keyHint } from "./keybinding-hints.js";
+import { countChangedLines, FILE_CHANGE_DIFF_INDENT, formatFileChangeSummaryLine } from "./edit-summary.js";
 
 export interface RustCellContentBlock {
 	type: string;
@@ -37,6 +36,7 @@ export interface RustCellState {
 	isPartial?: boolean;
 	isError?: boolean;
 	expanded?: boolean;
+	editDiffsExpanded?: boolean;
 	showExpandHint?: boolean;
 	executionStarted?: boolean;
 	argsComplete?: boolean;
@@ -79,8 +79,8 @@ interface RustCellDetails {
 	sentAgentMessages?: SentAgentMessageDisplay[];
 }
 
-// Two columns, matching the code body's "› "/"  " gutter so output aligns under it.
-const OUTPUT_INDENT = "  ";
+// Match the agent-message tree gutter; input and output text share the same column.
+const OUTPUT_INDENT = "   ";
 
 const SGR_PATTERN = /\x1b\[([0-9;]*)m/g;
 
@@ -223,18 +223,6 @@ function formatDuration(durationMs: number | undefined): string | undefined {
 	return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-// Relative to the session cwd when nested under it, else the absolute path.
-function displayEditPath(path: string, cwd: string | undefined): string {
-	if (cwd && isAbsolute(path)) {
-		const rel = relative(cwd, path);
-		if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
-			return rel;
-		}
-		return shortenPath(path);
-	}
-	return path;
-}
-
 function isImageBlock(block: RustCellContentBlock): boolean {
 	return block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string";
 }
@@ -273,13 +261,13 @@ export class RustCellComponent implements Component {
 		}
 
 		// The top line is identical whether collapsed or expanded — same marker,
-		// counts, timing, and expand hint — so toggling never shifts the layout;
+		// counts, and timing — so toggling never shifts the layout;
 		// expanding only attaches code and output below it.
 		const lines = [truncateToWidth(` ${this.collapsedLine(details)}`, safeWidth, "")];
 
 		const hasCode = this.state.expanded ? this.renderCode(lines, safeWidth) : false;
-		if ((details.diffs?.length ?? 0) > 0 && this.state.expanded) {
-			this.renderDiffs(lines, safeWidth, details.diffs ?? [], this.marker(details));
+		if ((details.diffs?.length ?? 0) > 0) {
+			this.renderDiffs(lines, safeWidth, details.diffs ?? [], hasCode);
 		}
 		if ((details.sentAgentMessages?.length ?? 0) > 0) {
 			this.renderSentAgentMessages(lines, safeWidth, details.sentAgentMessages ?? []);
@@ -299,28 +287,26 @@ export class RustCellComponent implements Component {
 		const parts = [`${this.marker(details)} ${theme.fg("muted", "rust")}`];
 
 		if (preview.text) {
-			parts.push(this.highlightInputLine(preview.text));
+			// Collapsed preview stays plain and dim so the one-line summary reads as
+			// quiet metadata; the expanded block below keeps full highlighting.
+			parts.push(theme.fg("dim", preview.text));
 		} else if (!this.state.executionStarted) {
-			parts.push(theme.fg("muted", "waiting for code"));
+			parts.push(theme.fg("dim", "waiting for code"));
 		}
 
 		const counts = this.lineCounts(details);
 		if (counts) {
-			parts.push(theme.fg("muted", counts));
+			parts.push(theme.fg("dim", counts));
 		}
 
 		const timing = this.timing(details);
 		if (timing) {
-			parts.push(theme.fg("muted", timing));
+			parts.push(theme.fg("dim", timing));
 		}
 
 		const failure = !this.state.isPartial ? this.failureLabel(details) : undefined;
 		if (failure) {
 			parts.push(theme.fg("error", failure));
-		}
-
-		if (this.state.showExpandHint !== false) {
-			parts.push(keyHint("app.tools.expand", this.state.expanded ? "to collapse" : "to expand"));
 		}
 		return parts.join(theme.fg("dim", " · "));
 	}
@@ -432,24 +418,22 @@ export class RustCellComponent implements Component {
 	private renderCode(lines: string[], width: number): boolean {
 		const code = this.state.code.trimEnd();
 		if (!code) {
-			this.addBlank(lines);
-			this.addWrapped(lines, OUTPUT_INDENT, theme.fg("muted", "waiting for code"), width);
+			this.addWrapped(lines, theme.fg("dim", "╰─ "), theme.fg("muted", "waiting for code"), width);
 			return false;
 		}
 
-		this.addBlank(lines);
-		for (const [index, rawLine] of code.split("\n").entries()) {
-			const prefix = index === 0 ? theme.fg("dim", "› ") : theme.fg("dim", "  ");
-			const highlighted = this.highlightInputLine(rawLine);
+		const rawLines = code.split("\n");
+		// Highlight the whole cell so multi-line strings and block comments keep
+		// color; reopen inherited ANSI styles on each source line before gutters reset them.
+		const sourceWidth = rawLines.reduce((max, line) => Math.max(max, visibleWidth(line)), 1);
+		const highlightedLines = wrapTextWithAnsi(highlightCode(code, "rust").join("\n"), sourceWidth);
+		for (const [index, rawLine] of rawLines.entries()) {
+			const prefix = index === 0 ? theme.fg("dim", "╰─ ") : OUTPUT_INDENT;
+			const highlighted = highlightedLines[index] ?? theme.fg("mdCodeBlock", rawLine);
 			this.addWrapped(lines, prefix, highlighted || " ", width);
 		}
 
 		return true;
-	}
-
-	private highlightInputLine(line: string): string {
-		const highlighted = highlightCode(line, "rust");
-		return highlighted[0] ?? theme.fg("mdCodeBlock", line);
 	}
 
 	// Only runs when expanded — shows full output below the code, no previews.
@@ -458,6 +442,12 @@ export class RustCellComponent implements Component {
 		const imageCount = blocks.filter(isImageBlock).length;
 		let outputStarted = false;
 		let renderedTextOutput = false;
+		let outputMarkerPending = true;
+		const outputPrefix = (): string => {
+			if (!outputMarkerPending) return OUTPUT_INDENT;
+			outputMarkerPending = false;
+			return theme.fg("dim", " › ");
+		};
 
 		const startOutput = (): void => {
 			if (outputStarted) {
@@ -472,23 +462,23 @@ export class RustCellComponent implements Component {
 		if (details.compileDiagnostics?.trim()) {
 			startOutput();
 			renderedTextOutput = true;
-			this.renderOutputText(lines, width, normalizeErrorDetails(details.compileDiagnostics), "err");
+			this.renderOutputText(lines, width, normalizeErrorDetails(details.compileDiagnostics), "err", outputPrefix);
 		}
 		if (details.stdout?.trim()) {
 			startOutput();
 			renderedTextOutput = true;
-			this.renderOutputText(lines, width, normalizeErrorDetails(details.stdout), "out");
+			this.renderOutputText(lines, width, normalizeErrorDetails(details.stdout), "out", outputPrefix);
 		}
 		if (details.stderr?.trim()) {
 			startOutput();
 			renderedTextOutput = true;
-			this.renderOutputText(lines, width, normalizeErrorDetails(details.stderr), "err");
+			this.renderOutputText(lines, width, normalizeErrorDetails(details.stderr), "err", outputPrefix);
 		}
 		if (details.libReverted) {
 			startOutput();
 			this.addWrapped(
 				lines,
-				OUTPUT_INDENT,
+				outputPrefix(),
 				theme.fg("muted", "lib files were reverted; the cell did not run"),
 				width,
 			);
@@ -496,7 +486,7 @@ export class RustCellComponent implements Component {
 
 		if (!renderedTextOutput && (this.state.isPartial || (this.state.executionStarted && !this.state.argsComplete))) {
 			startOutput();
-			this.addWrapped(lines, OUTPUT_INDENT, theme.fg("muted", "waiting for output..."), width);
+			this.addWrapped(lines, outputPrefix(), theme.fg("muted", "waiting for output..."), width);
 		} else if (
 			!renderedTextOutput &&
 			!details.libReverted &&
@@ -506,7 +496,7 @@ export class RustCellComponent implements Component {
 			imageCount === 0
 		) {
 			startOutput();
-			this.addWrapped(lines, OUTPUT_INDENT, theme.fg("muted", "no output"), width);
+			this.addWrapped(lines, outputPrefix(), theme.fg("muted", "no output"), width);
 		}
 
 		if (imageCount > 0) {
@@ -514,7 +504,7 @@ export class RustCellComponent implements Component {
 			const text = this.state.showImages
 				? `${imageCount} image${imageCount === 1 ? "" : "s"} rendered below`
 				: `${imageCount} image${imageCount === 1 ? "" : "s"} hidden`;
-			this.addWrapped(lines, OUTPUT_INDENT, theme.fg("muted", text), width);
+			this.addWrapped(lines, outputPrefix(), theme.fg("muted", text), width);
 		}
 	}
 
@@ -522,73 +512,72 @@ export class RustCellComponent implements Component {
 		for (const message of messages) {
 			const label = message.deliveryStatus === "delivered" ? "Agent message sent" : "Agent message queued";
 			const recipient = formatAgentMessageParticipant("sent", message.receiverRole, message.target);
-			const text = message.message.replace(/\s+/g, " ").trim();
-			const line =
-				theme.fg("accent", "◆") +
-				` ${theme.fg("muted", label)}` +
-				theme.fg("dim", " · ") +
-				theme.fg("muted", recipient) +
-				theme.fg("dim", " · ") +
-				theme.fg("muted", text);
-			this.addPlain(lines, truncateToWidth(line, Math.max(1, width - 1), "…"));
+			if (this.state.expanded) this.addBlank(lines);
+			this.addPlain(lines, truncateToWidth(agentMessageSummaryLine(label, recipient), Math.max(1, width - 1), "…"));
+			if (this.state.expanded) {
+				for (const line of agentMessageBodyLines(message.message, width)) lines.push(line);
+			}
 		}
 	}
 
-	private renderDiffs(lines: string[], width: number, diffs: readonly DiffDisplay[], marker: string): void {
+	// The path summary stays visible while conversation detail toggles the diff rows.
+	private renderDiffs(lines: string[], width: number, diffs: readonly DiffDisplay[], hasCode: boolean): void {
 		const diffsByPath = new Map<string, DiffDisplay[]>();
 		for (const diff of diffs) {
 			const existing = diffsByPath.get(diff.path);
 			if (existing) existing.push(diff);
 			else diffsByPath.set(diff.path, [diff]);
 		}
-		for (const [path, edits] of diffsByPath) {
+		if (hasCode) {
 			this.addPlain(lines, "");
-			this.renderFileDiff(lines, width, path, edits, marker);
+		}
+		for (const [path, edits] of diffsByPath) {
+			this.renderFileDiff(lines, width, path, edits);
 		}
 	}
 
-	private renderFileDiff(
-		lines: string[],
-		width: number,
-		path: string,
-		edits: readonly DiffDisplay[],
-		marker: string,
-	): void {
+	private renderFileDiff(lines: string[], width: number, path: string, edits: readonly DiffDisplay[]): void {
 		const language = getLanguageFromPath(path);
+		// The outer inset matches ordinary chat text; renderer gutters stay intact.
+		const indent = FILE_CHANGE_DIFF_INDENT.slice(0, Math.max(0, width - 1));
+		const contentWidth = Math.max(1, width - indent.length);
 		let added = 0;
 		let removed = 0;
 		const rows: string[] = [];
 		edits.forEach((edit, index) => {
 			const { diff: diffText } = generateDiffString(edit.oldStr, edit.newStr, 4, edit.startLine ?? 1);
-			for (const row of diffText.split("\n")) {
-				if (row.startsWith("+")) added++;
-				else if (row.startsWith("-")) removed++;
+			const counts = countChangedLines(diffText);
+			added += counts.added;
+			removed += counts.removed;
+			if (!this.state.editDiffsExpanded) {
+				return;
 			}
 			if (index > 0) {
-				rows.push(renderDiffSeparator(width));
+				rows.push(`${indent}${renderDiffSeparator(contentWidth)}`);
 			}
 			// Append, not spread: a huge edit's diff can exceed the JS arg-count limit.
-			for (const row of renderRichDiff(diffText, width, { language })) {
-				rows.push(row);
+			for (const row of renderRichDiff(diffText, contentWidth, { language })) {
+				rows.push(`${indent}${row}`);
 			}
 		});
 
-		const counts = `${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `-${removed}`)}`;
-		const displayPath = displayEditPath(path, this.state.cwd);
-		// Truncate the path (not the counts) so it can't push the header past width.
-		const fixed = visibleWidth(marker) + 1 + 2 + visibleWidth(counts);
-		const shownPath = truncateToWidth(displayPath, Math.max(1, width - 1 - fixed), "…");
-		this.addPlain(lines, `${marker} ${shownPath}  ${counts}`);
+		lines.push(formatFileChangeSummaryLine(path, this.state.cwd, { added, removed }, width));
 
 		for (const row of rows) {
 			lines.push(row);
 		}
 	}
 
-	private renderOutputText(lines: string[], width: number, text: string, label: "out" | "err"): void {
+	private renderOutputText(
+		lines: string[],
+		width: number,
+		text: string,
+		label: "out" | "err",
+		outputPrefix: () => string,
+	): void {
 		const color = label === "err" ? "muted" : "toolOutput";
 		for (const line of text.split("\n")) {
-			this.addWrapped(lines, OUTPUT_INDENT, theme.fg(color, line || " "), width);
+			this.addWrapped(lines, outputPrefix(), theme.fg(color, line || " "), width);
 		}
 	}
 

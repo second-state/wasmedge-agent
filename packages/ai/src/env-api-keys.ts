@@ -5,7 +5,6 @@ import type { KnownProvider } from "./types.js";
 
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 let _existsSync: typeof existsSync | null = null;
-let _readFileSync: typeof readFileSync | null = null;
 let _homedir: typeof homedir | null = null;
 let _join: typeof join | null = null;
 
@@ -16,11 +15,9 @@ const NODE_FS_SPECIFIER = "node:" + "fs";
 const NODE_OS_SPECIFIER = "node:" + "os";
 const NODE_PATH_SPECIFIER = "node:" + "path";
 
-// Eagerly load in Node.js/Bun environment only
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	dynamicImport(NODE_FS_SPECIFIER).then((m) => {
 		_existsSync = (m as { existsSync: typeof existsSync }).existsSync;
-		_readFileSync = (m as { readFileSync: typeof readFileSync }).readFileSync;
 	});
 	dynamicImport(NODE_OS_SPECIFIER).then((m) => {
 		_homedir = (m as { homedir: typeof homedir }).homedir;
@@ -78,12 +75,10 @@ function hasVertexAdcCredentials(): boolean {
 			return false;
 		}
 
-		// Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
 		const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || getProcEnv("GOOGLE_APPLICATION_CREDENTIALS");
 		if (gacPath) {
 			cachedVertexAdcCredentialsExists = _existsSync(gacPath);
 		} else {
-			// Fall back to default ADC path (lazy evaluation)
 			cachedVertexAdcCredentialsExists = _existsSync(
 				_join(_homedir(), ".config", "gcloud", "application_default_credentials.json"),
 			);
@@ -167,8 +162,6 @@ export function getEnvApiKey(provider: string): string | undefined {
 		return process.env[envKeys[0]] || getProcEnv(envKeys[0]);
 	}
 
-	// Vertex AI supports either an explicit API key or Application Default Credentials.
-	// Auth is configured via `gcloud auth application-default login`.
 	if (provider === "google-vertex") {
 		const hasCredentials = hasVertexAdcCredentials();
 		const hasProject = !!(
@@ -185,13 +178,6 @@ export function getEnvApiKey(provider: string): string | undefined {
 	}
 
 	if (provider === "amazon-bedrock") {
-		// Amazon Bedrock supports multiple credential sources:
-		// 1. AWS_PROFILE - named profile from ~/.aws/credentials
-		// 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
-		// 3. AWS_BEARER_TOKEN_BEDROCK - Bedrock bearer token
-		// 4. AWS_CONTAINER_CREDENTIALS_RELATIVE_URI - ECS task roles
-		// 5. AWS_CONTAINER_CREDENTIALS_FULL_URI - ECS task roles (full URI)
-		// 6. AWS_WEB_IDENTITY_TOKEN_FILE - IRSA (IAM Roles for Service Accounts)
 		if (
 			process.env.AWS_PROFILE ||
 			(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
@@ -210,25 +196,5 @@ export function getEnvApiKey(provider: string): string | undefined {
 		}
 	}
 
-	return undefined;
-}
-
-// PRIME_TEAM_ID env var, falling back to team_id in ~/.prime/config.json.
-export function getPrimeTeamId(): string | undefined {
-	const fromEnv = process.env.PRIME_TEAM_ID || getProcEnv("PRIME_TEAM_ID");
-	if (fromEnv?.trim()) return fromEnv.trim();
-
-	if (!_existsSync || !_readFileSync || !_homedir || !_join) return undefined;
-	const configPath = _join(_homedir(), ".prime", "config.json");
-	if (!_existsSync(configPath)) return undefined;
-	try {
-		const parsed = JSON.parse(_readFileSync(configPath, "utf-8")) as unknown;
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			const teamId = (parsed as Record<string, unknown>).team_id;
-			if (typeof teamId === "string" && teamId.trim()) return teamId.trim();
-		}
-	} catch {
-		// Unreadable/malformed config.json: behave as if no team is configured.
-	}
 	return undefined;
 }

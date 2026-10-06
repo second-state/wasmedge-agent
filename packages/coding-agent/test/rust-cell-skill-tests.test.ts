@@ -90,71 +90,67 @@ describe.skipIf(!available)("sandboxed skill tests", () => {
 		);
 	});
 
-	it(
-		"rejects socket-capable artifacts before running any test or opening a connection",
-		{ timeout: 300_000 },
-		async () => {
-			let connections = 0;
-			const server = createServer((socket) => {
-				connections++;
-				socket.destroy();
+	it("rejects socket-capable artifacts before running any test or opening a connection", {
+		timeout: 300_000,
+	}, async () => {
+		let connections = 0;
+		const server = createServer((socket) => {
+			connections++;
+			socket.destroy();
+		});
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(0, "127.0.0.1", resolve);
+		});
+		try {
+			const port = (server.address() as AddressInfo).port;
+			const f = fixture(`${socketClient(port)}\n#[test] fn pure() { assert_eq!(2 + 2, 4); }`);
+			mkdirSync(join(f.cratePath, "tests"));
+			writeFileSync(join(f.cratePath, "tests/network.rs"), "#[test] fn network() { example::connect(); }");
+			const project = join(f.root, "project");
+			mkdirSync(project);
+			const runner = new CellRunner({
+				cwd: project,
+				workspaceDir: f.workspace,
+				cargoBin: toolchain!.cargoBin,
+				wasmedgeBin: toolchain!.wasmedgeBin,
+				cellTimeoutMs: 120_000,
 			});
-			await new Promise<void>((resolve, reject) => {
-				server.once("error", reject);
-				server.listen(0, "127.0.0.1", resolve);
+			const blocked = await runner.execute({
+				code: 'fn main() { std::fs::write("/workspace/ran", "yes").unwrap(); agent_lib::skills::example::connect(); }',
 			});
+			expect(blocked).toMatchObject({ status: "error", runMs: 0 });
+			expect(blocked.stderr).toMatch(/cell import not allowed.*sock_/);
+			expect(existsSync(join(project, "ran"))).toBe(false);
+			expect(connections).toBe(0);
+			// Positive control: the exact artifact really connects when invoked
+			// directly in stock WasmEdge, outside the cell/test import gates.
+			const control = await cellProcess.runProcess(
+				toolchain!.wasmedgeBin,
+				[
+					"run",
+					"--force-interpreter",
+					"--dir",
+					`/workspace:${project}`,
+					join(f.workspace, "target/wasm32-wasip1/release/cell.wasm"),
+				],
+				{ cwd: f.workspace, timeoutMs: 10_000 },
+			);
+			expect(control, control.stderr).toMatchObject({ exitCode: 0 });
+			expect(existsSync(join(project, "ran"))).toBe(true);
+			await vi.waitFor(() => expect(connections).toBe(1));
+			const processes = vi.spyOn(cellProcess, "runProcess");
 			try {
-				const port = (server.address() as AddressInfo).port;
-				const f = fixture(`${socketClient(port)}\n#[test] fn pure() { assert_eq!(2 + 2, 4); }`);
-				mkdirSync(join(f.cratePath, "tests"));
-				writeFileSync(join(f.cratePath, "tests/network.rs"), "#[test] fn network() { example::connect(); }");
-				const project = join(f.root, "project");
-				mkdirSync(project);
-				const runner = new CellRunner({
-					cwd: project,
-					workspaceDir: f.workspace,
-					cargoBin: toolchain!.cargoBin,
-					wasmedgeBin: toolchain!.wasmedgeBin,
-					cellTimeoutMs: 120_000,
-				});
-				const blocked = await runner.execute({
-					code: 'fn main() { std::fs::write("/workspace/ran", "yes").unwrap(); agent_lib::skills::example::connect(); }',
-				});
-				expect(blocked).toMatchObject({ status: "error", runMs: 0 });
-				expect(blocked.stderr).toMatch(/cell import not allowed.*sock_/);
-				expect(existsSync(join(project, "ran"))).toBe(false);
-				expect(connections).toBe(0);
-				// Positive control: the exact artifact really connects when invoked
-				// directly in stock WasmEdge, outside the cell/test import gates.
-				const control = await cellProcess.runProcess(
-					toolchain!.wasmedgeBin,
-					[
-						"run",
-						"--force-interpreter",
-						"--dir",
-						`/workspace:${project}`,
-						join(f.workspace, "target/wasm32-wasip1/release/cell.wasm"),
-					],
-					{ cwd: f.workspace, timeoutMs: 10_000 },
-				);
-				expect(control, control.stderr).toMatchObject({ exitCode: 0 });
-				expect(existsSync(join(project, "ran"))).toBe(true);
-				await vi.waitFor(() => expect(connections).toBe(1));
-				const processes = vi.spyOn(cellProcess, "runProcess");
-				try {
-					await expect(testRustSkill(reference, f.options)).rejects.toThrow(
-						/skill test import not allowed.*sock_/,
-					);
-					expect(processes.mock.calls.filter(([bin]) => bin === toolchain!.wasmedgeBin)).toHaveLength(0);
-					expect(connections).toBe(1);
-				} finally {
-					processes.mockRestore();
-				}
+				await expect(testRustSkill(reference, f.options)).rejects.toThrow(/skill test import not allowed.*sock_/);
+				expect(processes.mock.calls.filter(([bin]) => bin === toolchain!.wasmedgeBin)).toHaveLength(0);
+				expect(connections).toBe(1);
 			} finally {
-				await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+				processes.mockRestore();
 			}
-		},
-	);
+		} finally {
+			await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+		}
+	});
 
 	it("rejects failing assertions, compile errors, and crates without active tests", { timeout: 180_000 }, async () => {
 		const f = fixture("#[test] fn fails() { assert_eq!(1, 2); }");

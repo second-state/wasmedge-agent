@@ -26,6 +26,7 @@ function createSupervisor(worker: TestWorker, assertRecoveryAllowed = async () =
 	return Object.assign(Object.create(DaemonSupervisor.prototype), {
 		shuttingDown: false,
 		workers: new Map([[worker.descriptor.workerId, worker]]),
+		sessionInputPauses: new Map(),
 		assertRecoveryAllowed,
 		persistWorker: vi.fn(),
 		syncAgentPeers: vi.fn(async () => {}),

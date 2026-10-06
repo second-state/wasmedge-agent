@@ -29,7 +29,6 @@ export interface WasmEdgeAgentAutonomousMeta {
 	tokensUsed: number;
 	gateAttempt?: number;
 	gateFailure?: string;
-	limitReason?: string;
 }
 
 export interface WasmEdgeAgentRustAttachmentMeta {
@@ -59,6 +58,13 @@ export interface WasmEdgeAgentRefinementMeta {
 	error?: string;
 }
 
+export interface WasmEdgeAgentQuiescenceMeta {
+	/** Subagents that have not reached a terminal state at the observation point. */
+	outstandingSubagents: number;
+	/** Autonomous continuation slots still available at the observation point. */
+	remainingAutonomousContinuations: number;
+}
+
 export interface WasmEdgeAgentAgentMessageMeta {
 	toolCallId: string;
 	target?: string;
@@ -72,7 +78,35 @@ export interface WasmEdgeAgentCwdMeta {
 	actual: string;
 }
 
+/**
+ * Producer-side ordering and causality for ACP updates.
+ *
+ * `promptTurnId` is allocated when ACP accepts a prompt, never inferred from
+ * whichever prompt happens to be running when an update is delivered. `0`
+ * means a session-scoped event with no prompt origin (for example a heartbeat
+ * change before the first prompt). `eventSequence` is connection-wide and
+ * strictly increases for every update WasmEdge Agent publishes.
+ */
+export type WasmEdgeAgentEventPhase = "event" | "responseBoundary" | "terminalQuiescence";
+
+/** The outcome carried by a correlated response boundary and terminal envelope. */
+export type WasmEdgeAgentResponseOutcome = "result" | "error";
+
 export interface WasmEdgeAgentSessionMeta {
+	/** Monotonically increasing ACP prompt turn which caused this update. */
+	promptTurnId?: number;
+	/** Strictly increasing producer sequence, across all ACP updates. */
+	eventSequence?: number;
+	/** Whether this is ordinary work, the prompt response boundary, or final quiescence. */
+	phase?: WasmEdgeAgentEventPhase;
+	/**
+	 * The boundary/terminal outcome. This deliberately has only `result` and
+	 * `error`: ACP's transport stop reasons (including `end_turn`) are never a
+	 * causal completion signal.
+	 */
+	outcome?: WasmEdgeAgentResponseOutcome;
+	/** Whether an accepted response boundary promises a later terminal-quiescence envelope. */
+	terminalQuiescenceExpected?: boolean;
 	/** Present when a client-requested cwd differs from the agent's real cwd. */
 	cwd?: WasmEdgeAgentCwdMeta;
 	/** Set when the session's heartbeat or cron schedule changed. */
@@ -86,6 +120,8 @@ export interface WasmEdgeAgentSessionMeta {
 	compaction?: { tokensBefore?: number; summary?: string };
 	subagents?: WasmEdgeAgentSubagentMeta[];
 	autonomous?: WasmEdgeAgentAutonomousMeta;
+	/** Observed subagent and autonomous-continuation counts at completion. */
+	quiescence?: WasmEdgeAgentQuiescenceMeta;
 	rust?: WasmEdgeAgentRustMeta;
 }
 

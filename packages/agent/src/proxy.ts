@@ -1,9 +1,3 @@
-/**
- * Proxy stream function for apps that route LLM calls through a server.
- * The server manages auth and proxies requests to LLM providers.
- */
-
-// Internal import for JSON parsing utility
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
@@ -16,7 +10,6 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 
-// Create stream class matching ProxyMessageEventStream
 class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
 		super(
@@ -30,9 +23,6 @@ class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, Assista
 	}
 }
 
-/**
- * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
- */
 export type ProxyAssistantMessageEvent =
 	| { type: "start" }
 	| { type: "text_start"; contentIndex: number }
@@ -56,26 +46,39 @@ export type ProxyAssistantMessageEvent =
 			usage: AssistantMessage["usage"];
 	  };
 
-type ProxySerializableStreamOptions = Pick<
-	SimpleStreamOptions,
-	| "temperature"
-	| "maxTokens"
-	| "reasoning"
-	| "cacheRetention"
-	| "sessionId"
-	| "headers"
-	| "metadata"
-	| "transport"
-	| "thinkingBudgets"
-	| "maxRetryDelayMs"
->;
+/**
+ * Total map over the shared stream options: every option is either serialized into the proxy
+ * request or explicitly excluded. A new option in `SimpleStreamOptions` fails to compile here
+ * until it is classified, so proxy transport cannot silently drop what direct transport sends.
+ */
+const PROXY_SERIALIZED_OPTIONS = {
+	temperature: true,
+	maxTokens: true,
+	reasoning: true,
+	cacheRetention: true,
+	sessionId: true,
+	headers: true,
+	metadata: true,
+	transport: true,
+	thinkingBudgets: true,
+	serviceTier: true,
+	// Client-local: abort, credentials, request lifetime and payload hooks stay on this side.
+	signal: false,
+	apiKey: false,
+	timeoutMs: false,
+	onPayload: false,
+	onResponse: false,
+} as const satisfies Record<keyof SimpleStreamOptions, boolean>;
+
+type ProxySerializedOption = {
+	[K in keyof typeof PROXY_SERIALIZED_OPTIONS]: (typeof PROXY_SERIALIZED_OPTIONS)[K] extends true ? K : never;
+}[keyof typeof PROXY_SERIALIZED_OPTIONS];
+
+type ProxySerializableStreamOptions = Pick<SimpleStreamOptions, ProxySerializedOption>;
 
 export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
-	/** Local abort signal for the proxy request */
 	signal?: AbortSignal;
-	/** Auth token for the proxy server */
 	authToken: string;
-	/** Proxy server URL (e.g., "https://genai.example.com") */
 	proxyUrl: string;
 }
 
@@ -98,7 +101,9 @@ export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
  * });
  * ```
  */
-function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializableStreamOptions {
+function buildProxyRequestOptions(options: ProxyStreamOptions): {
+	[K in ProxySerializedOption]: SimpleStreamOptions[K];
+} {
 	return {
 		temperature: options.temperature,
 		maxTokens: options.maxTokens,
@@ -109,7 +114,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 		metadata: options.metadata,
 		transport: options.transport,
 		thinkingBudgets: options.thinkingBudgets,
-		maxRetryDelayMs: options.maxRetryDelayMs,
+		serviceTier: options.serviceTier,
 	};
 }
 
@@ -117,7 +122,6 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 	const stream = new ProxyMessageEventStream();
 
 	(async () => {
-		// Initialize the partial message that we'll build up from events
 		const partial: AssistantMessage = {
 			role: "assistant",
 			stopReason: "stop",
@@ -137,6 +141,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		};
 
 		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+		let sawTerminalEvent = false;
 
 		const abortHandler = () => {
 			if (reader) {
@@ -171,7 +176,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 						errorMessage = `Proxy error: ${errorData.error}`;
 					}
 				} catch {
-					// Couldn't parse error response
+					// Keep the status-text fallback when the error body is not JSON.
 				}
 				throw new Error(errorMessage);
 			}
@@ -199,6 +204,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 							const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
 							const event = processProxyEvent(proxyEvent, partial);
 							if (event) {
+								sawTerminalEvent ||= event.type === "done" || event.type === "error";
 								stream.push(event);
 							}
 						}
@@ -208,6 +214,9 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 
 			if (options.signal?.aborted) {
 				throw new Error("Request aborted by user");
+			}
+			if (!sawTerminalEvent) {
+				throw new Error("Proxy stream truncated before completion");
 			}
 
 			stream.end();
@@ -232,9 +241,6 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 	return stream;
 }
 
-/**
- * Process a proxy event and update the partial message.
- */
 function processProxyEvent(
 	proxyEvent: ProxyAssistantMessageEvent,
 	partial: AssistantMessage,

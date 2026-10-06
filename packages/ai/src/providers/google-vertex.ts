@@ -62,7 +62,6 @@ const THINKING_LEVEL_MAP: Record<GoogleThinkingLevel, ThinkingLevel> = {
 	HIGH: ThinkingLevel.HIGH,
 };
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOptions> = (
@@ -93,7 +92,6 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 
 		try {
 			const apiKey = resolveApiKey(options);
-			// Create the client using either a Vertex API key, if provided, or ADC with project and location
 			const client = apiKey
 				? createClientWithApiKey(model, apiKey, options?.headers)
 				: createClient(model, resolveProject(options), resolveLocation(options), options?.headers);
@@ -307,7 +305,7 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
 	const base = buildBaseOptions(model, options, undefined);
-	if (!options?.reasoning) {
+	if (!options?.reasoning || options.reasoning === "off") {
 		return streamGoogleVertex(model, context, {
 			...base,
 			thinking: { enabled: false },
@@ -318,12 +316,12 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
 	const effort = (clampedReasoning === "off" ? "high" : clampedReasoning) as ClampedThinkingLevel;
 	const geminiModel = model as unknown as Model<"google-generative-ai">;
 
-	if (isGemini3ProModel(geminiModel) || isGemini3FlashModel(geminiModel)) {
+	if (isGemini3ProModel(geminiModel) || isGemini3FlashModel(geminiModel) || isGemma4Model(geminiModel)) {
 		return streamGoogleVertex(model, context, {
 			...base,
 			thinking: {
 				enabled: true,
-				level: getGemini3ThinkingLevel(effort, geminiModel),
+				level: getThinkingLevel(effort, geminiModel),
 			},
 		} satisfies GoogleVertexOptions);
 	}
@@ -494,6 +492,10 @@ function buildParams(
 
 type ClampedThinkingLevel = Exclude<PiThinkingLevel, "xhigh" | "max">;
 
+function isGemma4Model(model: Model<"google-generative-ai">): boolean {
+	return /gemma-?4/.test(model.id.toLowerCase());
+}
+
 function isGemini3ProModel(model: Model<"google-generative-ai">): boolean {
 	return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
 }
@@ -513,20 +515,30 @@ function getDisabledThinkingConfig(model: Model<"google-vertex">): ThinkingConfi
 	if (isGemini3FlashModel(geminiModel)) {
 		return { thinkingLevel: ThinkingLevel.MINIMAL };
 	}
+	if (isGemma4Model(geminiModel)) {
+		return { thinkingLevel: ThinkingLevel.MINIMAL };
+	}
 
 	// Gemini 2.x supports disabling via thinkingBudget = 0.
 	return { thinkingBudget: 0 };
 }
 
-function getGemini3ThinkingLevel(
-	effort: ClampedThinkingLevel,
-	model: Model<"google-generative-ai">,
-): GoogleThinkingLevel {
+function getThinkingLevel(effort: ClampedThinkingLevel, model: Model<"google-generative-ai">): GoogleThinkingLevel {
 	if (isGemini3ProModel(model)) {
 		switch (effort) {
 			case "minimal":
 			case "low":
 				return "LOW";
+			case "medium":
+			case "high":
+				return "HIGH";
+		}
+	}
+	if (isGemma4Model(model)) {
+		switch (effort) {
+			case "minimal":
+			case "low":
+				return "MINIMAL";
 			case "medium":
 			case "high":
 				return "HIGH";

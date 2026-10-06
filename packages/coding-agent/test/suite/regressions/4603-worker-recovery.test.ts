@@ -1,9 +1,11 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	copyFileSync,
 	existsSync,
 	linkSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	renameSync,
@@ -11,6 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createConnection, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { APP_NAME, ENV_AGENT_DIR } from "../../../src/config.js";
@@ -94,6 +97,12 @@ const fixturePath = resolve(__dirname, "../../fixtures/eng-4600-supervisor-fixtu
 const fauxExtensionPath = resolve(__dirname, "../../fixtures/eng-4600-faux-extension.ts");
 const cliPath = resolve(__dirname, "../../../src/cli.ts");
 const tsxPath = resolve(__dirname, "../../../../../node_modules/tsx/dist/cli.mjs");
+// The fixture must run in the spawned process itself: the tsx CLI wrapper forks,
+// which would leave the spawned pid owning only tsx IPC pipes while the real
+// supervisor (and its daemon socket) hides in an untracked child pid — invisible
+// to the OS socket sweep this regression exercises. `--import` with tsx's ESM
+// loader runs the TypeScript fixture in-process.
+const tsxLoaderPath = resolve(__dirname, "../../../../../node_modules/tsx/dist/esm/index.mjs");
 const tsconfigPath = resolve(__dirname, "../../../../../tsconfig.json");
 const supervisorRegistryDirEnv = "WASMEDGE_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
 const handles = new Set<ProcessHandle>();
@@ -126,9 +135,17 @@ async function createPaths(): Promise<TestPaths> {
 	const harness = await createHarness();
 	harnesses.push(harness);
 	const executablePath = join(harness.tempDir, APP_NAME);
-	linkSync(process.execPath, executablePath);
-	const socketTmpDir = `/tmp/eng-4603-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-	mkdirSync(socketTmpDir, { recursive: true, mode: 0o700 });
+	try {
+		linkSync(process.execPath, executablePath);
+	} catch (error) {
+		// tmpdir() may live on a different filesystem than node (e.g. a tmpfs mount).
+		if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+		copyFileSync(process.execPath, executablePath);
+	}
+	// Unix socket paths are length limited, so the child TMPDIR stays under a short root.
+	const socketTmpRoot = process.platform === "win32" ? tmpdir() : "/tmp";
+	mkdirSync(socketTmpRoot, { recursive: true, mode: 0o700 });
+	const socketTmpDir = mkdtempSync(join(socketTmpRoot, "eng-4603-"));
 	socketTempDirs.add(socketTmpDir);
 	fixtureDescriptorDirs.add(join(harness.tempDir, "workers"));
 	fixtureRegistryDirs.add(join(harness.tempDir, "registry"));
@@ -147,7 +164,7 @@ async function createPaths(): Promise<TestPaths> {
 
 function spawnSupervisor(paths: TestPaths): ProcessHandle {
 	return trackProcess(
-		spawn(paths.executablePath, [tsxPath, fixturePath], {
+		spawn(paths.executablePath, ["--import", tsxLoaderPath, fixturePath], {
 			cwd: paths.agentDir,
 			env: {
 				...process.env,
@@ -750,7 +767,7 @@ function delay(ms: number): Promise<void> {
 }
 
 describe("ENG-4603 worker recovery convergence", () => {
-	it("allows only the current generation to replace a crashed resident worker", async () => {
+	it("waits for fresh client context before replacing a crashed resident worker", async () => {
 		if (process.platform === "win32") return;
 		const paths = await createPaths();
 		const predecessor = spawnSupervisor(paths);
@@ -759,9 +776,8 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForType(predecessor, "ready", 60_000);
 		const predecessorClient = await connectEventually(paths.socketPath);
 		const summary = await createResidentSession(predecessorClient, paths.agentDir);
-		const activeSessionId = summary.activeSessionId ?? summary.id;
 		const originalWorkerPid = summary.workerPid;
-		if (!originalWorkerPid) throw new Error("Resident worker did not expose its pid");
+		if (!originalWorkerPid || !summary.sessionFile) throw new Error("Resident worker did not expose its identity");
 		const originalWorkerStartId = getProcessStartId(originalWorkerPid);
 		const originalWorkerIdentity = registerFixtureProcess(originalWorkerPid, originalWorkerStartId, "worker")!;
 
@@ -775,9 +791,50 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForExactProcessExit(originalWorkerPid, originalWorkerStartId);
 
 		const successorClient = await connectEventually(paths.socketPath);
+		let failed: DaemonWorkerDescriptor | undefined;
+		const failedDeadline = Date.now() + 30_000;
+		while (Date.now() < failedDeadline) {
+			const candidate = readWorkerDescriptor(paths.descriptorDir);
+			if (candidate.pid === originalWorkerPid && candidate.lifecycle === "failed") {
+				failed = candidate;
+				break;
+			}
+			await delay(25);
+		}
+		if (!failed) throw new Error("Successor did not retain the failed resident");
+		await delay(750);
+		expect(readWorkerDescriptor(paths.descriptorDir)).toMatchObject({
+			pid: originalWorkerPid,
+			lifecycle: "failed",
+		});
+
+		const recovered = await successorClient.request(
+			{
+				type: "create",
+				sessionPath: summary.sessionFile,
+				continueRecent: false,
+				config: {
+					agentDir: paths.agentDir,
+					apiKey: "faux-key",
+					cwd: paths.agentDir,
+					extensions: [fauxExtensionPath],
+					model: "faux",
+					noContextFiles: true,
+					noExtensions: false,
+					noSkills: true,
+					noTools: true,
+					provider: "faux",
+				},
+				launchEnv: { WASMEDGE_AGENT_TEST_FRESH_CONTEXT: "1" },
+			},
+			60_000,
+		);
+		if (!recovered.success) throw new Error(recovered.error);
+		const recoveredSummary = requireSummary(recovered.data);
+
 		let replacement: DaemonWorkerDescriptor | undefined;
-		const deadline = Date.now() + 30_000;
-		while (Date.now() < deadline) {
+		const replacementDeadline = Date.now() + 30_000;
+		while (Date.now() < replacementDeadline) {
 			const candidate = readWorkerDescriptor(paths.descriptorDir);
 			if (candidate.pid !== originalWorkerPid && candidate.lifecycle === "ready") {
 				replacement = candidate;
@@ -785,20 +842,16 @@ describe("ENG-4603 worker recovery convergence", () => {
 			}
 			await delay(25);
 		}
-		if (!replacement) throw new Error("Current supervisor did not publish a replacement worker");
+		if (!replacement) throw new Error("Fresh client context did not replace the failed worker");
 		expect(getProcessStartId(replacement.pid)).toBe(replacement.processStartId);
-		await delay(750);
 		expect(exactProcessIsAlive(replacement.pid, replacement.processStartId)).toBe(true);
 		expect(readdirSync(paths.descriptorDir).filter((name) => name.endsWith(".json"))).toHaveLength(1);
-		const listed = await successorClient.request({ type: "list" });
-		if (!listed.success) throw new Error(listed.error);
-		const sessions = (listed.data as { sessions: unknown[] }).sessions;
-		expect(sessions).toHaveLength(1);
-		expect(requireSummary(sessions[0]).workerPid).toBe(replacement.pid);
 
-		const connection = await DaemonAgentConnection.attach(successorClient, activeSessionId, {
-			recoverDaemon: async () => {},
-		});
+		const connection = await DaemonAgentConnection.attach(
+			successorClient,
+			recoveredSummary.activeSessionId ?? recoveredSummary.id,
+			{ recoverDaemon: async () => {} },
+		);
 		await connection.getInitialSnapshot();
 		await connection.prompt("after recovery");
 		await connection.waitForIdle();
@@ -815,7 +868,7 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForExit(successor);
 		await waitForExactProcessExit(replacement.pid, replacement.processStartId);
 		await terminateTrackedFixtureProcess(predecessor);
-	}, 120_000);
+	}, 150_000);
 
 	it("rejects stale commands at worker receipt and before public journal insertion", async () => {
 		if (process.platform === "win32") return;
@@ -955,7 +1008,10 @@ describe("ENG-4603 worker recovery convergence", () => {
 			};
 			expect(record.pid).toBe(process.pid);
 			expect(record.processStartId).toBe(getProcessStartId(process.pid));
-			const refreshTimer = Reflect.get(first, "refreshTimer") as ReturnType<typeof setInterval> | undefined;
+			const renewal = Reflect.get(first, "renewal") as object | undefined;
+			const refreshTimer = renewal
+				? (Reflect.get(renewal, "refreshTimer") as ReturnType<typeof setInterval> | undefined)
+				: undefined;
 			if (!refreshTimer) throw new Error("Shutdown admission did not start its lease refresh");
 			clearInterval(refreshTimer);
 			let acquired = false;
@@ -1013,22 +1069,26 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForType(unrelated, "booted");
 		unrelated.child.send({ type: "go" });
 		await waitForType(unrelated, "ready", 60_000);
-		const unrelatedStartId = getProcessStartId(unrelated.child.pid!);
-		// Simulate the host's Linux-first discovery on every platform, with only
-		// our canary in its output so a regression cannot reach real user daemons.
-		const hostBin = join(paths.agentDir, "host-bin");
-		mkdirSync(hostBin);
-		writeFileSync(join(hostBin, "ss"), "#!/bin/sh\nprintf '%s\\n' \"$ENG_4603_HOST_SS_LISTENER\"\n", {
-			mode: 0o700,
-		});
 		const systemLsofPath = spawnSync("which", ["lsof"], { encoding: "utf8" }).stdout.trim();
 		if (!systemLsofPath) throw new Error("Could not locate lsof for the shutdown regression");
-		// Force the PID-scoped lsof fallback; host ss would discover other suites' daemons.
-		writeFileSync(join(paths.agentDir, "ss"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
 		const lsofPath = join(paths.agentDir, "lsof");
 		writeFileSync(lsofPath, '#!/bin/sh\nexec "$ENG_4603_SYSTEM_LSOF" -nP -F pn -U -a -p "$ENG_4603_LSOF_PIDS"\n', {
 			mode: 0o700,
 		});
+		const systemSsPath = spawnSync("which", ["ss"], { encoding: "utf8" }).stdout.trim();
+		const ssPath = join(paths.agentDir, "ss");
+		writeFileSync(
+			ssPath,
+			`#!/bin/sh
+[ -n "$ENG_4603_SYSTEM_SS" ] || exit 1
+listeners=$("$ENG_4603_SYSTEM_SS" "$@") || exit $?
+printf '%s\\n' "$listeners" | awk -v pids="$ENG_4603_LSOF_PIDS" '
+ BEGIN { count=split(pids, allowed, ",") }
+ { for (i=1; i<=count; i++) if (index($0, "pid=" allowed[i] ",")) { print; break } }
+'
+`,
+			{ mode: 0o700 },
+		);
 		// doctor's runtime checks/fixes must stay hermetic: point them at a tiny
 		// fake template so --fix never vendors or builds the real one mid-test.
 		const fakeTemplateDir = join(paths.agentDir, "fake-template");
@@ -1037,8 +1097,8 @@ describe("ENG-4603 worker recovery convergence", () => {
 		const lsofEnvironment = {
 			ENG_4603_LSOF_PIDS: `${predecessor.child.pid},${successor.child.pid},${workerPid}`,
 			ENG_4603_SYSTEM_LSOF: systemLsofPath,
-			ENG_4603_HOST_SS_LISTENER: `u_str LISTEN 0 128 ${unrelatedPaths.socketPath} 1 * 0 users:(("${APP_NAME}",pid=${unrelated.child.pid},fd=1))`,
-			PATH: `${paths.agentDir}:${hostBin}:${process.env.PATH ?? ""}`,
+			ENG_4603_SYSTEM_SS: systemSsPath,
+			PATH: `${paths.agentDir}:${process.env.PATH ?? ""}`,
 			WASMEDGE_AGENT_TEMPLATE_DIR: fakeTemplateDir,
 		};
 		const listenersBeforeShutdown = spawnSync(lsofPath, [], {
@@ -1049,9 +1109,9 @@ describe("ENG-4603 worker recovery convergence", () => {
 		expect(listenersBeforeShutdown).toContain(`p${successor.child.pid}`);
 
 		const shutdown = await runCli(paths, ["shutdown", "--force", "--json"], 60_000, lsofEnvironment);
-		expect(exactProcessIsAlive(unrelated.child.pid!, unrelatedStartId), shutdown.stdout).toBe(true);
-		expect(shutdown.code).toBe(0);
+		expect(shutdown.code, `${shutdown.stdout}\n${shutdown.stderr}`).toBe(0);
 		const shutdownResult = JSON.parse(shutdown.stdout) as { stopped: unknown[]; failed: unknown[] };
+		expect(exactProcessIsAlive(unrelated.child.pid!, unrelated.identity?.processStartId)).toBe(true);
 		const survivingIdentities = [
 			{ pid: predecessor.child.pid!, processStartId: predecessorStartId },
 			{ pid: successor.child.pid!, processStartId: successorStartId },
@@ -1064,10 +1124,13 @@ describe("ENG-4603 worker recovery convergence", () => {
 		await waitForExactProcessExit(predecessor.child.pid!, predecessorStartId);
 		await waitForExactProcessExit(successor.child.pid!, successorStartId);
 		await waitForExactProcessExit(workerPid, workerStartId);
-		await delay(11_000);
-		expect(exactProcessIsAlive(predecessor.child.pid!, predecessorStartId)).toBe(false);
-		expect(exactProcessIsAlive(successor.child.pid!, successorStartId)).toBe(false);
-		expect(exactProcessIsAlive(workerPid, workerStartId)).toBe(false);
+		const listenersAfterShutdown = spawnSync(lsofPath, [], {
+			encoding: "utf8",
+			env: { ...process.env, ...lsofEnvironment },
+		}).stdout;
+		expect(listenersAfterShutdown).not.toContain(`p${predecessor.child.pid}`);
+		expect(listenersAfterShutdown).not.toContain(`p${successor.child.pid}`);
+		expect(listenersAfterShutdown).not.toContain(`p${workerPid}`);
 
 		const contracts = [
 			{ args: ["status", "--json"], json: [] },
@@ -1101,7 +1164,7 @@ describe("ENG-4603 worker recovery convergence", () => {
 		expect(doctorHuman.code).toBe(0);
 		expect(doctorHuman.stdout).toContain("Runtime:");
 		expect(doctorHuman.stdout.endsWith("Background services:\nNo background services found.\n")).toBe(true);
-		expect(exactProcessIsAlive(unrelated.child.pid!, unrelatedStartId)).toBe(true);
+		expect(exactProcessIsAlive(unrelated.child.pid!, unrelated.identity?.processStartId)).toBe(true);
 		const unrelatedClient = await connectEventually(unrelatedPaths.socketPath);
 		try {
 			expect((await unrelatedClient.request({ type: "list" }, 5000)).success).toBe(true);

@@ -98,6 +98,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`$VISUAL` or `$EDITOR`) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image from clipboard |
+| `app.clipboard.copyLoginUrl` | `c`, `alt+c` | Copy the sign-in URL from a login dialog |
 
 ### Sessions
 
@@ -114,23 +115,23 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 |--------|---------|-------------|
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.toggleScope` | `alt+s` | Toggle between all and scoped models |
-| `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
-### Configuration Menu
+### Configuration Pickers
 
-Use `tab` to cycle forward and `shift+tab` to cycle backward through Providers, Models, and MCP Connections. Use `escape` to close the menu. Left and right move the cursor in the active search field.
-
-| Keybinding id | Default | Description |
-|--------|---------|-------------|
-| `app.configuration.previousTab` | `shift+tab` | Select the previous configuration tab |
+Models, Providers, and MCP Connections open as separate pickers. Use `escape` to close a picker. Left and right edit a nonempty search field; with an empty model search, they adjust the highlighted model's effort.
 
 ### Display and Message Queue
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
+| `app.tools.expand` | `ctrl+o` | Cycle overview → thinking and file diffs → all output |
 | `app.message.followUp` | `alt+enter` | Queue follow-up message |
-| `app.message.dequeue` | `alt+up` | Restore queued messages to editor |
+| `app.message.navigateOlder` | `alt+up` | Select the next older pending message |
+| `app.message.navigateNewer` | `alt+down` | Select the next newer pending message or restore the draft |
+| `app.message.moveEarlier` | `ctrl+alt+up` | Move the selected pending message one place earlier in its queue |
+| `app.message.moveLater` | `ctrl+alt+down` | Move the selected pending message one place later in its queue |
+
+Ctrl+O cycles the conversation detail level and saves it as the `chatDetail` setting, so new, resumed, and attached chats open at the level you last picked. It never rewrites messages or the session file. Overview hides thinking and collapses tools and diffs; details (the default) reveals thinking and file diffs; all output expands tool output and full agent-to-agent message bodies; the next press returns to overview. Compact sent and received message notices remain visible in every mode. This also works for restored conversations and new streaming content. Ctrl+J, Ctrl+T, and Ctrl+P no longer control conversation expansion.
 
 ### Tree Navigation
 
@@ -178,6 +179,8 @@ Each action can have a single key or an array of keys. User config overrides def
 On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, WasmEdge Agent shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
 
 ### Emacs Example
+
+Binding `ctrl+p` below moves the editor cursor up; shortcuts in other views keep their defaults.
 
 ```json
 {

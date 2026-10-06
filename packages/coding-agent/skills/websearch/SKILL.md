@@ -1,6 +1,6 @@
 ---
 name: websearch
-description: Search Google via the Serper API. Takes a single query. Returns titles, URLs, snippets, and knowledge-graph data.
+description: Search Google via the Serper API. Configure access via /login, then MCP Connections, then Serper (web search). Takes one query and returns titles, URLs, snippets, and knowledge-graph data.
 ---
 
 # Web Search
@@ -10,9 +10,9 @@ host: cells call this crate, and the host performs the HTTP request.
 
 ## Setup
 
-Get a free API key at https://serper.dev, then run `/login` in WasmEdge Agent and
-choose "Serper (web search)" to paste it. The key is stored in WasmEdge Agent and
-used by the host automatically.
+Get a free API key at https://serper.dev, then run `/login` in WasmEdge Agent,
+switch to **MCP Connections**, and choose **Serper (web search)** to paste it.
+The key is stored in WasmEdge Agent and used by the host automatically.
 
 If web search reports a missing key, walk the user through those two steps;
 don't ask them to set environment variables.

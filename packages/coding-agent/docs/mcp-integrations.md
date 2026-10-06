@@ -14,45 +14,63 @@ let issues = rlm::mcp::call_tool("linear", "list_issues", json!({"team": "Engine
 ```
 
 The host connects with the official `mcp` SDK over streamable HTTP, injects
-credentials from `auth.json`, and caches one connection per server. Credentials
-never enter the sandbox.
+credentials from `auth.json`, and caches one connection per server. Its other
+jobs are the service catalog, interactive login (browser OAuth), credential
+storage and refresh, and connection verification. Credentials never enter the
+sandbox.
 
 ## Table of Contents
 
-- [Using a built-in integration](#using-a-built-in-integration)
+- [Connecting a service](#connecting-a-service)
 - [How a call works](#how-a-call-works)
-- [Adding your own server](#adding-your-own-server)
+- [Connection states](#connection-states)
+- [The model-facing inventory](#the-model-facing-inventory)
+- [Generic MCP servers](#generic-mcp-servers)
   - [Authentication](#authentication)
-- [Enable-by-login lifecycle](#enable-by-login-lifecycle)
 - [Caveats](#caveats)
 
-## Using a built-in integration
+## Connecting a service
 
-Built-in integrations (Linear, Notion) ship **disabled**. Logging in enables them:
+`/plugins` and bare `/mcp` open the same searchable external-service screen:
 
-- Open `/login`, switch to **MCP Connections**, pick the integration, and
-  complete OAuth in the browser. `/mcp login <name>` does the same from the CLI.
-- Once connected, the server is listed in the model's system prompt and callable
-  via `rlm::mcp`.
-- `/mcp` lists integrations and connection status; `/mcp logout <name>`
-  disconnects.
+- Type to search (e.g. "Notion") — one canonical card per service, no duplicates.
+- Each card shows its honest state: **Connect**, **Connected**, **Reconnect**,
+  **Verifying**, **Requires setup**, or **Disabled**.
+- Press Enter on a **Connect** card to review and complete browser OAuth. The
+  credentials are stored locally in `~/.wasmedge-agent/auth.json` under
+  `mcp:<service>`; WasmEdge Agent never proxies them.
+- After login, WasmEdge Agent verifies the connection with a real MCP handshake
+  (initialize + `tools/list`). A stored token alone is never reported as
+  Connected: until the handshake succeeds the state stays **Verifying** or
+  **Reconnect**. On success the connection activates in the current conversation
+  without a restart, and the discovered tool count is shown.
+- Enter on a **Connected** card disconnects it (removes the local credentials and
+  connection record; revoking the provider grant stays a provider-side action).
+- Cards marked **Requires setup** explain what is missing (developer app, API
+  key, tenant URL, stdio adapter). They never show a fake Connect button.
 
-Credentials are stored once in `~/.wasmedge-agent/auth.json` under `mcp:<name>`.
-Enablement is derived from whether valid credentials exist — there is no separate
-on/off switch.
+`/mcp login <name>` and `/mcp logout <name>` work from the command line for the
+same connections. The advanced subcommands (`/mcp add|list|get|remove`) remain
+available and unchanged.
+
+Connection records live in `~/.wasmedge-agent/mcp-connections.json`. They keep the
+`connectionId` (the dispatch id and credential key), the catalog `serviceId`, the
+bound endpoint, and the last verification result. Multiple accounts per service
+will use distinct connection ids; grants are never merged because names look
+similar.
 
 ## How a call works
 
-The tool set is defined by the **server**, so discover before you call — don't
-assume tool names or arguments:
+The tool set is defined by the **server**, not by WasmEdge Agent, so discover
+before you call — don't assume tool names or arguments:
 
 ```rust
 // 1. Discover available tools (name, description, inputSchema)
-let tools = rlm::mcp::list_tools("linear")?;
+let tools = rlm::mcp::list_tools("notion")?;
 println!("{}", serde_json::to_string_pretty(&tools)?);
 
 // 2. Call one; the arguments object matches the tool's JSON Schema
-let result = rlm::mcp::call_tool("linear", "list_issues", json!({"team": "Engineering"}))?;
+let result = rlm::mcp::call_tool("notion", "notion-search", json!({"query": "meeting notes"}))?;
 ```
 
 - Results are the server's MCP result payload as `serde_json::Value` — content
@@ -63,19 +81,67 @@ let result = rlm::mcp::call_tool("linear", "list_issues", json!({"team": "Engine
   json!({"server": name}))?` forces a reconnect; ordinary calls do this
   automatically on the next connection.
 
-## Adding your own server
+## Connection states
 
-Declare it under `mcpServers` in `~/.wasmedge-agent/settings.json` (or project
-`.wasmedge-agent/settings.json`) — that is the whole integration:
+- **Connected** — a real MCP handshake succeeded against the bound endpoint
+  with the stored credentials. Token presence alone never yields this state.
+- **Verifying / pending** — credentials exist but the handshake has not
+  succeeded (yet), e.g. right after login or while the endpoint is unreachable.
+  The connection is usable; dispatch performs the live handshake.
+- **Reconnect / error** — the credential was rejected (expired with no refresh
+  token, or bound to a different endpoint). Reconnecting from `/plugins` fixes
+  it; existing grants are not deleted by a failed verification.
+- **Requires setup** — the service needs manual setup (developer app, API key,
+  tenant URL, or a stdio adapter). The card states what is needed.
+- **Disabled** — the server entry is disabled in settings.
+
+Account/workspace identity is shown only when the provider exposes it; MCP has
+no universal identity capability, so unknown is reported honestly.
+
+## The model-facing inventory
+
+A cell can ask the host for both supported-but-unconnected services and the
+user's actual connections (the `mcp.list_plugins`, `mcp.search_plugins`, and
+`mcp.list_connections` host requests). The full catalog is never injected into
+the prompt; the model queries it on demand and searches it on the host. A
+recommendation to connect a service never installs it or opens a browser by
+itself: connecting is an explicit user action in `/plugins`.
+
+## Generic MCP servers
+
+Manage generic servers from either the shell (which exits without starting an
+agent) or the TUI. Both surfaces update only `~/.wasmedge-agent/settings.json`:
+
+```bash
+wasmedge-agent mcp add remote --url https://mcp.example.com/mcp --bearer-token-env-var EXAMPLE_TOKEN
+wasmedge-agent mcp list
+wasmedge-agent mcp get remote
+wasmedge-agent mcp remove remote
+```
+
+Use the same forms after `/mcp` in the TUI. Add `--oauth` for the existing OAuth
+login flow and then use `/mcp login <name>`; use `--force` to replace a complete
+existing entry. Static secret values are not accepted: bearer secrets are
+environment-variable references. Project `.wasmedge-agent/settings.json` MCP
+entries are ignored for execution, so a repository cannot point the host at its
+own endpoint or shadow a user server.
+
+Bundled integration names (`linear`, `notion`) are reserved: `mcp add` rejects
+them, and a hand-edited `mcpServers` entry with such a name is ignored instead of
+reconfiguring the built-in service. For service ids added later by the service
+catalog, a user-declared server with the same name keeps working and owns the id;
+connect the official endpoint instead through a differently-named entry.
+
+Advanced options may also be written directly to the user settings file:
 
 ```jsonc
 // ~/.wasmedge-agent/settings.json
 {
   "mcpServers": {
-    "acme": {
+    "remote": {
       "type": "http",
-      "url": "https://mcp.acme.com/mcp",
-      "oauth": true
+      "url": "https://mcp.example.com/mcp",
+      "bearerTokenEnvVar": "EXAMPLE_TOKEN"
     }
   }
 }
@@ -95,54 +161,32 @@ HTTP server fields:
 > `stdio` (local-subprocess) servers are not supported — the host rejects
 > non-HTTP entries — so an integration must target an HTTP endpoint.
 
+The host initializes a connection on first use and reuses it for later calls.
+Configuration changes replace the connection on the next call.
+
 Optionally, ship a markdown [skill](skills.md) that documents the server's
 important tools and workflows so the model reaches for them at the right time;
 the calls themselves need nothing beyond `rlm::mcp`.
 
 ### Authentication
 
-- **OAuth** (`"oauth": true`): the user runs `/login` → MCP Connections → your
-  server (or `/mcp login acme`). Works when the server supports OAuth 2.1 dynamic
-  client registration (RFC 7591); login discovers the auth server, registers a
-  client, and runs PKCE. Servers requiring a pre-registered client id are not yet
+- **OAuth** (`"oauth": true`): the user runs `/mcp login <name>` (or connects it
+  from `/plugins`). Works when the server supports OAuth 2.1 dynamic client
+  registration (RFC 7591); login discovers the auth server, registers a client,
+  and runs PKCE. Servers requiring a pre-registered client id are not yet
   supported via `mcpServers`.
-- **Static bearer token** (`"bearerTokenEnvVar": "ACME_TOKEN"`): no login needed;
-  the integration is "connected" whenever that env var is set.
+- **Static bearer token** (`"bearerTokenEnvVar": "EXAMPLE_TOKEN"`): no login
+  needed; the integration is usable whenever that env var is set.
 
 Auth precedence per request: `bearerTokenEnvVar`, then static `headers`, then the
 stored OAuth credential (refreshed automatically when expired).
 
-## Enable-by-login lifecycle
-
-This auth-gating applies to the **built-in** integrations (Linear, Notion):
-
-1. The built-in server ships declared but **disabled** — absent from the prompt —
-   because no credentials exist.
-2. The user logs in; credentials land in `auth.json` under `mcp:<server>`.
-3. A resource reload (automatic after `/login`/`/mcp login`, or `/reload`)
-   detects the credentials and the server appears in the model's prompt.
-4. Logout (or losing credentials) disables it again.
-
-If you log in mid-turn, the reload is deferred — run `/reload` after the turn to
-activate the integration.
-
-**User-declared servers are not auth-gated this way.** An `mcpServers` entry is
-visible to the model regardless of `auth.json`; it simply fails at call time with
-the not-enabled error until credentials exist. For a bearer-token server, tell
-the user to set that env var — `/mcp login` has no provider for a bearer-only
-server and reports "Unknown MCP integration".
-
 ## Caveats
 
-- **Discover before assuming.** Tool names and argument schemas come from the
-  server and can change; call `list_tools` rather than hardcoding.
-- **Overriding a built-in name.** Declaring an `mcpServers` entry whose key
-  matches a built-in (e.g. `linear`) with a custom `url` points the integration at
-  your URL. A previously stored official credential is *not* reused for the
-  override, to avoid sending the official token to your endpoint. Authenticate
-  such an override via `bearerTokenEnvVar` only — OAuth credentials are not
-  honored for a catalog-name override. (Use a name that isn't a built-in to get
-  OAuth.)
+- Discover before assuming tool names or argument schemas; they come from the
+  server and can change, so call `list_tools` rather than hardcoding.
+- Token presence is not connection readiness; the Connected state requires a
+  verified handshake.
 - **Multi-session daemon.** OAuth provider registration is process-global; a
   user-declared server unique to one daemon session is re-registered on that
   session's next reload.

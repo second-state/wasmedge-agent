@@ -14,6 +14,16 @@ export interface RlmPromptOptions {
 	workspaceWritePolicy?: WorkspaceWritePolicy;
 }
 
+const USER_PROGRESS_PROMPT =
+	"As the user-facing root agent, when work follows a plan, uses many subagents, or spans multiple turns, proactively give regular concise progress updates so the user does not have to ask. State the current plan, what has completed, any blockers, the proposed fixes, and the next actions. Lead with user-visible outcomes rather than internal process or gate names. Mention internal details only when they explain a blocker or decision. Send an update at meaningful milestones and before ending a turn while work is still running. Do not repeat unchanged status or interrupt short work with unnecessary updates.";
+
+const SIMPLIFIED_TECHNICAL_ENGLISH_PROMPT = [
+	"Use simplified technical English by default for user-facing prose.",
+	"Prefer short sentences, common words, and concrete verbs. State one main action or fact per sentence when practical. Use lists for steps or conditions.",
+	"Keep necessary technical terms, names, commands, code, paths, and exact quoted text unchanged. State uncertainty directly.",
+	"Treat this as clarity guidance, not a claim of formal ASD-STE100 compliance. Preserve a user-requested format, tone, terminology, and necessary precision.",
+].join("\n");
+
 export interface ChildAgentDoctrineOptions {
 	depth?: number;
 	parentAgent?: string;
@@ -51,6 +61,9 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		"You are a general purpose agent that uses code to solve tasks.",
 		"You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
 		"When you are done, stop calling tools and state your final answer.",
+		"",
+		...(depth === 0 ? [USER_PROGRESS_PROMPT, ""] : []),
+		SIMPLIFIED_TECHNICAL_ENGLISH_PROMPT,
 		"",
 		`Working directory (mounted at /workspace): ${cwd}`,
 		`Conversation log: ${messagesPath}`,

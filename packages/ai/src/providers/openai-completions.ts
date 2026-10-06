@@ -11,7 +11,7 @@ import type {
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
 import { getAnthropicCacheWriteCost, hasStandardAnthropicCachePricing } from "../cache-pricing.js";
-import { getEnvApiKey, getPrimeTeamId } from "../env-api-keys.js";
+import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../models.js";
 import type {
 	AssistantMessage,
@@ -35,8 +35,11 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { recordStreamFailure } from "../utils/stream-failure.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { withOpenCodeHeaders } from "./opencode-headers.js";
+import { applyServiceTierPricing } from "./service-tier-pricing.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -75,9 +78,36 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
 }
 
+const REASONING_DETAILS_SIGNATURE_TYPE = "openai-completions.reasoning_details.v1";
+
+interface ReasoningDetailsSignature {
+	type: typeof REASONING_DETAILS_SIGNATURE_TYPE;
+	details: Record<string, unknown>[];
+}
+
+function encodeReasoningDetails(details: Record<string, unknown>[]): string {
+	return JSON.stringify({ type: REASONING_DETAILS_SIGNATURE_TYPE, details } satisfies ReasoningDetailsSignature);
+}
+
+function decodeReasoningDetails(signature?: string): Record<string, unknown>[] | undefined {
+	if (!signature?.startsWith("{")) return undefined;
+	try {
+		const parsed = JSON.parse(signature) as Partial<ReasoningDetailsSignature>;
+		if (parsed.type !== REASONING_DETAILS_SIGNATURE_TYPE || !Array.isArray(parsed.details)) return undefined;
+		if (parsed.details.some((detail) => !detail || typeof detail !== "object" || Array.isArray(detail))) {
+			return undefined;
+		}
+		return parsed.details as Record<string, unknown>[];
+	} catch {
+		return undefined;
+	}
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	/** Explicit reasoning toggle. undefined preserves the provider/model default. */
+	reasoningEnabled?: boolean;
 }
 
 interface OpenAICompatCacheControl {
@@ -145,7 +175,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					? getAnthropicCacheWriteCost(model.cost.input, cacheControl.ttl === "1h" ? "1h" : "5m")
 					: undefined;
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				compat,
+				options?.sessionId,
+			);
 			let params = buildParams(model, context, options, compat, cacheRetention, cacheControl);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -154,7 +192,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
 			const { data: openaiStream, response } = await client.chat.completions
 				.create(params, requestOptions)
@@ -173,6 +210,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			let thinkingBlock: ThinkingContent | null = null;
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+			const reasoningDetailsByIndex = new Map<number, Record<string, unknown>>();
+			let nextReasoningDetailsIndex = 0;
+			let reasoningDetailsBlock: ThinkingContent | null = null;
 			const blocks = output.content as StreamingBlock[];
 			const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
 			const finishBlock = (block: StreamingBlock) => {
@@ -266,12 +306,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				return block;
 			};
 
+			let responseServiceTier: ChatCompletionChunk["service_tier"] | undefined;
 			for await (const chunk of openaiStream) {
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
 				output.responseId ||= chunk.id;
+				if (typeof chunk.service_tier === "string") {
+					responseServiceTier = chunk.service_tier;
+				}
 				if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
 					output.responseModel ||= chunk.model;
 				}
@@ -370,17 +414,58 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					const reasoningDetails = (choice.delta as any).reasoning_details;
 					if (reasoningDetails && Array.isArray(reasoningDetails)) {
 						for (const detail of reasoningDetails) {
-							if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+							if (!detail || typeof detail !== "object" || Array.isArray(detail)) continue;
+							const detailRecord = detail as Record<string, unknown>;
+							const explicitIndex = typeof detailRecord.index === "number" ? detailRecord.index : undefined;
+							const index = explicitIndex ?? nextReasoningDetailsIndex;
+							nextReasoningDetailsIndex = Math.max(nextReasoningDetailsIndex, index + 1);
+							const previousDetail = reasoningDetailsByIndex.get(index);
+							const mergedDetail = { ...previousDetail, ...detailRecord };
+							for (const field of ["text", "summary"] as const) {
+								const previousFragment = previousDetail?.[field];
+								const fragment = detailRecord[field];
+								if (typeof previousFragment === "string" && typeof fragment === "string") {
+									mergedDetail[field] = previousFragment + fragment;
+								}
+							}
+							reasoningDetailsByIndex.set(index, mergedDetail);
+							if (
+								detailRecord.type === "reasoning.encrypted" &&
+								typeof detailRecord.id === "string" &&
+								detailRecord.data
+							) {
 								const matchingToolCall = output.content.find(
-									(b) => b.type === "toolCall" && b.id === detail.id,
+									(b) => b.type === "toolCall" && b.id === detailRecord.id,
 								) as ToolCall | undefined;
 								if (matchingToolCall) {
-									matchingToolCall.thoughtSignature = JSON.stringify(detail);
+									matchingToolCall.thoughtSignature = JSON.stringify(detailRecord);
 								}
 							}
 						}
+						if (reasoningDetailsByIndex.size > 0) {
+							if (!reasoningDetailsBlock) {
+								reasoningDetailsBlock = { type: "thinking", thinking: "", redacted: true };
+								blocks.push(reasoningDetailsBlock);
+								stream.push({
+									type: "thinking_start",
+									contentIndex: getContentIndex(reasoningDetailsBlock),
+									partial: output,
+								});
+							}
+							reasoningDetailsBlock.thinkingSignature = encodeReasoningDetails(
+								[...reasoningDetailsByIndex.entries()]
+									.sort(([left], [right]) => left - right)
+									.map(([, detail]) => detail),
+							);
+						}
 					}
 				}
+			}
+
+			// The multiplier table is OpenAI's own; gateways price tiers per endpoint
+			// (OpenRouter reports its cost in usage instead, see parseChunkUsage).
+			if (model.provider === "openai") {
+				applyServiceTierPricing(output.usage, responseServiceTier, model.id);
 			}
 
 			for (const block of blocks) {
@@ -411,6 +496,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			recordStreamFailure(model, output, error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -430,13 +516,16 @@ export const streamSimpleOpenAICompletions: StreamFunction<"openai-completions",
 	}
 
 	const base = buildBaseOptions(model, options, apiKey);
-	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+	const requestedReasoning = options?.reasoning;
+	const reasoningSpecified = requestedReasoning !== undefined;
+	const clampedReasoning = reasoningSpecified ? clampThinkingLevel(model, requestedReasoning) : undefined;
 	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
 	const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
 	return streamOpenAICompletions(model, context, {
 		...base,
 		reasoningEffort,
+		reasoningEnabled: reasoningSpecified ? clampedReasoning !== "off" : undefined,
 		toolChoice,
 	} satisfies OpenAICompletionsOptions);
 };
@@ -446,8 +535,9 @@ function createClient(
 	context: Context,
 	apiKey?: string,
 	optionsHeaders?: Record<string, string>,
-	sessionId?: string,
+	cacheSessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+	conversationId?: string,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -468,18 +558,12 @@ function createClient(
 		Object.assign(headers, copilotHeaders);
 	}
 
-	if (model.provider === "prime-inference") {
-		const teamId = getPrimeTeamId();
-		if (teamId) headers["X-Prime-Team-ID"] = teamId;
+	if (cacheSessionId && compat.sendSessionAffinityHeaders) {
+		headers.session_id = cacheSessionId;
+		headers["x-client-request-id"] = cacheSessionId;
+		headers["x-session-affinity"] = cacheSessionId;
 	}
 
-	if (sessionId && compat.sendSessionAffinityHeaders) {
-		headers.session_id = sessionId;
-		headers["x-client-request-id"] = sessionId;
-		headers["x-session-affinity"] = sessionId;
-	}
-
-	// Merge options headers last so they can override defaults
 	if (optionsHeaders) {
 		Object.assign(headers, optionsHeaders);
 	}
@@ -497,7 +581,8 @@ function createClient(
 		apiKey,
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
-		defaultHeaders,
+		defaultHeaders: withOpenCodeHeaders(model.provider, conversationId, defaultHeaders),
+		maxRetries: 0,
 	});
 }
 
@@ -577,31 +662,46 @@ function buildParams(
 				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
-		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
-		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
-		if (options?.reasoningEffort) {
+		// OpenRouter distinguishes an omitted reasoning preference (use the model
+		// default), an explicit toggle, and an explicit effort selection.
+		const openRouterParams = params as typeof params & { reasoning?: { enabled?: boolean; effort?: string } };
+		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
 			openRouterParams.reasoning = {
 				effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
 			};
-		} else if (model.thinkingLevelMap?.off !== null) {
-			openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+		} else if (options?.reasoningEnabled === true) {
+			openRouterParams.reasoning = { enabled: true };
+		} else if (options?.reasoningEnabled === false && model.thinkingLevelMap?.off !== null) {
+			openRouterParams.reasoning = compat.supportsReasoningEffort
+				? { effort: model.thinkingLevelMap?.off ?? "none" }
+				: { enabled: false };
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-		// OpenAI-style reasoning_effort
 		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
-	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+	} else if (options?.reasoningEnabled === false && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
-		if (typeof offValue === "string") {
-			(params as any).reasoning_effort = offValue;
+		if (offValue !== null) {
+			(params as any).reasoning_effort = offValue ?? "none";
 		}
 	}
 
-	// OpenRouter provider routing preferences
+	// OpenAI and OpenRouter accept a top-level service_tier (OpenRouter: flex and
+	// priority, https://openrouter.ai/docs/guides/features/service-tiers). Prime
+	// Inference tolerates but ignores the field (probed 2026-09-01), so it is not
+	// forwarded; other OpenAI-compatible gateways may reject unknown fields.
+	// "ultrafast" exists only on the Responses API.
+	if (
+		options?.serviceTier != null &&
+		options.serviceTier !== "ultrafast" &&
+		(model.provider === "openai" || model.provider === "openrouter")
+	) {
+		params.service_tier = options.serviceTier;
+	}
+
 	if (model.baseUrl.includes("openrouter.ai") && model.compat?.openRouterRouting) {
 		(params as any).provider = model.compat.openRouterRouting;
 	}
 
-	// Vercel AI Gateway provider routing preferences
 	if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
 		const routing = model.compat.vercelGatewayRouting;
 		if (routing.only || routing.order) {
@@ -821,8 +921,16 @@ export function convertMessages(
 				);
 			const assistantText = assistantTextParts.map((part) => part.text).join("");
 
+			const replayReasoningDetails = msg.content
+				.filter(isThinkingContentBlock)
+				.flatMap((block) => decodeReasoningDetails(block.thinkingSignature) ?? []);
+			if (replayReasoningDetails.length > 0) {
+				(assistantMsg as any).reasoning_details = replayReasoningDetails;
+			}
+
 			const nonEmptyThinkingBlocks = msg.content
 				.filter(isThinkingContentBlock)
+				.filter((block) => decodeReasoningDetails(block.thinkingSignature) === undefined)
 				.filter((block) => block.thinking.trim().length > 0);
 			if (nonEmptyThinkingBlocks.length > 0) {
 				if (compat.requiresThinkingAsText) {
@@ -889,7 +997,7 @@ export function convertMessages(
 						}
 					})
 					.filter(Boolean);
-				if (reasoningDetails.length > 0) {
+				if (reasoningDetails.length > 0 && replayReasoningDetails.length === 0) {
 					(assistantMsg as any).reasoning_details = reasoningDetails;
 				}
 			}
@@ -900,6 +1008,9 @@ export function convertMessages(
 			) {
 				(assistantMsg as { reasoning_content?: string }).reasoning_content = "";
 			}
+			if (replayReasoningDetails.length > 0 && assistantMsg.content === null && !assistantMsg.tool_calls) {
+				assistantMsg.content = "";
+			}
 			// Skip assistant messages that have no content and no tool calls.
 			// Some providers require "either content or tool_calls, but not none".
 			// Other providers also don't accept empty assistant messages.
@@ -909,7 +1020,7 @@ export function convertMessages(
 				content !== null &&
 				content !== undefined &&
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls) {
+			if (!hasContent && !assistantMsg.tool_calls && replayReasoningDetails.length === 0) {
 				continue;
 			}
 			params.push(assistantMsg);
@@ -920,7 +1031,6 @@ export function convertMessages(
 			for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
 				const toolMsg = transformedMessages[j] as ToolResultMessage;
 
-				// Extract text and image content
 				const textResult = toolMsg.content
 					.filter(isTextContentBlock)
 					.map((block) => block.text)
@@ -929,7 +1039,6 @@ export function convertMessages(
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
-				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
 					content: sanitizeSurrogates(hasText ? textResult : hasImages ? "(see attached image)" : ""),
@@ -1009,6 +1118,9 @@ function parseChunkUsage(
 		completion_tokens?: number;
 		prompt_cache_hit_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+		cost?: number;
+		is_byok?: boolean;
+		cost_details?: { upstream_inference_cost?: number };
 	},
 	model: Model<"openai-completions">,
 	cacheWriteCost?: number,
@@ -1037,7 +1149,49 @@ function parseChunkUsage(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	calculateCost(model, usage, cacheWriteCost === undefined ? undefined : { cacheWrite: cacheWriteCost });
+	// OpenRouter reports billing truth in usage, already priced by the endpoint
+	// and service tier that served the request
+	// (https://openrouter.ai/docs/api-reference/overview). Trust it over the
+	// catalog-rate estimate, scaling the component breakdown to match.
+	const reportedCost = model.provider === "openrouter" ? openRouterReportedCost(rawUsage) : undefined;
+	if (reportedCost !== undefined) {
+		if (usage.cost.total > 0) {
+			const scale = reportedCost / usage.cost.total;
+			usage.cost.input *= scale;
+			usage.cost.output *= scale;
+			usage.cost.cacheRead *= scale;
+			usage.cost.cacheWrite *= scale;
+		} else if (usage.totalTokens > 0) {
+			// No catalog rates to apportion by: attribute by token counts instead.
+			usage.cost.input = (reportedCost * usage.input) / usage.totalTokens;
+			usage.cost.output = (reportedCost * usage.output) / usage.totalTokens;
+			usage.cost.cacheRead = (reportedCost * usage.cacheRead) / usage.totalTokens;
+			usage.cost.cacheWrite = (reportedCost * usage.cacheWrite) / usage.totalTokens;
+		}
+		usage.cost.total = reportedCost;
+	}
 	return usage;
+}
+
+/**
+ * The user's real spend for an OpenRouter request, or undefined to keep the
+ * catalog estimate. usage.cost only carries what OpenRouter charged the
+ * account's credits: for BYOK requests that is just OpenRouter's fee, so real
+ * spend is the upstream provider's bill plus that fee. A cost of 0 can mean
+ * not-billed-via-credits (e.g. :free endpoints) rather than free, so it keeps
+ * the catalog estimate.
+ */
+function openRouterReportedCost(rawUsage: {
+	cost?: number;
+	is_byok?: boolean;
+	cost_details?: { upstream_inference_cost?: number };
+}): number | undefined {
+	const credits = typeof rawUsage.cost === "number" && rawUsage.cost > 0 ? rawUsage.cost : undefined;
+	if (rawUsage.is_byok === true) {
+		const upstream = rawUsage.cost_details?.upstream_inference_cost;
+		return typeof upstream === "number" && upstream > 0 ? upstream + (credits ?? 0) : undefined;
+	}
+	return credits;
 }
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
