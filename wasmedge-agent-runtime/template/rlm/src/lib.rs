@@ -5,6 +5,7 @@
 //! generic `host_request` gate, all synchronous over the per-cell bridge
 //! connection (§2.7). Rich output: `display`. `deps::add` enables curated crates for subsequent cells.
 
+pub mod api;
 mod bridge;
 pub mod compact;
 pub mod deps;

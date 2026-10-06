@@ -9,6 +9,7 @@ import { MAX_PROVIDER_PAUSE_MS, type ProviderWaitPolicy } from "./provider-retry
 import { normalizeLibraryTestGate } from "./rust-cell/library-tests.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
+import { normalizeRustdocToolchain } from "./rust-cell/rustdoc-cache.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
 
 const RECENT_MODELS_LIMIT = 20;
@@ -129,6 +130,7 @@ export interface BundledSkillsSettings {
 }
 
 export interface RustCellSettings extends CellResourceLimits {
+	rustdocToolchain?: string | null; // installed rustup toolchain for API introspection; default: null
 	libraryTestGate?: boolean; // test proposed lib edits in WASI before applying; default: false
 	workspaceWritePolicy?: WorkspaceWritePolicy; // guest /workspace access; default: rw
 	cellTimeoutMs?: number; // per-cell budget (compile + run); default: 120000
@@ -1189,6 +1191,10 @@ export class SettingsManager {
 
 	getRustCellLibraryTestGate(): boolean {
 		return normalizeLibraryTestGate(this.settings.rustCell?.libraryTestGate);
+	}
+
+	getRustCellRustdocToolchain(): string | undefined {
+		return normalizeRustdocToolchain(this.settings.rustCell?.rustdocToolchain);
 	}
 
 	getRustCellPreludeExtra(): PreludeExtra[] {

@@ -313,6 +313,7 @@ available, authenticated model, the bounded wait runs instead.
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
 | `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
 | `rustCell.libraryTestGate` | boolean | `false` | Require sandboxed `agent_lib` tests before applying a cell's `lib` edits |
+| `rustCell.rustdocToolchain` | string or null | `null` | Installed rustup toolchain for on-demand rustdoc JSON API queries |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
 | `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
 | `rustCell.preludeExtra` | array | `[]` | User-selected crates.io dependencies available under `agent_lib::prelude::extra` |
@@ -330,6 +331,21 @@ Calls without `lib` edits keep their existing behavior. Restart or `/reload`
 after changing the setting; child sessions inherit it, and SDK Rust tools accept
 the same option. This does not generate tests, run doctests, rerun every skill's
 tests against the proposed edits, or isolate Cargo build scripts from the host.
+
+Set `"rustCell": { "rustdocToolchain": "nightly-2026-09-25" }` to enable
+`rlm::api::list(path)`, `list_page(path, offset)`, and `describe(path)` for
+`agent_lib`, its mounted skills, and `rlm`. Install the toolchain explicitly:
+
+```sh
+rustup toolchain install nightly-2026-09-25 --profile minimal --target wasm32-wasip1
+```
+
+Restart or `/reload` after changing the setting. Child sessions inherit it;
+SDK Rust tools accept the same option. Queries never install a toolchain or
+download dependencies. The pinned nightly produces supported rustdoc JSON
+format 61; other formats are rejected. Normal cell compilation keeps its usual
+toolchain. See [API introspection](rlm-runtime.md#api-introspection) for the query
+format, cache behavior, and compilation boundary.
 
 Set `"rustCell": { "workspaceWritePolicy": "ro" }` to mount `/workspace` read-only
 for Rust guest execution. The prompt directs cells to produce patches and use the
