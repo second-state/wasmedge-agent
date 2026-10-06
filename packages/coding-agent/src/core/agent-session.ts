@@ -11519,10 +11519,17 @@ export class AgentSession {
 		return matches[0]!;
 	}
 
+	private _assertRlmSubagentDeletionAvailable(): void {
+		if (this._disposed || this._disposing) {
+			throw new Error("Cannot delete a subagent after its parent started disposal");
+		}
+	}
+
 	async deleteInactiveRlmSubagent(
 		childId: string,
 		isExternallyRunning: () => boolean = () => false,
 	): Promise<"deleted" | "not_found" | "running"> {
+		this._assertRlmSubagentDeletionAvailable();
 		for (const owner of this._rlmSubtreeSessions()) {
 			const isRunning = (): boolean => {
 				const status = owner._activeRlmChildRuns.get(childId)?.status;
@@ -11535,11 +11542,14 @@ export class AgentSession {
 				...(await owner.listRlmSubagents()).subagents,
 				...owner._rlmChildCleanupFailures.values(),
 			].find((entry) => entry.rlm_child_id === childId);
+			this._assertRlmSubagentDeletionAvailable();
 			if (!subagent) continue;
 			if (isRunning()) {
 				return "running";
 			}
 			const result = await owner._trackRlmSubagentDeletion(subagent, () => {
+				// Root disposal may still be draining a sibling before reaching this owner.
+				this._assertRlmSubagentDeletionAvailable();
 				if (isRunning()) {
 					return Promise.resolve({ subagent, outcome: "skipped_running" });
 				}
@@ -11551,6 +11561,7 @@ export class AgentSession {
 	}
 
 	async deleteRlmSubagent(target: string): Promise<RlmDeleteSubagentResult> {
+		this._assertRlmSubagentDeletionAvailable();
 		// Freeing a name at the delete receipt reaches two transient selector
 		// states, both inherent to that design and recoverable, so neither is
 		// guarded away: (a) while an old generation with an accepted delete
@@ -11618,6 +11629,7 @@ export class AgentSession {
 			...(await this.listRlmSubagents()).subagents,
 			...this._rlmChildCleanupFailures.values(),
 		].filter((entry) => this._rlmSubagentMatchesTarget(entry, target));
+		this._assertRlmSubagentDeletionAvailable();
 		const directChildIds = new Set(directMatches.map((subagent) => subagent.rlm_child_id));
 		if (directChildIds.size > 1) {
 			throw new Error(`RLM subagent selector "${target}" is ambiguous in the current parent session`);
@@ -11630,9 +11642,13 @@ export class AgentSession {
 		subagent: RlmSubagentRegistryEntry,
 		startDeletion: () => Promise<RlmDeleteSubagentResult>,
 	): Promise<RlmDeleteSubagentResult> {
+		this._assertRlmSubagentDeletionAvailable();
 		const existing = this._deletingRlmChildren.get(subagent.rlm_child_id);
 		if (existing) return existing.promise;
-		const deletion = Promise.resolve().then(startDeletion);
+		const deletion = Promise.resolve().then(() => {
+			this._assertRlmSubagentDeletionAvailable();
+			return startDeletion();
+		});
 		this._deletingRlmChildren.set(subagent.rlm_child_id, {
 			subagent,
 			promise: deletion,
@@ -11832,6 +11848,8 @@ export class AgentSession {
 	}
 
 	private async _deleteResolvedRlmSubagent(subagent: RlmSubagentRegistryEntry): Promise<RlmDeleteSubagentResult> {
+		// A selector reservation has not admitted cleanup while its preflight is awaiting I/O.
+		this._assertRlmSubagentDeletionAvailable();
 		const childId = subagent.rlm_child_id;
 		const run = this._activeRlmChildRuns.get(childId);
 		if (run) {
