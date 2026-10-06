@@ -189,6 +189,8 @@ export interface CellResult {
 
 **Runtime 關閉實作註記（2026-10-06）**：`RustCellProvisioner.dispose()` 取消進行中與排隊的 cells、skill tests，等待失敗／中斷 build 的來源回復及 bridge 清理；舊 runner 後續呼叫回報 `aborted`，不再修改來源。啟動中的 runner 不會在關閉後重新掛回；同一 provisioner 關閉完成後可透過 `ensure()` 建立新 runner。`AgentSession.dispose()` 發起取消，`disposeAsync()` 等待清理；reload／runtime 重建須等前一 runtime 釋放 workspace 才開始 provision。關閉不刪 workspace、不額外 Git snapshot，也不回滾已發生的 runtime 副作用。同步 toolchain／scaffold 初始化仍不可中途取消；不合作的 host handlers 沿用 bridge 的有限等待，不保證其外部副作用已停止。
 
+Session 關閉路徑共用一次 runtime teardown：先 `dispose()` 再 `disposeAsync()`，或同步關閉插入非同步 refinement drain 期間，後續等待仍涵蓋該 session 的 runtime 與 disposal callbacks，不會因 session 已標示 disposed 而提前完成。
+
 Process 錯誤路徑：已取得 child process handle 後，即使 bridge attachment 或 child process 回報錯誤，也先終止 process group 並等到 `close`，才回報原始錯誤、釋放編譯許可或回復來源；同步 spawn throw 尚未取得 child handle，則直接回報。
 
 併發治理：cargo build 吃 CPU。沿用 `boot-gate.ts` 的許可證模式做 **compile gate**：全 worker 進程內同時編譯數 `min(4, cpus/2)`，可用 `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` 覆寫（對映 `PRIME_AGENT_MAX_CONCURRENT_KERNEL_BOOTS`）。
