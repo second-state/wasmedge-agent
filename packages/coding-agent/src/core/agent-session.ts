@@ -3838,6 +3838,9 @@ export class AgentSession {
 			// resolution cannot write harness state or re-subscribe handlers.
 			this._autoRefineReviewAbort?.abort();
 			this._refineAbortController?.abort();
+			void this._rustCellProvisioner?.dispose().catch((error) => {
+				getLogger("coding-agent.rust-cell").warn(`Runtime disposal failed: ${String(error)}`);
+			});
 			for (const timer of this._scheduledAutoRefineTimers) {
 				clearTimeout(timer);
 			}
@@ -8448,14 +8451,14 @@ export class AgentSession {
 				]),
 			);
 		} else {
-			// Rebuilding (e.g. /reload) replaces the provisioner. Cells are
-			// short-lived processes, so there is no live runtime to hand over.
-			void this._rustCellProvisioner?.dispose();
+			// A replacement must wait for the old cell's source rollback and cleanup.
+			const previousRuntimeStopped = this._rustCellProvisioner?.dispose();
 			const artifactDir = this.sessionManager.getSessionArtifactDir();
 			this._rustWorkspaceDir = artifactDir ? join(artifactDir, "workspace") : undefined;
 			const workspaceExisted = !!this._rustWorkspaceDir && existsSync(join(this._rustWorkspaceDir, "Cargo.toml"));
 			const notifyRestore = !this._runtimeBuilt && workspaceExisted;
 			this._rustCellProvisioner = new RustCellProvisioner({
+				beforeStart: previousRuntimeStopped,
 				cwd: this._cwd,
 				workspaceDir: this._rustWorkspaceDir,
 				initialWorkspaceDir: this._rustWorkspaceSeedDir(),
