@@ -69,6 +69,27 @@ describe("skill source revalidation", () => {
 		expect(tests).toHaveBeenCalledTimes(4);
 	});
 
+	it("retests library source and fixtures without tracking its build output", async () => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const signal = new AbortController().signal;
+		await f.gate.test(reference);
+		for (const path of ["src/helper.rs", "fixtures/expected.txt", "build.rs"]) {
+			const file = join(f.options.workspaceDir, "agent_lib", path);
+			mkdirSync(join(file, ".."), { recursive: true });
+			writeFileSync(file, "changed");
+			await f.gate.revalidate([], signal, 30_000);
+		}
+		expect(tests).toHaveBeenCalledTimes(4);
+		for (const ignored of ["target", ".git"]) {
+			const path = join(f.options.workspaceDir, "agent_lib", ignored);
+			mkdirSync(path);
+			writeFileSync(join(path, "output"), "ignored");
+		}
+		await f.gate.revalidate([], signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(4);
+	});
+
 	it("does not cache failures, cancellation, or edits made during testing", async () => {
 		const f = fixture();
 		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
