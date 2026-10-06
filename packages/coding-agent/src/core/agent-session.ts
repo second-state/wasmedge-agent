@@ -1623,6 +1623,7 @@ export class AgentSession {
 	private _disposing = false;
 	private _disposeAsyncPromise?: Promise<void>;
 	private _rustCellProvisioner?: RustCellProvisioner;
+	private _rustCellDisposalPromise?: Promise<void>;
 	/** Session workspace dir backing the rust-cell runtime, if persisted. */
 	private _rustWorkspaceDir?: string;
 	/** True once the runtime has been built once; later builds are in-process rebuilds (/reload). */
@@ -4909,20 +4910,24 @@ export class AgentSession {
 		this._rlmChildCleanupFailures.clear();
 		this._deletedRlmChildIds.clear();
 		this._deletedRlmChildRuns.clear();
-		try {
-			await this._rustCellProvisioner?.dispose();
-		} catch {
-			// a failed runtime startup already cleaned up after itself
-		}
+		await this._disposeRustCellRuntime();
 		this.dispose();
 		await this._disposeCallbacksPromise;
+	}
+
+	private _disposeRustCellRuntime(): Promise<void> {
+		this._rustCellDisposalPromise ??= (this._rustCellProvisioner?.dispose() ?? Promise.resolve()).catch((error) => {
+			getLogger("coding-agent.rust-cell").warn(`Runtime disposal failed: ${String(error)}`);
+		});
+		return this._rustCellDisposalPromise;
 	}
 
 	private _startDisposeCallbacks(): Promise<void> {
 		if (this._disposeCallbacksPromise) {
 			return this._disposeCallbacksPromise;
 		}
-		const pending: Promise<void>[] = [];
+		// disposeAsync() also awaits this promise after synchronous disposal.
+		const pending: Promise<void>[] = [this._disposeRustCellRuntime()];
 		for (const callback of this._disposeCallbacks) {
 			try {
 				const result = callback();
@@ -4951,9 +4956,7 @@ export class AgentSession {
 			// resolution cannot write harness state or re-subscribe handlers.
 			this._autoRefineReviewAbort?.abort();
 			this._refineAbortController?.abort();
-			void this._rustCellProvisioner?.dispose().catch((error) => {
-				getLogger("coding-agent.rust-cell").warn(`Runtime disposal failed: ${String(error)}`);
-			});
+			void this._disposeRustCellRuntime();
 			for (const timer of this._scheduledAutoRefineTimers) {
 				clearTimeout(timer);
 			}
@@ -12043,11 +12046,19 @@ export class AgentSession {
 
 	private _rlmChildSessionSnapshot(): AgentSession[] {
 		const sessions = new Set<AgentSession>();
-		for (const [childId, { session }] of this._rlmChildSessions) {
-			if (!this._abandonedRlmQuiescenceChildIds.has(childId)) sessions.add(session);
+		// Accepted deletions are drained by the run's settlement promise. Recursing
+		// into that session would let its expected disposal cancel the parent wait.
+		for (const [childId, { session, run }] of this._rlmChildSessions) {
+			if (
+				!this._abandonedRlmQuiescenceChildIds.has(childId) &&
+				!run?.detachedDeletion &&
+				!this._activeRlmChildRuns.get(childId)?.detachedDeletion
+			) {
+				sessions.add(session);
+			}
 		}
 		for (const run of this._activeRlmChildRuns.values()) {
-			if (run.session && !run.abandonedForQuiescence) sessions.add(run.session);
+			if (run.session && !run.abandonedForQuiescence && !run.detachedDeletion) sessions.add(run.session);
 		}
 		return [...sessions];
 	}
