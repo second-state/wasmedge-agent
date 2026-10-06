@@ -9,8 +9,8 @@ import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits
 import { skillTestFingerprint } from "./skill-fingerprint.js";
 import { MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
-import { syncRustSkills } from "./workspace.js";
-import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
+import { mountedSkillCrates } from "./workspace.js";
+import { snapshotWorkspace } from "./workspace-snapshot.js";
 
 export interface SkillTestOptions extends CellResourceLimits {
 	workspaceDir: string;
@@ -43,7 +43,10 @@ export function skillReferenceCrate(reference: Record<string, unknown>): string 
 export async function testRustSkill(reference: Record<string, unknown>, options: SkillTestOptions): Promise<void> {
 	const resourceArgs = wasmedgeResourceArgs(options);
 	const crateName = skillReferenceCrate(reference);
-	if (!existsSync(join(options.workspaceDir, "skills", crateName, "Cargo.toml"))) {
+	if (
+		!mountedSkillCrates(options.workspaceDir).includes(crateName) ||
+		!existsSync(join(options.workspaceDir, "skills", crateName, "Cargo.toml"))
+	) {
 		throw new Error(`skill crate ${crateName} is not mounted; reload skills before refinement`);
 	}
 	options.signal?.throwIfAborted();
@@ -58,10 +61,6 @@ export async function testRustSkill(reference: Record<string, unknown>, options:
 		if (skillTestFingerprint(workspace) !== fingerprint) {
 			throw new Error("Skill sources changed while taking the test snapshot; retry validation");
 		}
-		syncRustSkills(
-			workspace,
-			withInheritedSkills(workspace, []).filter((skill) => existsSync(skill.cargoTomlPath)),
-		);
 		const target = join(workspace, "target");
 		const build = await withBuildPermit(
 			() =>

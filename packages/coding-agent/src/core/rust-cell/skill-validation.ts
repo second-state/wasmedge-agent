@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { skillTestFingerprint } from "./skill-fingerprint.js";
 import { type SkillTestOptions, skillReferenceCrate, testRustSkill } from "./skill-tests.js";
+import { mountedSkillCrates } from "./workspace.js";
 
 /** Cache only within one runtime; resumed harness entries must be tested anew. */
 export class SkillValidation {
@@ -31,10 +30,14 @@ export class SkillValidation {
 			if (reference.type === "rust") crates.add(skillReferenceCrate(reference));
 		}
 		if (crates.size === 0) return;
+		const mounted = new Set(mountedSkillCrates(this.options.workspaceDir));
+		for (const crate of crates) {
+			if (!mounted.has(crate)) crates.delete(crate);
+		}
+		if (crates.size === 0) return;
 		const fingerprint = skillTestFingerprint(this.options.workspaceDir);
 		for (const crate of crates) {
 			signal.throwIfAborted();
-			if (!existsSync(join(this.options.workspaceDir, "skills", crate, "Cargo.toml"))) continue;
 			if (this.passed.get(crate) === fingerprint) continue;
 			try {
 				await this.test(
