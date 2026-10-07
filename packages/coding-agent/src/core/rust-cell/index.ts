@@ -22,7 +22,7 @@ import {
 	preludeConfigurationHash,
 } from "./prelude-extra.js";
 import { type ProcessLimits, runtimeProcessLimits } from "./process-limits.js";
-import { type CellResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
+import { type RuntimeResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
 import { createRustdocHandler } from "./rustdoc.js";
 import { normalizeRustdocToolchain } from "./rustdoc-cache.js";
 import { SkillValidation } from "./skill-validation.js";
@@ -48,8 +48,9 @@ export {
 } from "./bridge-server.js";
 export type { CargoSandbox } from "./cargo-sandbox.js";
 export { CellRunner, composeToolText } from "./cell-runner.js";
+export { ProcessResourceGroup } from "./process-group.js";
 export type { ProcessLimits } from "./process-limits.js";
-export type { CellResourceLimits } from "./resource-limits.js";
+export type { CellResourceLimits, RuntimeResourceLimits } from "./resource-limits.js";
 export {
 	ensureTemplateReady,
 	isTemplateVendored,
@@ -80,7 +81,7 @@ export {
 } from "./workspace.js";
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
-export interface RustCellProvisionerOptions extends CellResourceLimits {
+export interface RustCellProvisionerOptions extends RuntimeResourceLimits {
 	/** Linux Bubblewrap sandbox for runtime Cargo; defaults to off. */
 	cargoSandbox?: CargoSandbox;
 	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
@@ -134,6 +135,7 @@ export class RustCellProvisioner {
 
 	constructor(options: RustCellProvisionerOptions) {
 		validateCellResourceLimits(options);
+		runtimeProcessLimits(options.processGroup?.limits, options.cargoSandbox, "rustCell.treeProcessLimits");
 		this.options = {
 			...options,
 			cargoSandbox: normalizeCargoSandbox(options.cargoSandbox),
@@ -158,6 +160,10 @@ export class RustCellProvisioner {
 
 	get processLimits(): Readonly<ProcessLimits> | undefined {
 		return this.options.processLimits ?? undefined;
+	}
+
+	get treeProcessLimits(): Readonly<ProcessLimits> | undefined {
+		return this.options.processGroup?.limits;
 	}
 
 	get libraryTestGate(): boolean {
@@ -238,7 +244,13 @@ export class RustCellProvisioner {
 	private async start(onProgress?: (message: string) => void): Promise<CellRunner> {
 		onProgress?.("Checking Rust/WasmEdge toolchain...");
 		this.toolchainInfo = resolveToolchain();
-		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress, this.cargoSandbox, this.options.processLimits);
+		ensureTemplateReady(
+			this.toolchainInfo.cargoBin,
+			onProgress,
+			this.cargoSandbox,
+			this.options.processLimits,
+			this.options.processGroup,
+		);
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
@@ -271,18 +283,25 @@ export class RustCellProvisioner {
 					this.toolchainInfo!.cargoBin,
 					this.cargoSandbox,
 					this.options.processLimits,
+					this.options.processGroup,
 				);
 				syncRustSkills(workspace, skills, {
 					cargoBin: this.toolchainInfo!.cargoBin,
 					cargoSandbox: this.cargoSandbox,
 					processLimits: this.options.processLimits,
+					processGroup: this.options.processGroup,
 				});
 			},
 			validate: (workspace) => {
 				const command = cargoCommand(
 					this.toolchainInfo!.cargoBin,
 					["build", "--release", "--offline", "-p", "cell"],
-					{ cwd: workspace, cargoSandbox: this.cargoSandbox, processLimits: this.options.processLimits },
+					{
+						cwd: workspace,
+						cargoSandbox: this.cargoSandbox,
+						processLimits: this.options.processLimits,
+						processGroup: this.options.processGroup,
+					},
 				);
 				execFileSync(command.bin, command.args, {
 					cwd: workspace,
@@ -305,6 +324,7 @@ export class RustCellProvisioner {
 				cargoBin: this.toolchainInfo.cargoBin,
 				cargoSandbox: this.cargoSandbox,
 				processLimits: this.options.processLimits,
+				processGroup: this.options.processGroup,
 			});
 			for (const failure of sync.failed) {
 				this.options.onDiagnostic?.(`rust skill "${failure.name}" was unmounted: ${failure.message}`);
@@ -320,6 +340,7 @@ export class RustCellProvisioner {
 						workspace: this.workspace,
 						cargoSandbox: this.cargoSandbox,
 						processLimits: this.options.processLimits,
+						processGroup: this.options.processGroup,
 						toolchain: this.options.rustdocToolchain,
 						timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
 					}),
@@ -327,6 +348,7 @@ export class RustCellProvisioner {
 						workspace: this.workspace,
 						cargoSandbox: this.cargoSandbox,
 						processLimits: this.options.processLimits,
+						processGroup: this.options.processGroup,
 						template: templateDir,
 						cargoBin: this.toolchainInfo.cargoBin,
 						configured: this.options.preludeExtra!,
@@ -341,6 +363,7 @@ export class RustCellProvisioner {
 			workspaceDir: this.workspace,
 			cargoSandbox: this.cargoSandbox,
 			processLimits: this.options.processLimits,
+			processGroup: this.options.processGroup,
 			cargoBin: this.toolchainInfo.cargoBin,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
@@ -354,6 +377,7 @@ export class RustCellProvisioner {
 			workspaceDir: this.workspace,
 			cargoSandbox: this.cargoSandbox,
 			processLimits: this.options.processLimits,
+			processGroup: this.options.processGroup,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			cargoBin: this.toolchainInfo.cargoBin,
 			cellTimeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,

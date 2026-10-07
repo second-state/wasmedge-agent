@@ -465,7 +465,7 @@ Wasm gas/page limits still apply only to guest execution.
 
 `rustCell.processLimits` optionally bounds runtime Cargo and WasmEdge invocations
 with Linux cgroup v2. It requires `cargoSandbox: "bubblewrap"`, systemd 254+
-at `/usr/bin/systemd-run`, a running user manager at `/run/user/<uid>/bus`, and
+at `/usr/bin/systemd-run` (plus `/usr/bin/systemctl` for tree budgets), a running user manager at `/run/user/<uid>/bus`, and
 delegated `memory`, `cpu` and/or `pids` controllers for the requested fields.
 An administrator may need to enable controller delegation on `user@<uid>.service`;
 see systemd's [delegation documentation](https://systemd.io/CGROUP_DELEGATION/).
@@ -491,15 +491,42 @@ host code; host bash or handlers can still change user-owned policy.
 - `tasksMax` bounds processes plus threads across the invocation. At the limit,
   further process/thread creation fails, which the invoked program may handle.
 
+`rustCell.treeProcessLimits` optionally adds a shared
+[systemd slice](https://www.freedesktop.org/software/systemd/man/latest/systemd.slice.html)
+above the invocation scopes. Parent and subagent runtimes use the same slice,
+including Cargo invoked through a guest bridge request. The runner verifies both
+the scope and its parent slice's kernel controls before executing. Separate root
+sessions get independent slices. Per-invocation and tree limits are independent
+settings; when both are enabled, both apply. Shared memory exhaustion kills a
+selected invocation and its descendants, not necessarily all agents. Shared CPU
+limits throttle total bandwidth; shared task limits can reject launches.
+
 Coverage includes template warmup/vendoring, scaffold and skill probe builds,
 cell compilation/execution, skill/library test builds and each Wasm test module,
-dependency updates, rustdoc and the inert readonly-mount probe. Each invocation
-has its own budget. Concurrent commands, parent/child agents and host handlers
-do not share a combined budget; a bridge-triggered Cargo command has a separate
-scope from its calling guest. The Node host, source copying, toolchain/version
+dependency updates, rustdoc and the inert readonly-mount probe. The Node host, source copying, toolchain/version
 probes, `doctor --fix`, installation and host bash/handlers remain outside these
 limits. Synchronous provisioning retains its existing cancellation behavior.
-Disk quotas and an aggregate agent-tree resource budget are not implemented.
+Disk quotas are not implemented.
+
+The shared policy is immutable for the live root's lifetime. Runtime reload,
+inline/hosted children, and daemon child rehydration retain the same group.
+A new root session or process restart gets a fresh group; no resource accounting
+is persisted across restarts. Disposal releases a session's reference after its
+runtime stops. Only the last owner stops the slice and removes its runtime unit
+properties, so closing one child does not stop siblings. An abrupt host crash
+can leave the slice and its runtime properties until the user manager exits.
+For an abandoned tree, an operator can stop and then revert its specific
+`app-wasmedge_agent_<id>.slice` with `systemctl --user`; do not stop a live tree's
+slice. Cleanup never selects units belonging to other trees.
+
+SDK callers can create a `ProcessResourceGroup` and pass it as
+`rustProcessGroup` to `createAgentSession`, or as `processGroup` to
+`createRustTool`/`RustCellProvisioner`. Sessions retain their own references;
+standalone tools/provisioners borrow the caller's reference. Keep the group alive
+until borrowed runtimes finish and call `group.dispose()` when done. Custom
+subagent runtime hosts must forward the parent's `rustProcessGroup` in child
+creation options (including `null` for an uncapped tree); the built-in hosts do
+this automatically.
 
 Resource failures use existing compile/runtime error results; a killed process
 may have no exit code or diagnostics. A kill alone is not proof of OOM. Build

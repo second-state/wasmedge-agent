@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import { listLibraryApi } from "./library-api.js";
+import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
 import { readRustdocCache } from "./rustdoc-cache.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
@@ -411,11 +412,13 @@ function probeBuild(
 	crate: string,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
 ): { ok: boolean; message: string } {
 	const command = cargoCommand(cargoBin, ["build", "--release", "-p", crate], {
 		cwd: workspaceDir,
 		cargoSandbox,
 		processLimits,
+		processGroup,
 	});
 	const result = spawnSync(command.bin, command.args, {
 		cwd: workspaceDir,
@@ -438,7 +441,12 @@ function probeBuild(
 export function syncRustSkills(
 	workspaceDir: string,
 	skills: RustSkillMount[],
-	options?: { cargoBin?: string; cargoSandbox?: CargoSandbox; processLimits?: ProcessLimits | null },
+	options?: {
+		cargoBin?: string;
+		cargoSandbox?: CargoSandbox;
+		processLimits?: ProcessLimits | null;
+		processGroup?: ProcessResourceGroup | null;
+	},
 ): SyncRustSkillsResult {
 	const sources = new Map<RustSkillMount, string>();
 	const failed: SyncRustSkillsResult["failed"] = [];
@@ -469,6 +477,7 @@ export function syncRustSkills(
 			"agent_lib",
 			options.cargoSandbox,
 			options.processLimits,
+			options.processGroup,
 		);
 		if (!agentLib.ok) {
 			// Attribute the breakage per skill, then remount only the healthy ones.
@@ -483,6 +492,7 @@ export function syncRustSkills(
 					skill.crateName,
 					options.cargoSandbox,
 					options.processLimits,
+					options.processGroup,
 				);
 				if (!probe.ok) {
 					failed.push({ name: skill.name, message: probe.message });

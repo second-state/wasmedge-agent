@@ -745,6 +745,8 @@ wasmedge-agent/
 
 **Process 資源限制（2026-10-07）**：`rustCell.processLimits` 預設關閉；Linux 可選 systemd 254+ user scopes 與 cgroup v2，且要求 `cargoSandbox: "bubblewrap"`。`memoryMaxMb` 限制單次 invocation 與 descendants 的 charged memory（含 file cache、禁 swap、OOM 整組終止），`cpuQuotaPercent` 限 CPU bandwidth，`tasksMax` 限 processes＋threads。每次啟動先核對 kernel controls，不可用即失敗、無 uncapped fallback。Runtime Cargo／WasmEdge（含 tests、rustdoc、vendor 與 template 準備）共用政策，session／children／SDK 傳遞；每個 invocation 各有額度，並非 RSS 精確上限、整棵 agent tree 的總預算或 disk quota。Host handlers／bash／source copying／toolchain probes／doctor 不在額度內；同步 provisioning 的取消限制不變。詳見 [process resource limits](packages/coding-agent/docs/rlm-runtime.md#process-resource-limits)。
 
+**Agent tree 共用資源限制（2026-10-07）**：`rustCell.treeProcessLimits` 使用同樣三個欄位與 Linux／Bubblewrap 前提，預設關閉；每棵 live root tree 配一個 systemd user slice，所有 runtime invocation scopes（含 parent、inline／hosted children、daemon child rehydration 與 bridge-triggered Cargo）共用總額。可與每次 invocation 的 `processLimits` 同時啟用，每次 launch 檢查 scope 及 parent slice 的 kernel controls。Root 建立時固定政策；reload／child replacement 沿用，整棵 tree restart 才重新套用設定。所有 session references 釋放後停止並清除該 slice；host crash 可能留下 runtime unit properties 到 user manager 結束。Memory 超額可能終止個別 invocation，非 tree 原子式取消；CPU 是 bandwidth、不是持久化累計時間；host／bash／handlers 不計入，disk quota 尚未實作。
+
 ### 8.2 其他
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。

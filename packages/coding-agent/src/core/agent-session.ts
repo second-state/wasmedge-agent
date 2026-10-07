@@ -286,7 +286,12 @@ import {
 	type RlmSubagentRuntime,
 	type SubagentRuntimeHost,
 } from "./rlm-runtime.js";
-import { listPersistentState, type PersistentStateListing, RustCellProvisioner } from "./rust-cell/index.js";
+import {
+	listPersistentState,
+	type PersistentStateListing,
+	ProcessResourceGroup,
+	RustCellProvisioner,
+} from "./rust-cell/index.js";
 import { snapshotWorkspace, WORKSPACE_SEED_DIR } from "./rust-cell/workspace-snapshot.js";
 import {
 	modelRequestHeaders,
@@ -493,6 +498,8 @@ export class CompactionSkippedError extends Error {}
 export class RefineSkippedError extends Error {}
 
 export interface AgentSessionConfig {
+	/** Inherit the live tree budget; null explicitly inherits an uncapped tree. */
+	rustProcessGroup?: ProcessResourceGroup | null;
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
@@ -1723,6 +1730,8 @@ export class AgentSession {
 		global?: boolean;
 	};
 
+	readonly rustProcessGroup: ProcessResourceGroup | null;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -1806,11 +1815,26 @@ export class AgentSession {
 		this._installAgentTurnHook();
 		this._installAgentContinuationHook();
 
+		const treeLimits =
+			config.rustProcessGroup === undefined ? this.settingsManager.getRustCellTreeProcessLimits() : undefined;
+		this.rustProcessGroup = config.rustProcessGroup ?? (treeLimits ? new ProcessResourceGroup(treeLimits) : null);
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
 			includeAllExtensionTools: true,
 		});
 		this._ensureHarnessDigestContext();
+		const group = this.rustProcessGroup;
+		if (group) {
+			const release = config.rustProcessGroup ? group.retain() : () => group.dispose();
+			this.registerDisposeCallback(async () => {
+				await this._disposeRustCellRuntime();
+				try {
+					release();
+				} catch (error) {
+					getLogger("coding-agent.rust-cell").warn(`Resource group cleanup failed: ${String(error)}`);
+				}
+			});
+		}
 	}
 
 	/** Refreshes MCP provider registrations without rebuilding the session runtime. */
@@ -10620,6 +10644,7 @@ export class AgentSession {
 				rustdocToolchain: this.settingsManager.getRustCellRustdocToolchain(),
 				preludeExtra: this.settingsManager.getRustCellPreludeExtra(),
 				...this.settingsManager.getRustCellResourceLimits(),
+				processGroup: this.rustProcessGroup,
 				hostHandlers: this._createHostRequestHandlers(),
 				cellEnv: this._rustCellEnv(),
 				// Mount ALL discovered rust skills (visibility only gates the prompt),
@@ -11063,6 +11088,7 @@ export class AgentSession {
 		});
 
 		const child = new AgentSession({
+			rustProcessGroup: this.rustProcessGroup,
 			agent: childAgent,
 			sessionManager: childSessionManager,
 			settingsManager: this.settingsManager,

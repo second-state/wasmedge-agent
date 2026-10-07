@@ -381,6 +381,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		rlmMaxDepth: options.rlmMaxDepth,
 		rlmSessionDir: options.rlmSessionDir,
 		rlmParentNodeId: options.rlmParentNodeId,
+		rustProcessGroup: options.rustProcessGroup,
 		rlmParentAgent: options.rlmParentAgent,
 		semanticParentSessionId: options.semanticParentSessionId,
 		semanticSpawnedByRequestId: options.semanticSpawnedByRequestId,

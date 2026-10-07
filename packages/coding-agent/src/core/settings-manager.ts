@@ -9,7 +9,7 @@ import { MAX_PROVIDER_PAUSE_MS, type ProviderWaitPolicy } from "./provider-retry
 import { type CargoSandbox, normalizeCargoSandbox } from "./rust-cell/cargo-sandbox.js";
 import { normalizeLibraryTestGate } from "./rust-cell/library-tests.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
-import { runtimeProcessLimits } from "./rust-cell/process-limits.js";
+import { type ProcessLimits, runtimeProcessLimits } from "./rust-cell/process-limits.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
 import { normalizeRustdocToolchain } from "./rust-cell/rustdoc-cache.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
@@ -132,6 +132,8 @@ export interface BundledSkillsSettings {
 }
 
 export interface RustCellSettings extends CellResourceLimits {
+	/** Shared Linux runtime budget for a root session and its live subagents. */
+	treeProcessLimits?: ProcessLimits | null;
 	cargoSandbox?: CargoSandbox; // Linux Bubblewrap for runtime Cargo; default: off
 	rustdocToolchain?: string | null; // installed rustup toolchain for API introspection; default: null
 	libraryTestGate?: boolean; // test proposed lib edits in WASI before applying; default: false
@@ -1177,6 +1179,14 @@ export class SettingsManager {
 		const raw = this.settings.rustCell?.cellTimeoutMs;
 		if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 1_000) return undefined;
 		return Math.floor(raw);
+	}
+
+	getRustCellTreeProcessLimits(): Readonly<ProcessLimits> | undefined {
+		return runtimeProcessLimits(
+			this.settings.rustCell?.treeProcessLimits,
+			this.settings.rustCell?.cargoSandbox,
+			"rustCell.treeProcessLimits",
+		);
 	}
 
 	getRustCellResourceLimits(): CellResourceLimits {

@@ -159,6 +159,8 @@ export type {
 } from "./core/refinement/index.js";
 export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.js";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.js";
+export { ProcessResourceGroup } from "./core/rust-cell/process-group.js";
+export type { ProcessLimits } from "./core/rust-cell/process-limits.js";
 // SDK for programmatic usage
 export {
 	type AgentSessionCreationOptions,

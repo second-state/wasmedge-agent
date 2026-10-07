@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
@@ -15,6 +15,7 @@ import {
 } from "../../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../../src/core/auth-storage.js";
 import type { SubagentRuntimeHost } from "../../src/core/rlm-runtime.js";
+import { ProcessResourceGroup } from "../../src/core/rust-cell/process-group.js";
 import { createAgentSession } from "../../src/core/sdk.js";
 import {
 	deriveSemanticEdges,
@@ -23,7 +24,7 @@ import {
 } from "../../src/core/semantic-edges.js";
 import { SESSION_LEASE_OWNER_ID_ENV, SESSION_LEASES_ENABLED_ENV } from "../../src/core/session-lease.js";
 import { SessionManager } from "../../src/core/session-manager.js";
-import { SettingsManager } from "../../src/core/settings-manager.js";
+import { type Settings, SettingsManager } from "../../src/core/settings-manager.js";
 import type {
 	ExtensionAPI,
 	ExtensionFactory,
@@ -61,6 +62,7 @@ describe("AgentSessionRuntime characterization", () => {
 		options?: {
 			cwd?: string;
 			bootstrapModel?: boolean;
+			settings?: Settings;
 			bootstrapThinkingLevel?: boolean;
 			inMemory?: boolean;
 			sessionConfig?: AgentSessionRuntimeConfig;
@@ -121,6 +123,7 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...serviceOptions,
 				cwd,
+				settingsManager: options?.settings ? SettingsManager.inMemory(options.settings) : undefined,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -387,6 +390,44 @@ describe("AgentSessionRuntime characterization", () => {
 		expect((runtime as unknown as RuntimeSubagentMapAccess).subagentRuntimes.has("cancelled-child")).toBe(false);
 	});
 
+	it.skipIf(process.platform !== "linux")(
+		"preserves the parent runtime budget across hosted child replacement",
+		async () => {
+			const group = new ProcessResourceGroup({ tasksMax: 64 });
+			cleanups.push(() => group.dispose());
+			const { runtime, faux, tempDir } = await createRuntimeForTest(() => {}, {
+				settings: { rustCell: { cargoSandbox: "bubblewrap" } },
+				sessionOptions: { rustProcessGroup: group },
+			});
+			const child = await runtime.createRlmSubagentRuntime({
+				parentSession: runtime.session,
+				id: "budget-child",
+				prompt: "share resources",
+				sessionName: "budget-child",
+				sessionDir: join(tempDir, "budget-child"),
+				model: faux.getModel(),
+				thinkingLevel: "off",
+				serviceTier: null,
+				scopedModels: [],
+				activeToolNames: [],
+				customTools: [],
+				includeGoals: false,
+				includeCompactSkill: false,
+				rlmDepth: 1,
+				rlmMaxDepth: 2,
+				rlmParentNodeId: "budget-child",
+			});
+			expect(child.session.rustProcessGroup).toBe(group);
+			const childRuntime = runtime.listSubagentRuntimes()[0];
+			await childRuntime.newSession();
+			expect(childRuntime.session.rustProcessGroup).toBe(group);
+			await childRuntime.session.reload();
+			expect(childRuntime.session.rustProcessGroup).toBe(group);
+			await childRuntime.dispose();
+			expect(() => group.retain()()).not.toThrow();
+		},
+	);
+
 	it("releases a failed child run from the inline runtime host", async () => {
 		const { runtime } = await createRuntimeForTest(() => {});
 		const deleteRlmSubagentRuntime = vi.spyOn(runtime, "deleteRlmSubagentRuntime");
@@ -460,7 +501,7 @@ describe("AgentSessionRuntime characterization", () => {
 		await runtime.deleteRlmSubagentRuntime("lineage-child", childRuntime.session);
 	});
 
-	it("keeps semantic spawn lineage through the production runtime factory", async () => {
+	it("keeps semantic spawn lineage and shared resources through the production runtime factory", async () => {
 		const tempDir = join(tmpdir(), `pi-runtime-factory-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		vi.stubEnv("HOME", tempDir);
 		cleanups.push(() => {
@@ -506,6 +547,10 @@ describe("AgentSessionRuntime characterization", () => {
 			],
 		);
 
+		const group = process.platform === "linux" ? new ProcessResourceGroup({ tasksMax: 64 }) : null;
+		cleanups.push(() => group?.dispose());
+		if (group)
+			writeFileSync(join(tempDir, "settings.json"), JSON.stringify({ rustCell: { cargoSandbox: "bubblewrap" } }));
 		const childSessionDir = join(tempDir, "lineage-child");
 		const spawnedByRequestId = "a".repeat(32);
 		const created = await factory({
@@ -514,6 +559,7 @@ describe("AgentSessionRuntime characterization", () => {
 			sessionManager: SessionManager.create(tempDir, childSessionDir),
 			sessionStartEvent: { type: "session_start", reason: "startup" },
 			sessionOptions: {
+				rustProcessGroup: group,
 				model: faux.getModel(),
 				thinkingLevel: "off",
 				rlmDepth: 1,
@@ -525,7 +571,8 @@ describe("AgentSessionRuntime characterization", () => {
 				semanticSpawnedByRequestId: spawnedByRequestId,
 			},
 		});
-		cleanups.push(() => created.session.dispose());
+		cleanups.push(() => created.session.disposeAsync());
+		expect(created.session.rustProcessGroup).toBe(group);
 		expect(created.services.modelRegistry.authStorage).toBe(created.services.authStorage);
 		expect(created.services.authStorage.getPrimeCliConfigPath()).toBe(join(tempDir, ".prime", "config.json"));
 		await created.session.bindExtensions({});

@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { cargoEnvironment } from "./cargo-environment.js";
+import type { ProcessResourceGroup } from "./process-group.js";
 import { type ProcessLimits, resourceLimitedCommand, runtimeProcessLimits } from "./process-limits.js";
 
 export type CargoSandbox = "off" | "bubblewrap";
@@ -40,12 +41,14 @@ export function cargoCommand(
 		cwd: string;
 		cargoSandbox?: CargoSandbox;
 		processLimits?: ProcessLimits | null;
+		processGroup?: ProcessResourceGroup | null;
 		env?: NodeJS.ProcessEnv;
 		network?: boolean;
 	},
 ): { bin: string; args: string[]; env: NodeJS.ProcessEnv } {
 	const mode = normalizeCargoSandbox(options.cargoSandbox);
 	const processLimits = runtimeProcessLimits(options.processLimits, mode);
+	runtimeProcessLimits(options.processGroup?.limits, mode, "rustCell.treeProcessLimits");
 	const env = options.env ?? cargoEnvironment();
 	if (mode === "off") return { bin, args, env };
 	if (!existsSync("/usr/bin/bwrap")) throw new Error("Cargo sandbox requires Bubblewrap at /usr/bin/bwrap");
@@ -190,5 +193,6 @@ export function cargoCommand(
 			},
 		},
 		processLimits,
+		options.processGroup,
 	);
 }

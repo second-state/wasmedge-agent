@@ -57,6 +57,7 @@ export function rlmSubagentRuntimeSpec(options: CreateRlmSubagentRuntimeOptions)
 } {
 	return {
 		sessionOptions: {
+			rustProcessGroup: options.parentSession.rustProcessGroup,
 			model: options.model,
 			thinkingLevel: options.thinkingLevel,
 			serviceTier: options.serviceTier,
@@ -439,6 +440,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			() =>
 				this.scopedBuild(() =>
 					this.createRuntime({
+						sessionOptions:
+							this._metadata.kind === "subagent"
+								? { rustProcessGroup: this.session.rustProcessGroup }
+								: undefined,
 						cwd: sessionManager.getCwd(),
 						agentDir: this.services.agentDir,
 						sessionManager,
@@ -482,6 +487,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			() =>
 				this.scopedBuild(() =>
 					this.createRuntime({
+						sessionOptions:
+							this._metadata.kind === "subagent"
+								? { rustProcessGroup: this.session.rustProcessGroup }
+								: undefined,
 						cwd: this.cwd,
 						agentDir: this.services.agentDir,
 						sessionManager,
@@ -553,6 +562,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 					() =>
 						this.scopedBuild(() =>
 							this.createRuntime({
+								sessionOptions:
+									this._metadata.kind === "subagent"
+										? { rustProcessGroup: this.session.rustProcessGroup }
+										: undefined,
 								cwd: this.cwd,
 								agentDir: this.services.agentDir,
 								sessionManager,
@@ -582,6 +595,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 				() =>
 					this.scopedBuild(() =>
 						this.createRuntime({
+							sessionOptions:
+								this._metadata.kind === "subagent"
+									? { rustProcessGroup: this.session.rustProcessGroup }
+									: undefined,
 							cwd: sessionManager.getCwd(),
 							agentDir: this.services.agentDir,
 							sessionManager,
@@ -615,6 +632,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			() =>
 				this.scopedBuild(() =>
 					this.createRuntime({
+						sessionOptions:
+							this._metadata.kind === "subagent"
+								? { rustProcessGroup: this.session.rustProcessGroup }
+								: undefined,
 						cwd: this.cwd,
 						agentDir: this.services.agentDir,
 						sessionManager,
@@ -675,6 +696,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 			() =>
 				this.scopedBuild(() =>
 					this.createRuntime({
+						sessionOptions:
+							this._metadata.kind === "subagent"
+								? { rustProcessGroup: this.session.rustProcessGroup }
+								: undefined,
 						cwd: sessionManager.getCwd(),
 						agentDir: this.services.agentDir,
 						sessionManager,

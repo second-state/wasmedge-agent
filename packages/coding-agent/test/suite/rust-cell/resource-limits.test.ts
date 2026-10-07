@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import { ProcessResourceGroup } from "../../../src/core/rust-cell/process-group.js";
 import { isTemplateWarm, resolveToolchain } from "../../../src/core/rust-cell/toolchain.js";
 import { createRustTool } from "../../../src/core/tools/rust.js";
 import { hasProcessLimits } from "../../fixtures/process-limits.js";
@@ -17,9 +18,12 @@ try {
 describe.skipIf(!available)("resource limits through AgentSession (faux provider)", () => {
 	let harness: Harness | undefined;
 	let sdkRoot: string | undefined;
+	let group: ProcessResourceGroup | undefined;
 	afterEach(async () => {
 		await harness?.session.disposeAsync();
 		harness?.cleanup();
+		group?.dispose();
+		group = undefined;
 		if (sdkRoot) rmSync(sdkRoot, { recursive: true, force: true });
 	});
 
@@ -61,19 +65,30 @@ describe.skipIf(!available)("resource limits through AgentSession (faux provider
 		expect(getMessageText(result)).toMatch(/cost (?:exceeded limit|limit exceeded)/i);
 	});
 
-	it.skipIf(!hasProcessLimits()).each(["session", "SDK"])(
+	it.skipIf(!hasProcessLimits()).each(["session", "SDK", "tree session", "tree SDK"])(
 		"enforces process memory from %s options without disabling the bridge",
 		{ timeout: 240_000 },
 		async (mode) => {
+			const limits = { memoryMaxMb: 1024, tasksMax: 256 };
+			const tree = mode.startsWith("tree");
+			if (mode === "tree SDK") group = new ProcessResourceGroup(limits);
 			const rustCell = {
 				cargoSandbox: "bubblewrap" as const,
-				processLimits: { memoryMaxMb: 1024, tasksMax: 256 },
+				...(tree ? { treeProcessLimits: limits } : { processLimits: limits }),
 			};
 			sdkRoot = mkdtempSync(join(tmpdir(), "sdk-process-limit-"));
 			harness = await createHarness(
-				mode === "session"
+				mode.endsWith("session")
 					? { persistSession: true, isolateSessionStorage: true, settings: { rustCell } }
-					: { tools: [createRustTool(sdkRoot, { ...rustCell, workspaceDir: join(sdkRoot, "workspace") })] },
+					: {
+							tools: [
+								createRustTool(sdkRoot, {
+									...rustCell,
+									processGroup: group,
+									workspaceDir: join(sdkRoot, "workspace"),
+								}),
+							],
+						},
 			);
 			harness.setResponses([
 				fauxAssistantMessage(

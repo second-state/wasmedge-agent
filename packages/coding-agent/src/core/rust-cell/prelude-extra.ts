@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
+import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
 
 export interface PreludeExtra {
@@ -119,6 +120,7 @@ export function configurePreludeExtra(
 	cargoBin: string,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
 ): void {
 	writePreludeExtra(workspace, extras);
 	if (!extras.length) return;
@@ -128,6 +130,7 @@ export function configurePreludeExtra(
 		cwd: workspace,
 		cargoSandbox,
 		processLimits,
+		processGroup,
 		network: true,
 	});
 	execFileSync(command.bin, command.args, {
