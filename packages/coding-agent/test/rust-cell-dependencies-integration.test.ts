@@ -123,7 +123,7 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
 		expect((await resumed.execute({ code })).stdout.trim()).toBe("all seven");
 		const seed = join(root, "seed");
-		snapshotWorkspace(workspace, seed);
+		await snapshotWorkspace(workspace, seed);
 		const childWorkspace = join(root, "child");
 		const child = await provision({ cwd: root, workspaceDir: childWorkspace, initialWorkspaceDir: seed }).ensure();
 		const inherited = await child.execute({ code });
@@ -145,7 +145,8 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 			configured: [],
 			timeoutMs: 120_000,
 		});
-		const context = { signal: new AbortController().signal };
+		const contextController = new AbortController();
+		const context = { signal: contextController.signal };
 		const before = new Map(
 			DEPENDENCY_PATHS.filter((path) => path !== "vendor" && existsSync(join(workspace, path))).map((path) => [
 				path,
@@ -183,11 +184,17 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		expect(readCellDependencies(workspace)).toEqual(["base64", "itoa", "memchr"]);
 		await expect(withHistory({ crate_name: "memchr" }, context)).resolves.toEqual({ already_available: true });
 		expect(snapshot).toHaveBeenCalledExactlyOnceWith("memchr", {
-			signal: context.signal,
+			signal: expect.any(AbortSignal),
 			timeoutMs: expect.any(Number),
 		});
 		expect(snapshot.mock.calls[0][1]!.timeoutMs).toBeGreaterThan(0);
 		expect(snapshot.mock.calls[0][1]!.timeoutMs).toBeLessThan(120_000);
+		const snapshotSignal = snapshot.mock.calls[0][1]!.signal!;
+		expect(snapshotSignal.aborted).toBe(false);
+		const reason = new Error("cell cancelled");
+		contextController.abort(reason);
+		expect(snapshotSignal.aborted).toBe(true);
+		expect(snapshotSignal.reason).toBe(reason);
 	});
 	it("rejects a curated name already used by a mounted skill", { timeout: 120_000 }, async () => {
 		const { root, workspace } = fixture();

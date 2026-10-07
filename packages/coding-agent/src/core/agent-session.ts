@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -287,6 +288,7 @@ import {
 	type SubagentRuntimeHost,
 } from "./rlm-runtime.js";
 import {
+	DEFAULT_CELL_TIMEOUT_MS,
 	listPersistentState,
 	type PersistentStateListing,
 	ProcessResourceGroup,
@@ -1666,6 +1668,7 @@ export class AgentSession {
 	private _abandonedRlmQuiescenceChildIds = new Set<string>();
 	private _rlmQuiescenceWaitAborts = new Set<AbortController>();
 	private _pendingRlmSubagentSessionNames = new Set<string>();
+	private readonly _pendingRlmWorkspaceSnapshots = new Set<Promise<void>>();
 	// Inline mode keeps finished child sessions so the inspector can still read them;
 	// the daemon does the same by leaving the child session resident in its registry.
 	private _rlmChildSessions = new Map<string, RetainedRlmChild>();
@@ -4911,6 +4914,7 @@ export class AgentSession {
 	}
 
 	private async _disposeAsyncOnce(): Promise<void> {
+		await Promise.allSettled([...this._pendingRlmWorkspaceSnapshots]);
 		// Flush child sessions/traces for both still-running and retained children; the sync
 		// dispose() below only tears them down synchronously.
 		for (const run of [...this._activeRlmChildRuns.values()]) {
@@ -4966,7 +4970,11 @@ export class AgentSession {
 			return this._disposeCallbacksPromise;
 		}
 		// disposeAsync() also awaits this promise after synchronous disposal.
-		const pending: Promise<void>[] = [this._disposeRustCellRuntime(), this._drainPendingRlmChildDeletions()];
+		const pending: Promise<void>[] = [
+			this._disposeRustCellRuntime(),
+			this._drainPendingRlmChildDeletions(),
+			...[...this._pendingRlmWorkspaceSnapshots].map((snapshot) => snapshot.catch(() => undefined)),
+		];
 		for (const callback of this._disposeCallbacks) {
 			try {
 				const result = callback();
@@ -10743,8 +10751,8 @@ export class AgentSession {
 	/** Typed handlers for host requests, dispatched from the rust-cell BridgeServer. */
 	private _createHostRequestHandlers(): HostRequestHandlers {
 		const handlers: HostRequestHandlers = {
-			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }) => ({
-				...(await this.runRlmChild(prompt, kwargs, cellSourceCode)),
+			"rlm.run": createRlmRunHostHandler(async ({ prompt, kwargs, cellSourceCode }, context) => ({
+				...(await this.runRlmChild(prompt, kwargs, cellSourceCode, context?.signal)),
 			})),
 			"rlm.create_session": createRlmCreateSessionHostHandler(async ({ prompt, kwargs }) => ({
 				...(await this.createRlmSession(prompt, kwargs)),
@@ -12442,11 +12450,38 @@ export class AgentSession {
 		return { model };
 	}
 
+	private async _prepareRlmChildWorkspace(
+		childSessionDir: string,
+		sessionName: string,
+		reservedName: boolean,
+		callerSignal?: AbortSignal,
+	): Promise<void> {
+		const signal = AbortSignal.any([
+			this._sessionActionCommitDisposeAbortController.signal,
+			AbortSignal.timeout(this.settingsManager.getRustCellTimeoutMs() ?? DEFAULT_CELL_TIMEOUT_MS),
+			...(callerSignal ? [callerSignal] : []),
+		]);
+		signal.throwIfAborted();
+		if (!reservedName) await this._assertRlmSubagentSessionNameAvailable(sessionName);
+		signal.throwIfAborted();
+		const parentWorkspace = [
+			this._rustCellProvisioner?.workspaceDir,
+			this._rustWorkspaceDir,
+			this._rustWorkspaceSeedDir(),
+		].find((dir) => dir && existsSync(join(dir, "Cargo.toml")));
+		if (parentWorkspace) {
+			await snapshotWorkspace(parentWorkspace, join(childSessionDir, WORKSPACE_SEED_DIR), { signal });
+		}
+		signal.throwIfAborted();
+	}
+
 	private async _startRlmChildRun(
 		prompt: string,
 		kwargs: Record<string, unknown> = {},
 		spawnCode?: string,
+		signal?: AbortSignal,
 	): Promise<RlmSpawnHandle> {
+		signal?.throwIfAborted();
 		// Snapshot before any await: the spawning request is the turn whose tool call is
 		// executing now. A spawn arriving outside an active run (a detached guest task
 		// firing while the parent is idle) has no such turn; an absent edge beats a wrong one.
@@ -12505,19 +12540,23 @@ export class AgentSession {
 		}
 		const childNodeId = basename(childSessionDir);
 		const sessionName = requestedSessionName ?? createDefaultRlmSubagentSessionName(prompt, childNodeId);
-		if (!requestedSessionName) await this._assertRlmSubagentSessionNameAvailable(sessionName);
-		const parentWorkspace = [
-			this._rustCellProvisioner?.workspaceDir,
-			this._rustWorkspaceDir,
-			this._rustWorkspaceSeedDir(),
-		].find((dir) => dir && existsSync(join(dir, "Cargo.toml")));
-		if (parentWorkspace) {
-			try {
-				snapshotWorkspace(parentWorkspace, join(childSessionDir, WORKSPACE_SEED_DIR));
-			} catch (error) {
-				rmSync(childSessionDir, { recursive: true, force: true });
-				throw error;
-			}
+		let finishPreparation!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			finishPreparation = resolve;
+		});
+		this._pendingRlmWorkspaceSnapshots.add(preparing);
+		try {
+			await this._prepareRlmChildWorkspace(childSessionDir, sessionName, !!requestedSessionName, signal);
+			signal?.throwIfAborted();
+			if (this._disposed || this._disposing)
+				throw new Error("Cannot spawn a subagent after its parent was disposed");
+		} catch (error) {
+			releaseReservedSessionName();
+			await rm(childSessionDir, { recursive: true, force: true });
+			throw error;
+		} finally {
+			this._pendingRlmWorkspaceSnapshots.delete(preparing);
+			finishPreparation();
 		}
 		const startedAt = Date.now();
 		const parentAssistantForUsage = this._findLastAssistantMessage();
@@ -13050,8 +13089,9 @@ export class AgentSession {
 		prompt: string,
 		kwargs: Record<string, unknown> = {},
 		spawnCode?: string,
+		signal?: AbortSignal,
 	): Promise<RlmSpawnHandle> {
-		return this._startRlmChildRun(prompt, kwargs, spawnCode);
+		return this._startRlmChildRun(prompt, kwargs, spawnCode, signal);
 	}
 
 	private _isRetryableError(message: AssistantMessage): boolean {

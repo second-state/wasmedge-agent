@@ -264,7 +264,7 @@ describe.skipIf(!available)("syncRustSkills (toolchain integration)", () => {
 		const skill = writeSkillCrate(root, "shared", "pub fn value() -> u32 { 42 }\n");
 		syncRustSkills(parent, [skill], { cargoBin: toolchain?.cargoBin });
 		const seed = join(root, "seed");
-		snapshotWorkspace(parent, seed);
+		await snapshotWorkspace(parent, seed);
 		writeFileSync(join(skill.cratePath, "src/lib.rs"), "not Rust\n");
 		const diagnostics: string[] = [];
 		const child = new RustCellProvisioner({
