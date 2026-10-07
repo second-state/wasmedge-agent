@@ -41,6 +41,7 @@ afterEach(async () => {
 	}
 	await Promise.allSettled(pending.splice(0));
 	vi.restoreAllMocks();
+	vi.useRealTimers();
 	vi.mocked(childProcess.spawn).mockReset();
 	for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
 });
@@ -197,5 +198,52 @@ describe("cell process error cleanup", () => {
 		expect(await nextOutcome).toBe(nextFailure);
 		expect(readFileSync(main, "utf8")).toBe("previous cell");
 		expect(readFileSync(lib, "utf8")).toBe("previous library");
+	});
+	it.each(["abort", "timeout"])(
+		"gives %s a cleanup interval then force-kills without settling early",
+		async (kind) => {
+			vi.useFakeTimers();
+			const child = childFixture();
+			const controller = new AbortController();
+			const run = runProcess("git", [], {
+				cwd: process.cwd(),
+				timeoutMs: 1000,
+				terminateGraceMs: 100,
+				signal: controller.signal,
+			});
+			pending.push(run);
+			let settled = false;
+			void run.then(() => {
+				settled = true;
+			});
+			if (kind === "abort") controller.abort();
+			else await vi.advanceTimersByTimeAsync(1000);
+			expect(process.kill).toHaveBeenCalledExactlyOnceWith(-child.pid!, "SIGTERM");
+			await vi.advanceTimersByTimeAsync(100);
+			expect(process.kill).toHaveBeenLastCalledWith(-child.pid!, "SIGKILL");
+			expect(settled).toBe(false);
+			child.emit("close", null);
+			expect(await run).toMatchObject({ aborted: kind === "abort", timedOut: kind === "timeout" });
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
+
+	it("clears the force-kill timer when graceful termination closes the process", async () => {
+		vi.useFakeTimers();
+		const child = childFixture();
+		const controller = new AbortController();
+		const run = runProcess("git", [], {
+			cwd: process.cwd(),
+			timeoutMs: 1000,
+			terminateGraceMs: 100,
+			signal: controller.signal,
+		});
+		pending.push(run);
+		controller.abort();
+		child.emit("close", null);
+		await run;
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(process.kill).toHaveBeenCalledExactlyOnceWith(-child.pid!, "SIGTERM");
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

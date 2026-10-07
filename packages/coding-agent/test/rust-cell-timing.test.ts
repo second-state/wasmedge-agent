@@ -68,7 +68,7 @@ function fixture() {
 		simulated.now += 7;
 	});
 	const history = new WorkspaceHistory(ws);
-	const snapshot = vi.spyOn(history, "snapshot").mockImplementation(() => {
+	const snapshot = vi.spyOn(history, "snapshot").mockImplementation(async () => {
 		simulated.now += 11;
 		return "commit";
 	});
@@ -128,7 +128,7 @@ describe("cell phase timing", () => {
 		if (phase === "runtime") simulated.runExit = 1;
 		if (phase === "abort") simulated.aborted = true;
 		if (phase === "snapshot")
-			snapshot.mockImplementation(() => {
+			snapshot.mockImplementation(async () => {
 				simulated.now += 11;
 				throw new Error("snapshot failed");
 			});

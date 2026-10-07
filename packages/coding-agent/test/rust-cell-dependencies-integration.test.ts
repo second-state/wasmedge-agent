@@ -168,9 +168,7 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		await Promise.all([handler({ crate_name: "itoa" }, context), handler({ crate_name: "base64" }, context)]);
 		expect(readCellDependencies(workspace)).toEqual(["base64", "itoa"]);
 		const history = new WorkspaceHistory(workspace);
-		const snapshot = vi.spyOn(history, "snapshotDependency").mockImplementation(() => {
-			throw new Error("Git unavailable");
-		});
+		const snapshot = vi.spyOn(history, "snapshotDependency").mockRejectedValue(new Error("Git unavailable"));
 		const withHistory = createDependencyHandler({
 			workspace,
 			template: resolveTemplateDir(),
@@ -184,7 +182,12 @@ describe.skipIf(!available)("curated dependencies with Cargo and WasmEdge", () =
 		);
 		expect(readCellDependencies(workspace)).toEqual(["base64", "itoa", "memchr"]);
 		await expect(withHistory({ crate_name: "memchr" }, context)).resolves.toEqual({ already_available: true });
-		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(snapshot).toHaveBeenCalledExactlyOnceWith("memchr", {
+			signal: context.signal,
+			timeoutMs: expect.any(Number),
+		});
+		expect(snapshot.mock.calls[0][1]!.timeoutMs).toBeGreaterThan(0);
+		expect(snapshot.mock.calls[0][1]!.timeoutMs).toBeLessThan(120_000);
 	});
 	it("rejects a curated name already used by a mounted skill", { timeout: 120_000 }, async () => {
 		const { root, workspace } = fixture();

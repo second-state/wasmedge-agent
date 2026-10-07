@@ -39,7 +39,7 @@ Each `rust` tool call runs one complete program:
 3. A failed or interrupted build restores the previous cell source and lib files, including the generated helper module index. Compile errors return the rendered rustc diagnostics. Successful builds retain their source changes even if the cell later panics or times out; runtime side effects are not rolled back.
 4. The host validates the compiled module and rejects imports outside a fixed set of non-network WASI Preview 1 functions, before any cell code executes. Socket/DNS, plugin, unknown, and non-function imports are rejected even if unused. Validation uses the host JavaScript engine without instantiating the module; unsupported Wasm features fail closed. WasmEdge runs the accepted module with `--force-interpreter`, preventing embedded AOT native payloads from replacing the inspected code.
 5. Execution has explicit preopens: the project at `/workspace` (writable by default, read-only with `rustCell.workspaceWritePolicy: "ro"`), persistent state at `/agent/state`, the extension crate read-only at `/agent/lib`, and scratch at `/scratch`. The runner checks library readonly preopen binding with a separate inert Wasm module before the first execution; it never uses the submitted cell as a probe. Guest paths are absolute — WASI has no working directory, so cells address the project as `/workspace/...`.
-6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, and execution share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
+6. stdout/stderr, per-lib-file diffs, display attachments, and sent agent messages are composed into one structured result. Waiting for a build permit, compilation, import inspection, the preopen probe, execution, and the final Git snapshot share the per-cell time budget (`rustCell.cellTimeoutMs`, default 120s) and cancellation signal.
 
 With `rustCell.libraryTestGate: true` (default: false), nonempty `lib` edits are
 first applied to a disposable workspace snapshot. The host builds `agent_lib`
@@ -71,6 +71,24 @@ The host first resolves against the workspace's existing vendor directory offlin
 Discovered Rust skills are mounted into the clone as `skills/<crate>` symlinks and re-exported through `agent_lib::skills`; a skill that fails its probe build is unmounted with a diagnostic instead of breaking cells. See [Skills](skills.md).
 
 Persisted workspaces have their own local Git repository with an initial snapshot and a commit after each successful cell. Commits record the cell source, library and runtime sources, manifests, skill mounts, and `state/` (including blobs); messages contain a sequence number and tool-call ID. Build caches, vendored dependencies, and scratch files are excluded. External skill symlinks record the mount, not the external source contents. Project files and harness stores are outside this repository. Failed cells do not create cell snapshots; an earlier successful dependency addition keeps its own snapshot. Snapshots do not roll back runtime side effects. A Git failure after successful execution is reported separately in the tool result without rerunning the cell. Non-persistent sessions do not initialize Git.
+
+Git initialization, cell snapshots and dependency snapshots are asynchronous.
+Each complete operation has a 30-second ceiling, further bounded by startup or
+cell time remaining and cancellation. Operations on one history instance are
+serialized; waiting consumes the budget. Cancellation sends SIGTERM to the Git
+process group, allows up to one second for lock cleanup, then uses SIGKILL if
+needed. The runtime waits for process/pipe closure before releasing the workspace.
+Automatic maintenance stays in the foreground so it is included in that wait.
+
+If execution already succeeded, snapshot cancellation or timeout preserves the
+cell's `ok` status and reports `workspaceCommitError`; it never reruns the cell.
+A dependency already published is likewise retained if its snapshot fails.
+Cancellation can arrive after a commit was written, including during maintenance,
+so a snapshot error does not prove that no commit exists. Inspect history before
+retrying. Forced termination or a host crash may leave Git locks; the runtime
+never deletes them automatically. Confirm no Git process still owns the workspace
+before repairing a stale lock. This does not coordinate external Git operations
+or make workspace side effects transactional.
 
 State and blob writes stage data in an exclusively created sibling directory,
 then rename the completed file into place. Existing `.tmp` files, directories,
@@ -399,7 +417,8 @@ This prevents unlisted parent environment values from reaching compilation throu
 ### Startup cancellation
 
 Runtime toolchain probes, template vendoring/builds, configured dependency
-vendoring, scaffold validation and skill compile probes run asynchronously.
+vendoring, scaffold validation, skill compile probes and Git initialization run
+asynchronously.
 The `rust` tool forwards its abort signal during startup; runtime disposal also
 cancels startup and waits for subprocess exit and staged-workspace cleanup.
 Cancelled scaffold validation retains the original workspace. Cancelled skill
@@ -421,8 +440,8 @@ publishes only on success. Successful template work remains cached if a later
 startup phase fails. There is no cross-process preparation lock; Cargo retains
 its own build locking.
 
-Host filesystem copying/hashing, local Git initialization and systemd group
-setup remain synchronous. Cancellation/deadline checks surround those phases;
+Host filesystem copying/hashing and systemd group setup remain synchronous.
+Cancellation/deadline checks surround those phases;
 they are not interrupted mid-call, so cleanup or a synchronous operation can
 extend elapsed time beyond the startup budget. Startup errors are reported by
 the tool before a cell result exists. `doctor --fix` and installation keep their

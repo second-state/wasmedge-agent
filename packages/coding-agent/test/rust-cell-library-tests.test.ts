@@ -84,7 +84,7 @@ const code =
 	'fn main() { assert_eq!(agent_lib::helpers::checked::value(), 42); std::fs::write("/workspace/ran", "yes").unwrap(); }';
 
 describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
-	function fixture(overrides: Partial<RunnerOptions> = {}) {
+	async function fixture(overrides: Partial<RunnerOptions> = {}) {
 		const root = rootDir();
 		const cwd = join(root, "project");
 		mkdirSync(cwd);
@@ -114,7 +114,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 		const originalMain = readFileSync(main, "utf8");
 		const originalIndex = readFileSync(index, "utf8");
 		const history = new WorkspaceHistory(workspace);
-		history.ensure();
+		await history.ensure();
 		const head = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8" }).trim();
 		const originalHead = head();
 		const runner = new CellRunner({
@@ -140,7 +140,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 	it("tests staged unit/integration code before publishing and committing a successful cell", {
 		timeout: 180_000,
 	}, async () => {
-		const f = fixture();
+		const f = await fixture();
 		mkdirSync(join(f.workspace, "agent_lib/tests"));
 		writeFileSync(
 			join(f.workspace, "agent_lib/tests/regression.rs"),
@@ -206,7 +206,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 			error: "library test import not allowed",
 		},
 	])("rejects $name without publishing edits or running the cell", { timeout: 180_000 }, async ({ source, error }) => {
-		const f = fixture();
+		const f = await fixture();
 		const result = await f.runner.execute({ code, lib: [{ path: helperPath, content: source }] });
 		expect(result).toMatchObject({ status: "error", libApplied: false, libReverted: false, runMs: 0 });
 		expect(result.stderr).toContain(error);
@@ -216,19 +216,19 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 	it("keeps the default compile-only path and allows cells without lib edits under the gate", {
 		timeout: 180_000,
 	}, async () => {
-		const disabled = fixture({ libraryTestGate: undefined });
+		const disabled = await fixture({ libraryTestGate: undefined });
 		const withoutTests = await disabled.runner.execute({
 			code,
 			lib: [{ path: helperPath, content: "pub fn value() -> u32 { 42 }" }],
 		});
 		expect(withoutTests, withoutTests.stderr).toMatchObject({ status: "ok" });
-		const enabled = fixture();
+		const enabled = await fixture();
 		const cellOnly = await enabled.runner.execute({ code: "fn main() {}", lib: [] });
 		expect(cellOnly, cellOnly.stderr).toMatchObject({ status: "ok" });
 	});
 
 	it("restores source edits if the cell fails to compile after library tests pass", { timeout: 180_000 }, async () => {
-		const f = fixture();
+		const f = await fixture();
 		const result = await f.runner.execute({
 			code: "fn main() { missing(); }",
 			lib: [{ path: helperPath, content: passing }],
@@ -241,7 +241,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 		"rejects %s source changes during validation",
 		{ timeout: 180_000 },
 		async (changed) => {
-			const f = fixture();
+			const f = await fixture();
 			const runProcess = cellProcess.runProcess;
 			vi.spyOn(cellProcess, "runProcess").mockImplementation(async (bin, args, options) => {
 				const result = await runProcess(bin, args, options);
@@ -261,7 +261,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 	it("keeps the submitted cell and library immutable while validation is in flight", {
 		timeout: 180_000,
 	}, async () => {
-		const f = fixture();
+		const f = await fixture();
 		const input = { code, lib: [{ path: helperPath, content: passing }] };
 		const runProcess = cellProcess.runProcess;
 		vi.spyOn(cellProcess, "runProcess").mockImplementation(async (bin, args, options) => {
@@ -279,7 +279,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 	});
 
 	it("enforces gas limits on library tests", { timeout: 180_000 }, async () => {
-		const f = fixture({ cellGasLimit: 1_000_000 });
+		const f = await fixture({ cellGasLimit: 1_000_000 });
 		const result = await f.runner.execute({
 			code,
 			lib: [{ path: helperPath, content: "#[test] fn hangs() { loop { std::hint::black_box(1); } }" }],
@@ -293,7 +293,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 		"cancels running library tests on %s before publishing",
 		{ timeout: 180_000 },
 		async (mode) => {
-			const f = fixture();
+			const f = await fixture();
 			const controller = new AbortController();
 			const runProcess = cellProcess.runProcess;
 			let stopping: Promise<void> | undefined;
@@ -327,7 +327,7 @@ describe.skipIf(!available)("library test gate with Cargo and WasmEdge", () => {
 	);
 
 	it("shares the cell deadline with test build and execution", { timeout: 180_000 }, async () => {
-		const f = fixture({ cellTimeoutMs: 2000 });
+		const f = await fixture({ cellTimeoutMs: 2000 });
 		const result = await f.runner.execute({
 			code,
 			lib: [{ path: helperPath, content: "#[test] fn hangs() { loop { std::hint::black_box(1); } }" }],

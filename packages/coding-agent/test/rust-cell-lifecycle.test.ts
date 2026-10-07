@@ -44,7 +44,7 @@ function fixture(options: Partial<RustCellProvisionerOptions> = {}) {
 	vi.spyOn(toolchain, "rustcVersionAsync").mockResolvedValue("test");
 	vi.spyOn(toolchain, "ensureTemplateReadyAsync").mockResolvedValue(undefined);
 	vi.spyOn(workspaceVersion, "prepareVersionedWorkspaceAsync").mockResolvedValue(undefined);
-	vi.spyOn(WorkspaceHistory.prototype, "ensure").mockImplementation(() => {});
+	vi.spyOn(WorkspaceHistory.prototype, "ensure").mockResolvedValue();
 	const provisioner = new RustCellProvisioner({ cwd: root, workspaceDir: workspace, ...options });
 	provisioners.push(provisioner);
 	return { root, workspace, provisioner };
