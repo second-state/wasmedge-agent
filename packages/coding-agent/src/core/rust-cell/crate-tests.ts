@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
@@ -44,7 +44,8 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 	try {
 		const workspace = join(root, "workspace");
 		const fingerprint = skillTestFingerprint(options.workspaceDir, mounted);
-		snapshotWorkspace(options.workspaceDir, workspace, { mountedSkillsOnly: true });
+		await snapshotWorkspace(options.workspaceDir, workspace, { mountedSkillsOnly: true, signal });
+		signal.throwIfAborted();
 		if (skillTestFingerprint(workspace, mounted) !== fingerprint) {
 			throw new Error(`${sourceLabel} sources changed while taking the test snapshot; retry validation`);
 		}
@@ -155,6 +156,6 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 		if (timeout.aborted) throw new Error(`sandboxed ${kind} tests timed out`);
 		throw error;
 	} finally {
-		rmSync(root, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true });
 	}
 }

@@ -33,8 +33,7 @@ export function createDependencyHandler(options: {
 	return (payload, context) => {
 		const add = async (): Promise<Record<string, unknown>> => {
 			if (!context) throw new Error("deps.add requires an active cell");
-			const { signal } = context;
-			signal.throwIfAborted();
+			context.signal.throwIfAborted();
 			if (Object.keys(payload).some((key) => !["crate_name", "cellSourceCode"].includes(key))) {
 				throw new Error("deps.add accepts only crate_name");
 			}
@@ -48,10 +47,12 @@ export function createDependencyHandler(options: {
 			const names = [...added, name].sort();
 			const extras = workspaceDependencies(options.configured, names);
 			const deadline = Date.now() + options.timeoutMs;
+			const signal = AbortSignal.any([context.signal, AbortSignal.timeout(options.timeoutMs)]);
 			await updateDependencies(
 				workspace,
 				async (staged) => {
-					snapshotWorkspace(workspace, staged, { mountedSkillsOnly: true });
+					await snapshotWorkspace(workspace, staged, { mountedSkillsOnly: true, signal });
+					signal.throwIfAborted();
 					copyFileSync(join(workspace, "cell/src/main.rs"), join(staged, "cell/src/main.rs"));
 					const mounted = new Set(mountedSkillCrates(staged));
 					const skills = withInheritedSkills(staged, []).filter((skill) => mounted.has(skill.crateName));

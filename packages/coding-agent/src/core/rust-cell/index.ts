@@ -119,7 +119,7 @@ export interface RustCellProvisionerOptions extends RuntimeResourceLimits {
 	onDiagnostic?: (message: string) => void;
 }
 
-const DEFAULT_CELL_TIMEOUT_MS = 120_000;
+export const DEFAULT_CELL_TIMEOUT_MS = 120_000;
 
 /** Lazy, memoized runtime provisioning: toolchain checks, template warmup,
  * workspace clone, runner construction. Failure clears the memo so the next

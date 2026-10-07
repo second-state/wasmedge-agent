@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { CELL_DEPENDENCIES_FILE } from "./dependency-catalog.js";
 
@@ -92,6 +93,12 @@ export function recoverDependencyUpdate(workspace: string): void {
 	rmSync(transaction, { recursive: true, force: true });
 }
 
+async function discardTransaction(transaction: string, journal: Journal): Promise<void> {
+	await rm(transaction, { recursive: true, force: true }).finally(() => {
+		if (existsSync(transaction)) writeJournal(transaction, { ...journal, pid: 0 });
+	});
+}
+
 export async function updateDependencies(
 	workspace: string,
 	prepare: (staged: string) => Promise<void>,
@@ -132,8 +139,8 @@ export async function updateDependencies(
 				throw new Error("Dependency rollback failed; recovery required before continuing", { cause: restoreError });
 			}
 		}
-		rmSync(transaction, { recursive: true, force: true });
+		await discardTransaction(transaction, journal);
 		throw error;
 	}
-	rmSync(transaction, { recursive: true, force: true });
+	await discardTransaction(transaction, journal);
 }

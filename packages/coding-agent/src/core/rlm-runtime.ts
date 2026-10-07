@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSession, RlmChildAgentStatus } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/index.js";
-import type { HostRequestHandler } from "./host-bridge/types.js";
+import type { HostRequestContext, HostRequestHandler } from "./host-bridge/types.js";
 import { THINKING_LEVELS } from "./thinking-levels.js";
 
 /** Request emitted by `rlm.spawn`; cellSourceCode preserves the spawning cell for display. */
@@ -108,7 +108,7 @@ export interface RlmCollectResult {
 
 export type RlmCollectHandler = (targets: string[], timeoutMs: number) => Promise<RlmCollectResult>;
 
-export type RlmRunHandler = (request: RlmRunRequest) => Promise<Record<string, unknown>>;
+export type RlmRunHandler = (request: RlmRunRequest, context?: HostRequestContext) => Promise<Record<string, unknown>>;
 type RlmCreateSessionHandler = (request: RlmCreateSessionRequest) => Promise<RlmCreateSessionResult>;
 
 export type RlmListSubagentsHandler = () => RlmListSubagentsResult | Promise<RlmListSubagentsResult>;
@@ -284,17 +284,13 @@ export function createRlmCreateSessionHostHandler(handler: RlmCreateSessionHandl
 
 /** Adapt an RlmRunHandler into the typed "rlm.run" handler for the host bridge. */
 export function createRlmRunHostHandler(handler: RlmRunHandler): HostRequestHandler {
-	return async (payload) => {
+	return async (payload, context) => {
 		if (typeof payload.prompt !== "string") {
 			throw new Error("rlm.spawn prompt must be a string");
 		}
 		const kwargs = isRecord(payload.kwargs) ? payload.kwargs : {};
 		const cellSourceCode = typeof payload.cellSourceCode === "string" ? payload.cellSourceCode : undefined;
-		const result = await handler({
-			prompt: payload.prompt,
-			kwargs,
-			cellSourceCode,
-		});
+		const result = await handler({ prompt: payload.prompt, kwargs, cellSourceCode }, context);
 		return result as unknown as Record<string, unknown>;
 	};
 }

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileAtomicSync } from "../../utils/atomic-file.js";
@@ -108,7 +109,8 @@ export function createRustdocHandler(options: {
 				try {
 					const fingerprint = rustdocFingerprint(options.workspace, mounted);
 					const workspace = join(root, "workspace");
-					snapshotWorkspace(options.workspace, workspace, { mountedSkillsOnly: true });
+					await snapshotWorkspace(options.workspace, workspace, { mountedSkillsOnly: true, signal });
+					signal.throwIfAborted();
 					if (rustdocFingerprint(workspace, mounted) !== fingerprint)
 						throw new Error("Sources changed while taking the API snapshot; retry introspection");
 					const target = join(cargoTargetDir(workspace, options.cargoSandbox), "api-build");
@@ -174,7 +176,7 @@ export function createRustdocHandler(options: {
 					mkdirSync(join(options.workspace, "target"), { recursive: true });
 					writeFileAtomicSync(join(options.workspace, RUSTDOC_CACHE_PATH), serialized);
 				} finally {
-					rmSync(root, { recursive: true, force: true });
+					await rm(root, { recursive: true, force: true });
 				}
 			}
 			signal.throwIfAborted();

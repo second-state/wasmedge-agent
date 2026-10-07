@@ -87,7 +87,7 @@ describe.skipIf(!available)("configured crates with real Cargo and WasmEdge", ()
 		expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
 		expect((await resumed.execute({ code })).status).toBe("ok");
 		const seed = join(root, "seed");
-		snapshotWorkspace(workspace, seed);
+		await snapshotWorkspace(workspace, seed);
 		const child = await provision({
 			...options,
 			workspaceDir: join(root, "child"),

@@ -302,6 +302,20 @@ Unknown options fail instead of being ignored. Model search is bounded to active
 
 Children receive incremented `RLM_DEPTH`, the inherited maximum depth, and their own `RLM_SESSION_DIR`. A child starts with the parent's `agent_lib` as it was at spawn, including helpers and copies of mounted skill sources. The snapshot also carries scaffold dependencies and the build cache; cache reuse still depends on Cargo's freshness checks. The child has a fresh cell source, empty `rlm::state`, and independent Git history. Parent and child library edits are independent. An unprovisioned parent uses its own inherited seed, if present, or the shared template. The default maximum depth is 2, so root sessions may create children and grandchildren; grandchildren may not create another generation unless the limit is configured higher.
 
+Child seeds, sandboxed crate tests, dependency updates and rustdoc use asynchronous
+snapshots. Copying checks cancellation between entries and waits for in-flight
+filesystem calls before cleaning up. Child workspace preparation observes the spawning
+cell's signal, parent disposal and `cellTimeoutMs` (two minutes by default).
+A cancelled or failed preparation removes its child directory and releases the
+reserved name; it never admits a child. `disposeAsync()` waits for preparation
+and cleanup. After admission, the child's existing independent lifecycle applies.
+Tests, rustdoc and dependency snapshots count toward their operation budgets.
+
+This is not an atomic snapshot against concurrent external edits. One copy
+syscall cannot be interrupted; source fingerprints and dependency recovery still
+include synchronous work. Temporary test/rustdoc trees and ordinary dependency
+transaction cleanup are removed asynchronously without abandoning pending I/O.
+
 The frozen seed is stored under the child session directory as `.rust-workspace-seed/`, so delayed startup and daemon restoration before the first cell use the same snapshot. Existing child workspaces survive reload without being overwritten. Root skill mounts remain editable symlinks; inherited child skills are local copies and stay local on reload.
 
 An inherited skill directory is preserved even if its `Cargo.toml` is missing. Reload unmounts the invalid skill with a diagnostic and keeps its local files for repair. Restore the manifest and reload to remount it.
@@ -450,8 +464,9 @@ timestamps and literal symlinks and requests best-effort reflinks.
 
 Staging cleanup is asynchronous. Cancellation waits for the current filesystem
 call and open hash streams to finish before cleanup and retry; a single copy
-syscall cannot be interrupted. Small metadata operations, systemd group setup
-and other child/test/dependency snapshot paths still contain synchronous work.
+syscall cannot be interrupted. Small metadata operations, systemd group setup,
+skill/rustdoc source fingerprints, and dependency crash recovery/rollback still
+contain synchronous work.
 Cleanup and these operations can extend elapsed time beyond the startup budget. Startup errors are reported by
 the tool before a cell result exists. `doctor --fix` and installation keep their
 synchronous maintenance APIs.

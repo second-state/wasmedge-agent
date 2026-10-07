@@ -1,15 +1,5 @@
-import {
-	constants,
-	cpSync,
-	existsSync,
-	lstatSync,
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { constants, existsSync, lstatSync, readdirSync, renameSync } from "node:fs";
+import { cp, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { mountedSkillCrates, type RustSkillMount } from "./workspace.js";
 
@@ -32,27 +22,37 @@ const SNAPSHOT_PATHS = [
 /** Capture before spawn admission, while the parent cell still owns its
  * workspace. Skills are materialized so child edits cannot reach the parent.
  * Test/dependency workspaces can omit unmounted sources retained for repair. */
-export function snapshotWorkspace(
+export async function snapshotWorkspace(
 	source: string,
 	destination: string,
-	options?: { mountedSkillsOnly?: boolean },
-): void {
-	mkdirSync(dirname(destination), { recursive: true });
-	const staging = mkdtempSync(join(dirname(destination), ".workspace-snapshot-"));
+	options?: { mountedSkillsOnly?: boolean; signal?: AbortSignal },
+): Promise<void> {
+	const check = () => options?.signal?.throwIfAborted();
+	check();
+	await mkdir(dirname(destination), { recursive: true });
+	check();
+	const staging = await mkdtemp(join(dirname(destination), ".workspace-snapshot-"));
 	try {
+		check();
 		const paths = SNAPSHOT_PATHS.flatMap((path) =>
 			path === "skills" && options?.mountedSkillsOnly
 				? mountedSkillCrates(source).map((crate) => `skills/${crate}`)
 				: [path],
 		);
 		for (const path of paths) {
-			if (!lstatSync(join(source, path), { throwIfNoEntry: false })) continue;
-			cpSync(join(source, path), join(staging, path), {
+			check();
+			const entry = await lstat(join(source, path)).catch((error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return undefined;
+				throw error;
+			});
+			if (!entry) continue;
+			await cp(join(source, path), join(staging, path), {
 				recursive: true,
 				dereference: true,
 				preserveTimestamps: true,
 				mode: constants.COPYFILE_FICLONE,
 				filter: (entry) => {
+					check();
 					const parts = relative(source, entry).split(sep);
 					if (parts.includes(".git")) return false;
 					// Reuse the workspace cache, not standalone crate build output.
@@ -64,12 +64,14 @@ export function snapshotWorkspace(
 				},
 			});
 		}
-		mkdirSync(join(staging, "cell", "src"), { recursive: true });
-		writeFileSync(join(staging, "cell", "src", "main.rs"), "fn main() {}\n");
-		writeFileSync(join(staging, INHERITED_MARKER), "1\n");
+		check();
+		await mkdir(join(staging, "cell", "src"), { recursive: true });
+		await writeFile(join(staging, "cell", "src", "main.rs"), "fn main() {}\n");
+		await writeFile(join(staging, INHERITED_MARKER), "1\n");
+		check();
 		renameSync(staging, destination);
 	} finally {
-		rmSync(staging, { recursive: true, force: true });
+		await rm(staging, { recursive: true, force: true });
 	}
 }
 

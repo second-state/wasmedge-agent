@@ -79,7 +79,8 @@ describe("curated dependency fetching", () => {
 			const manifest = readFileSync(join(workspace, "Cargo.toml"), "utf-8");
 			const controller = new AbortController();
 			vi.mocked(runProcess).mockImplementation(async (_bin, args, options) => {
-				expect(options.signal).toBe(controller.signal);
+				expect(options.signal).toBeInstanceOf(AbortSignal);
+				expect(options.signal!.aborted).toBe(false);
 				expect(options.timeoutMs).toBeGreaterThan(0);
 				expect(options.timeoutMs).toBeLessThanOrEqual(10_000);
 				const stagedManifest = readFileSync(join(options.cwd, "Cargo.toml"), "utf-8");
@@ -92,7 +93,11 @@ describe("curated dependency fetching", () => {
 					expect(stagedManifest).toContain('hex = { version = "=0.4.3"');
 					writeFileSync(join(options.cwd, "vendor/fetched"), "new source");
 					writeFileSync(join(options.cwd, "Cargo.lock"), "new lock");
-					if (mode === "abort") controller.abort();
+					if (mode === "abort") {
+						controller.abort();
+						expect(options.signal!.aborted).toBe(true);
+						expect(options.signal!.reason).toBe(controller.signal.reason);
+					}
 					if (mode === "fetch failure") return { ...success, exitCode: 101, stderr: "registry unavailable" };
 					if (mode === "timeout") return { ...success, exitCode: null, timedOut: true };
 				} else {

@@ -9,15 +9,19 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import * as filesystem from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureWorkspaceAt, syncRustSkills } from "../src/core/rust-cell/workspace.js";
 import { snapshotWorkspace, withInheritedSkills } from "../src/core/rust-cell/workspace-snapshot.js";
+
+vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof filesystem>()) }));
 
 describe("child workspace snapshots", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 	function fixture() {
@@ -42,7 +46,7 @@ describe("child workspace snapshots", () => {
 		return { root, parent, seed, write, skill };
 	}
 
-	it("freezes helpers and skill sources without state or history, preserving caches", () => {
+	it("freezes helpers and skill sources without state or history, preserving caches", async () => {
 		const { root, parent, seed, write, skill } = fixture();
 		for (const path of ["state/state.json", ".scratch/file", ".git/config", "harness/state.json"])
 			write(join(parent, path), "private");
@@ -50,7 +54,7 @@ describe("child workspace snapshots", () => {
 		write(join(parent, "target/release/cached"), "cache");
 		write(join(parent, "vendor/dependency/lib.rs"), "vendored");
 		write(join(parent, ".workspace-version"), "parent template version");
-		snapshotWorkspace(parent, seed);
+		await snapshotWorkspace(parent, seed);
 		write(join(parent, "agent_lib/src/helpers/tool.rs"), "later parent helper");
 		write(join(skill.cratePath, "src/lib.rs"), "later parent skill");
 		const child = ensureWorkspaceAt(join(root, "child"), seed);
@@ -76,55 +80,129 @@ describe("child workspace snapshots", () => {
 		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf-8")).toBe("parent skill");
 	});
 
-	it("removes an incomplete snapshot if a skill cannot be copied", () => {
+	it("removes an incomplete snapshot if a skill cannot be copied", async () => {
 		const { root, parent, seed } = fixture();
 		symlinkSync(join(root, "missing"), join(parent, "skills/broken"));
-		expect(() => snapshotWorkspace(parent, seed)).toThrow();
+		await expect(snapshotWorkspace(parent, seed)).rejects.toThrow();
 		expect(existsSync(seed)).toBe(false);
 		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
 
-	it.each([false, true])("omits crate build output but preserves cache and fixtures (selected: %s)", (selected) => {
-		const { root, parent, seed, write, skill } = fixture();
-		const crates = ["agent_lib", "rlm", "skills/tool"];
-		for (const crate of crates) {
-			write(join(parent, crate, "target/debug/output"), "unused build output");
-			symlinkSync(join(root, "missing"), join(parent, crate, "target/dangling"));
-			symlinkSync(join(parent, crate, "target"), join(parent, crate, "target/cycle"));
-			write(join(parent, crate, "fixtures/target/input"), "test input");
-		}
-		write(join(parent, "target/release/cached"), "workspace cache");
-		write(join(parent, "vendor/dependency/target/input"), "vendored input");
-		snapshotWorkspace(parent, seed, { mountedSkillsOnly: selected });
-		for (const crate of crates) {
-			expect(existsSync(join(seed, crate, "target"))).toBe(false);
-			expect(readFileSync(join(seed, crate, "fixtures/target/input"), "utf8")).toBe("test input");
-			expect(readFileSync(join(parent, crate, "target/debug/output"), "utf8")).toBe("unused build output");
-			for (const link of ["dangling", "cycle"])
-				expect(lstatSync(join(parent, crate, "target", link)).isSymbolicLink()).toBe(true);
-		}
-		expect(readFileSync(join(seed, "target/release/cached"), "utf8")).toBe("workspace cache");
-		expect(readFileSync(join(seed, "vendor/dependency/target/input"), "utf8")).toBe("vendored input");
-		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf8")).toBe("parent skill");
+	it("does not create a destination for pre-cancelled work", async () => {
+		const { root, parent, seed } = fixture();
+		await expect(
+			snapshotWorkspace(parent, seed, { signal: AbortSignal.abort(new Error("cancelled")) }),
+		).rejects.toThrow("cancelled");
+		expect(existsSync(seed)).toBe(false);
+		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
 
-	it.each(["dangling", "cycle"])("does not dereference a %s crate target link", (kind) => {
+	it("cancels during skill materialization, cleans up and permits retry", async () => {
+		const { root, parent, seed, skill } = fixture();
+		const controller = new AbortController();
+		const copy = filesystem.cp;
+		vi.spyOn(filesystem, "cp").mockImplementation(async (source, destination, options) =>
+			copy(source, destination, {
+				...options,
+				filter: async (entry, target) => {
+					const selected = (await options?.filter?.(entry, target)) ?? true;
+					if (entry.endsWith("/skills/tool/src/lib.rs")) controller.abort(new Error("copy cancelled"));
+					return selected;
+				},
+			}),
+		);
+		await expect(snapshotWorkspace(parent, seed, { signal: controller.signal })).rejects.toThrow("copy cancelled");
+		expect(existsSync(seed)).toBe(false);
+		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
+		expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf8")).toBe("parent skill");
+		vi.restoreAllMocks();
+		await snapshotWorkspace(parent, seed);
+		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf8")).toBe("parent skill");
+	});
+
+	it.each(["cancel", "timeout"])("drains an in-flight copy before cleanup on %s", async (mode) => {
+		const { root, parent, seed } = fixture();
+		const controller = new AbortController();
+		const signal = controller.signal;
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let copying = false;
+		const copy = filesystem.cp;
+		vi.spyOn(filesystem, "cp").mockImplementationOnce(async (...args) => {
+			await copy(...args);
+			copying = true;
+			if (mode === "timeout") {
+				const timeout = AbortSignal.timeout(25);
+				timeout.addEventListener("abort", () => controller.abort(timeout.reason), { once: true });
+			}
+			await draining;
+		});
+		let settled = false;
+		const pending = snapshotWorkspace(parent, seed, { signal })
+			.catch((error: unknown) => error)
+			.finally(() => {
+				settled = true;
+			});
+		try {
+			await vi.waitFor(() => expect(copying).toBe(true));
+			if (mode === "cancel") controller.abort(new Error("cancelled"));
+			await vi.waitFor(() => expect(signal.aborted).toBe(true));
+			expect(settled).toBe(false);
+			expect(existsSync(seed)).toBe(false);
+			expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toHaveLength(1);
+		} finally {
+			release();
+		}
+		expect(await pending).toBe(signal.reason);
+		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
+	});
+
+	it.each([false, true])(
+		"omits crate build output but preserves cache and fixtures (selected: %s)",
+		async (selected) => {
+			const { root, parent, seed, write, skill } = fixture();
+			const crates = ["agent_lib", "rlm", "skills/tool"];
+			for (const crate of crates) {
+				write(join(parent, crate, "target/debug/output"), "unused build output");
+				symlinkSync(join(root, "missing"), join(parent, crate, "target/dangling"));
+				symlinkSync(join(parent, crate, "target"), join(parent, crate, "target/cycle"));
+				write(join(parent, crate, "fixtures/target/input"), "test input");
+			}
+			write(join(parent, "target/release/cached"), "workspace cache");
+			write(join(parent, "vendor/dependency/target/input"), "vendored input");
+			await snapshotWorkspace(parent, seed, { mountedSkillsOnly: selected });
+			for (const crate of crates) {
+				expect(existsSync(join(seed, crate, "target"))).toBe(false);
+				expect(readFileSync(join(seed, crate, "fixtures/target/input"), "utf8")).toBe("test input");
+				expect(readFileSync(join(parent, crate, "target/debug/output"), "utf8")).toBe("unused build output");
+				for (const link of ["dangling", "cycle"])
+					expect(lstatSync(join(parent, crate, "target", link)).isSymbolicLink()).toBe(true);
+			}
+			expect(readFileSync(join(seed, "target/release/cached"), "utf8")).toBe("workspace cache");
+			expect(readFileSync(join(seed, "vendor/dependency/target/input"), "utf8")).toBe("vendored input");
+			expect(readFileSync(join(skill.cratePath, "src/lib.rs"), "utf8")).toBe("parent skill");
+		},
+	);
+
+	it.each(["dangling", "cycle"])("does not dereference a %s crate target link", async (kind) => {
 		const { root, parent, seed, skill } = fixture();
 		const target = join(skill.cratePath, "target");
 		symlinkSync(kind === "cycle" ? skill.cratePath : join(root, "missing"), target);
-		snapshotWorkspace(parent, seed);
+		await snapshotWorkspace(parent, seed);
 		expect(existsSync(join(seed, "skills/tool/target"))).toBe(false);
 		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf8")).toBe("parent skill");
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 	});
 
-	it.each(["dangling", "cycle"])("excludes %s unmounted sources from selected snapshots", (kind) => {
+	it.each(["dangling", "cycle"])("excludes %s unmounted sources from selected snapshots", async (kind) => {
 		const { root, parent, seed, write } = fixture();
 		const unmounted = join(parent, "skills/unmounted");
 		write(join(unmounted, "notes"), "unfinished child work");
 		const link = join(unmounted, "fixture");
 		symlinkSync(kind === "cycle" ? unmounted : join(root, "missing"), link);
-		snapshotWorkspace(parent, seed, { mountedSkillsOnly: true });
+		await snapshotWorkspace(parent, seed, { mountedSkillsOnly: true });
 		expect(readFileSync(join(seed, "skills/tool/src/lib.rs"), "utf8")).toBe("parent skill");
 		expect(lstatSync(join(seed, "skills/tool")).isDirectory()).toBe(true);
 		expect(existsSync(join(seed, "skills/unmounted"))).toBe(false);
@@ -132,24 +210,24 @@ describe("child workspace snapshots", () => {
 		expect(lstatSync(link).isSymbolicLink()).toBe(true);
 	});
 
-	it("retains unmounted child sources in full snapshots", () => {
+	it("retains unmounted child sources in full snapshots", async () => {
 		const { parent, seed, write } = fixture();
 		write(join(parent, "skills/unmounted/notes"), "unfinished child work");
-		snapshotWorkspace(parent, seed);
+		await snapshotWorkspace(parent, seed);
 		expect(readFileSync(join(seed, "skills/unmounted/notes"), "utf8")).toBe("unfinished child work");
 	});
 
-	it("rejects unreadable mounted sources in selected snapshots", () => {
+	it("rejects unreadable mounted sources in selected snapshots", async () => {
 		const { root, parent, seed, skill } = fixture();
 		symlinkSync(join(root, "missing"), join(skill.cratePath, "fixture"));
-		expect(() => snapshotWorkspace(parent, seed, { mountedSkillsOnly: true })).toThrow(/ENOENT/);
+		await expect(snapshotWorkspace(parent, seed, { mountedSkillsOnly: true })).rejects.toThrow(/ENOENT/);
 		expect(existsSync(seed)).toBe(false);
 		expect(readdirSync(root).filter((name) => name.startsWith(".workspace-snapshot-"))).toEqual([]);
 	});
 
-	it("does not replace a child skill with the shared source when its manifest is missing", () => {
+	it("does not replace a child skill with the shared source when its manifest is missing", async () => {
 		const { root, parent, seed, write, skill } = fixture();
-		snapshotWorkspace(parent, seed);
+		await snapshotWorkspace(parent, seed);
 		const child = ensureWorkspaceAt(join(root, "child"), seed);
 		const childSkill = join(child, "skills/tool");
 		write(join(childSkill, "src/lib.rs"), "child edit");
