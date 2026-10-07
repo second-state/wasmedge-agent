@@ -27,6 +27,7 @@ import {
 	resolveIncidentWindow,
 	runIncident,
 } from "./incident.js";
+import { runStorageCommand } from "./storage.js";
 
 export interface PublicCommandResult {
 	handled: boolean;
@@ -123,6 +124,9 @@ async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
 			return runStatus(args.slice(1));
 		case "doctor":
 			return runDoctor(args.slice(1));
+		case "storage":
+			await runStorageCommand(args.slice(1));
+			return HANDLED;
 		case "incident":
 			return runIncidentCommand(args.slice(1));
 		case "shutdown":

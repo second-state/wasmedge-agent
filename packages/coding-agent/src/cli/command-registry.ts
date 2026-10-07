@@ -87,6 +87,18 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 		summary: "Show background service status",
 	},
 	{
+		path: ["storage"],
+		usage: "storage <workspace> [--prune-cache] [--apply] [--json]",
+		summary: "Inspect Rust cell workspace storage and prune build caches",
+		description:
+			"Reports logical file sizes. Cache pruning requires a stopped runtime and preserves sources, state, vendor and Git history.",
+		options: [
+			"--prune-cache  Preview removal of target/",
+			"--apply        Apply the cache prune",
+			"--json         Print JSON",
+		],
+	},
+	{
 		path: ["doctor"],
 		usage: "doctor [--fix] [--json]",
 		summary: "Check the Rust cell runtime and background services",

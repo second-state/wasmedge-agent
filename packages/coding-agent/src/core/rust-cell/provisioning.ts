@@ -10,6 +10,7 @@ export class ProvisioningContext {
 	constructor(
 		lifetime: AbortSignal,
 		private readonly timeoutMs: number,
+		private readonly operation = "Rust cell provisioning",
 	) {
 		this.signal = AbortSignal.any([lifetime, this.controller.signal]);
 		this.deadline = performance.now() + timeoutMs;
@@ -17,7 +18,7 @@ export class ProvisioningContext {
 	}
 
 	private timeoutError(): Error {
-		return new Error(`Rust cell provisioning timed out after ${this.timeoutMs} ms`);
+		return new Error(`${this.operation} timed out after ${this.timeoutMs} ms`);
 	}
 
 	check(): void {

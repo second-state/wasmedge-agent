@@ -500,10 +500,17 @@ wasmedge-agent rename <agent> <name>          # Rename an agent
 wasmedge-agent send <agent> <message>         # Send an agent-to-agent message
 wasmedge-agent status                         # Show background service status
 wasmedge-agent doctor [--fix]                 # Inspect or safely clean up background services
+wasmedge-agent storage <workspace> [--json]   # Report Rust cell workspace disk usage
 wasmedge-agent shutdown [--force]             # Stop every agent, worker, and background service
 ```
 
 `shutdown` asks for confirmation. `shutdown --force` skips confirmation and kills unresponsive workers and their tracked child processes.
+
+`storage <workspace> --prune-cache` previews removal of that workspace's `target/`
+build cache; add `--apply` after stopping its runtime to remove it. Sources,
+state, vendored dependencies and Git history are retained. Reported sizes are
+logical file sizes, not allocated or reclaimable disk space. See
+[workspace storage](docs/rlm-runtime.md#workspace-storage) for scope and limits.
 
 ### Scheduled Prompts
 

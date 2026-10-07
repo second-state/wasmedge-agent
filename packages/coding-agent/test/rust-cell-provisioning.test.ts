@@ -9,6 +9,7 @@ import { ensureTemplateReadyAsync } from "../src/core/rust-cell/toolchain.js";
 import { mountedSkillCrates, resolveTemplateDir, syncRustSkillsAsync } from "../src/core/rust-cell/workspace.js";
 import * as workspaceFiles from "../src/core/rust-cell/workspace-files.js";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
+import { acquireWorkspaceLease } from "../src/core/rust-cell/workspace-lease.js";
 import { createRustTool } from "../src/core/tools/rust.js";
 
 const sourceTemplate = resolveTemplateDir();
@@ -106,6 +107,29 @@ describe("cancellable runtime provisioning", () => {
 		expect(existsSync(join(f.root, "calls"))).toBe(false);
 	});
 
+	it("holds the workspace until disposal and cancels another runtime's lease wait independently", async () => {
+		const f = fixture();
+		f.warm();
+		const owner = f.runtime();
+		await owner.ensure();
+		await expect(acquireWorkspaceLease(f.workspace, f.context(), false)).rejects.toThrow("Workspace is in use");
+		const waiter = f.runtime();
+		const controller = new AbortController();
+		let preparing = false;
+		const waiting = waiter
+			.ensure((message) => {
+				preparing ||= message.includes("Preparing the cell workspace");
+			}, controller.signal)
+			.catch((error: unknown) => error);
+		await vi.waitFor(() => expect(preparing).toBe(true), { timeout: 5000 });
+		controller.abort(new Error("waiter cancelled"));
+		expect(await waiting).toEqual(new Error("waiter cancelled"));
+		await expect(acquireWorkspaceLease(f.workspace, f.context(), false)).rejects.toThrow("Workspace is in use");
+		await owner.dispose();
+		await waiter.ensure();
+		expect(waiter.hasRunner).toBe(true);
+	});
+
 	it.each(["wasmedge", "rustup", "rustc", "vendor", "build"])(
 		"cancels %s without blocking the host and permits retry",
 		async (phase) => {
@@ -181,9 +205,12 @@ describe("cancellable runtime provisioning", () => {
 			await Promise.resolve();
 			expect(stopped).toBe(false);
 			expect(runtime.hasRunner).toBe(false);
+			await expect(acquireWorkspaceLease(f.workspace, f.context(), false)).rejects.toThrow("Workspace is in use");
 			release();
 			expect(await starting).toBeInstanceOf(Error);
 			await stopping;
+			const lease = await acquireWorkspaceLease(f.workspace, f.context(), false);
+			lease.release();
 			ensure.mockRestore();
 			await runtime.ensure();
 			expect(existsSync(join(f.workspace, ".git/HEAD"))).toBe(true);

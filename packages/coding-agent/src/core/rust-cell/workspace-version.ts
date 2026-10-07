@@ -6,6 +6,8 @@ import type { ProvisioningContext } from "./provisioning.js";
 import { copyWorkspacePath, hashWorkspaceFile } from "./workspace-files.js";
 
 export const WORKSPACE_VERSION_FILE = ".workspace-version";
+export { readVersion as readWorkspaceVersion };
+
 const HOST_PATHS = [".cargo/config.toml", "Cargo.toml", "Cargo.lock", "agent_lib/Cargo.toml", "cell/Cargo.toml", "rlm"];
 const SOURCE_DIR = "agent_lib/src/";
 

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { loadHarnessState } from "../refinement/refinement.js";
+import type { SessionLease } from "../session-lease.js";
 import { BridgeServer } from "./bridge-server.js";
 import { withBuildPermit } from "./build-gate.js";
 import { type CargoSandbox, cargoCommand, normalizeCargoSandbox } from "./cargo-sandbox.js";
@@ -36,6 +37,7 @@ import {
 	syncRustSkillsAsync,
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
+import { acquireWorkspaceLease } from "./workspace-lease.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./workspace-policy.js";
 import { withInheritedSkills } from "./workspace-snapshot.js";
 import { prepareVersionedWorkspaceAsync, recoverWorkspaceUpgrade } from "./workspace-version.js";
@@ -131,6 +133,7 @@ export class RustCellProvisioner {
 	private runner: CellRunner | undefined;
 	private toolchainInfo: ToolchainInfo | undefined;
 	private workspace: string | undefined;
+	private workspaceLease: SessionLease | undefined;
 	private bridgeServer: BridgeServer | undefined;
 	private skillValidation: SkillValidation | undefined;
 	private lifetime = new AbortController();
@@ -263,6 +266,11 @@ export class RustCellProvisioner {
 					this.runner = runner;
 					return runner;
 				})
+				.catch((error: unknown) => {
+					this.workspaceLease?.release();
+					this.workspaceLease = undefined;
+					throw error;
+				})
 				.finally(() => {
 					context.dispose();
 					this.starting = undefined;
@@ -294,6 +302,8 @@ export class RustCellProvisioner {
 		onProgress?.("Preparing the cell workspace...");
 		context.check();
 		this.workspace = this.options.workspaceDir ?? this.workspace ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
+		this.workspaceLease = await acquireWorkspaceLease(this.workspace, context, true);
+		context.check();
 		const templateDir = resolveTemplateDir();
 		await recoverWorkspaceUpgrade(this.workspace);
 		recoverDependencyUpdate(this.workspace);
@@ -466,6 +476,8 @@ export class RustCellProvisioner {
 			await Promise.allSettled(this.pendingSkillTests);
 			await this.bridgeServer?.dispose();
 		})().finally(() => {
+			this.workspaceLease?.release();
+			this.workspaceLease = undefined;
 			this.runner = undefined;
 			this.starting = undefined;
 			this.bridgeServer = undefined;

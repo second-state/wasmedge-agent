@@ -216,6 +216,50 @@ directories, so they can be repaired and remounted on reload.
 
 The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest, source, test, and fixture changes use the separate `.skills-hash` synchronization mechanism to repeat mount probes on reload. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
 
+### Workspace storage
+
+Inspect one versioned Rust cell workspace without starting a model, daemon or
+toolchain:
+
+```bash
+wasmedge-agent storage /path/to/session-artifacts/session-id/workspace
+wasmedge-agent storage /path/to/session-artifacts/session-id/workspace --json
+wasmedge-agent storage /path/to/session-artifacts/session-id/workspace --prune-cache
+wasmedge-agent storage /path/to/session-artifacts/session-id/workspace --prune-cache --apply
+```
+
+The report groups files into build cache (`target/`), dependencies (`vendor/`),
+state, Git history, sources, scratch and other files. Sizes are logical bytes
+per path: hard links count separately, symlinks contribute their own size and
+are not followed, and filesystem compression or shared copy-on-write blocks
+are not accounted for. This is neither allocated disk space nor an estimate of
+blocks that deletion will free. A report during active use is not an atomic
+snapshot and can fail if files disappear during the scan.
+
+`--prune-cache` previews removal; `--apply` removes only `target/`, including
+sandbox build artifacts and the rustdoc API cache. The report contains sizes
+from before removal. Source, state, vendor, Git history, scratch and unknown
+files are retained. The next cell rebuilds from retained sources and vendored
+dependencies offline. A missing cache is a no-op. A symlinked cache root,
+cache entries on a different filesystem, malformed workspace metadata or an
+incomplete scan prevents removal. Cancellation stops scanning; an already
+started removal drains before returning and may have removed some or all of
+the cache even when the command reports an error.
+
+Provisioners hold a local, per-workspace lease from before scaffold preparation
+through runtime disposal, including draining builds, skill tests and Git work.
+Another provisioner waits within its startup budget; prune commands refuse a
+busy workspace. Leases live outside the workspace in its parent's
+`.rust-cell-locks/` directory, so scaffold replacement keeps ownership. Stop
+the runtime before pruning. This coordinates participating processes on one
+host; it does not cover older versions, direct `CellRunner` users, manual Cargo
+or filesystem edits. Dead host leases can be reclaimed, so after a host crash
+also stop orphaned build processes before maintenance. This is not protection
+against hostile concurrent filesystem changes or a distributed lock.
+
+There is no automatic retention policy, workspace discovery or disk quota.
+This command does not clean the shared template or other workspaces.
+
 ## Delegation Flow
 
 ```mermaid
