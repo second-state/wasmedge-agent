@@ -2,6 +2,7 @@
 
 import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../host-bridge/types.js";
 import type { BridgeServer } from "./bridge-server.js";
+import type { CargoSandbox } from "./cargo-sandbox.js";
 import type { CellTimings } from "./cell-timing.js";
 import type { CellResourceLimits } from "./resource-limits.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
@@ -54,6 +55,7 @@ export interface CellResult {
 }
 
 export interface RunnerOptions extends CellResourceLimits {
+	cargoSandbox?: CargoSandbox;
 	/** Test proposed lib edits in WASI before applying them; defaults to false. */
 	libraryTestGate?: boolean;
 	/** Guest /workspace access; defaults to rw. Does not restrict host tools. */

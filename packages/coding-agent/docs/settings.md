@@ -312,11 +312,26 @@ available, authenticated model, the bounded wait runs instead.
 |---------|------|---------|-------------|
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
 | `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
+| `rustCell.cargoSandbox` | `"off"` or `"bubblewrap"` | `"off"` | Optional Linux isolation for runtime Cargo compilation and vendoring |
 | `rustCell.libraryTestGate` | boolean | `false` | Require sandboxed `agent_lib` tests before applying a cell's `lib` edits |
 | `rustCell.rustdocToolchain` | string or null | `null` | Installed rustup toolchain for on-demand rustdoc JSON API queries |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
 | `rustCell.cellMemoryPageLimit` | number or null | `null` | Optional maximum 64 KiB pages per Wasm linear memory; integer from 1 to 65536 |
 | `rustCell.preludeExtra` | array | `[]` | User-selected crates.io dependencies available under `agent_lib::prelude::extra` |
+
+Set `"rustCell": { "cargoSandbox": "bubblewrap" }` on Linux to isolate
+runtime-managed Cargo processes. Install Bubblewrap 0.8 or newer at
+`/usr/bin/bwrap`; the host must permit unprivileged user namespaces. Unsupported
+platforms, missing tools and namespace failures are errors; execution never
+falls back to unsandboxed Cargo. Restart or `/reload` after changes. Children
+inherit the setting, and SDK tools accept the same option.
+
+Compilation sees read-only build inputs and toolchains, a writable lockfile
+and separate build cache, and private temporary directories. It cannot access
+unmounted home/project files or the host network. Host-managed vendoring shares
+the network and can write its vendor directory. User Cargo configuration and
+registry credentials are not mounted. See [Cargo sandbox](rlm-runtime.md#cargo-sandbox)
+for the precise mounts, compatibility constraints and remaining host boundary.
 
 Set `"rustCell": { "libraryTestGate": true }` to validate nonempty `lib` edits
 in a disposable workspace before applying them. The gate builds `agent_lib` unit
@@ -358,8 +373,8 @@ inherit the session settings. The SDK `createRustTool` option has the same name.
 Readonly mode requires the project and writable session mounts to be separate,
 including resolved symlink roots. Host mount paths containing `:` are rejected
 because WasmEdge uses colons as mount delimiters. There is no writable fallback.
-This is a guest capability restriction: Cargo/build scripts, host bash, and host
-handlers retain host permissions. It is not a read-only agent pipeline or a
+This is a guest capability restriction: host bash and host handlers retain host permissions; Cargo isolation
+is controlled separately by `cargoSandbox`. It is not a read-only agent pipeline or a
 patch approval/replay system.
 
 Gas and memory limits apply to cells and each sandboxed skill test module. For example,

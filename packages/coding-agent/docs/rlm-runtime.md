@@ -51,7 +51,7 @@ cancellation, gas and memory limits. It checks source fingerprints before and
 after testing, including the edited snapshot, and publishes no source edits on
 failure. The normal cell build and its rollback behavior follow successful
 validation. Library tests are not cached between edits; doctests and dependent
-skill test suites are not included. Cargo retains host permissions, and the
+skill test suites are not included. Cargo retains host permissions unless `cargoSandbox` is enabled, and the
 fingerprint has the same external-input limitations as skill validation.
 
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and code promoted into `agent_lib`, are available to every later cell.
@@ -151,13 +151,13 @@ locked `cargo doc --target wasm32-wasip1 --no-deps --lib` for `agent_lib`, `rlm`
 and mounted skills using the selected toolchain. Build admission, generation and
 cleanup share the active cell's cancellation and deadline. Documentation does
 not execute functions or doctests, but Cargo build scripts and proc macros still
-run with host permissions. Rustdoc enables `cfg(doc)` and does not fully check
+use the configured `cargoSandbox` policy (host permissions by default). Rustdoc enables `cfg(doc)` and does not fully check
 function bodies; this is API documentation, not proof that a cell compiles or
 that code is correct. Guest gas/memory limits do not bound rustdoc or Cargo.
 
 The cache is stored under `target/.agent-api.json`, outside Git snapshots. Queries
-reuse it only when source fingerprints, selected toolchain and compiler version
-match. Fingerprints include manifests, Cargo.lock, Cargo configuration, library,
+reuse it only when source fingerprints, selected toolchain, compiler version
+and Cargo sandbox mode match. Fingerprints include manifests, Cargo.lock, Cargo configuration, library,
 runtime and mounted skill sources; generation rejects changes in either the
 live workspace or its snapshot. Source rollback can make the prior cache valid
 again. Vendor content, arbitrary external build inputs and host environment are
@@ -336,7 +336,7 @@ Session-local state lives in the session artifact directory under `harness/harne
 
 Skill `create_skill`, `update_skill`, and `update("skill", ...)` calls require a live bridge and passing sandboxed unit/integration tests before saving, using the same test runner as `/refine`. Tests receive only disposable scratch access. The host validates the reference, runs the tests, then reloads the store before saving and rejects an update if that entry changed in the meantime. Skill test requests use the cell budget instead of the ordinary 30-second bridge timeout; cancellation, cell end, or disconnection cancels their host work. The host ignores guest-supplied test results and entry version/source fields. Non-skill edits and deletion do not require tests.
 
-Sandboxed skill tests share the cell import allowlist and interpreter requirement above. Every test artifact is checked before any module executes. Unlike ordinary cells, tests have no bridge connection or credentials. Cargo build scripts/proc macros continue to run on the host.
+Sandboxed skill tests share the cell import allowlist and interpreter requirement above. Every test artifact is checked before any module executes. Unlike ordinary cells, tests have no bridge connection or credentials. Cargo build scripts/proc macros use `cargoSandbox` when enabled; they retain host permissions by default.
 
 Before compilation and again before execution, the runner rejects writable `/workspace`, `/agent/state`, or `/scratch` mounts that overlap either configured harness store, including symlinked mount roots, store parents, and existing state-file targets. Keep project directories separate from session/agent storage; using a home directory or a project containing its session storage as `/workspace` can now be rejected. This prevents direct guest file writes through the configured mounts. Host bash, build scripts/proc macros, host-created hard links, and concurrent host filesystem changes remain outside this boundary.
 
@@ -388,13 +388,77 @@ Exact artifact files are created only when their features are used. Non-persiste
 
 ## Trust Boundary
 
-Cells run as WebAssembly inside WasmEdge with only the preopened directories above. The runner denies direct guest networking through import validation and forced interpreter execution, including for cells with a bridge; network capabilities are available only through registered host handlers. This is a policy of the agent's runner, not a network restriction added to standalone WasmEdge. `/workspace` remains writable by default. The `bash` tool, host handlers, and the host toolchain (`cargo`, including build scripts/proc macros) execute with the worker's OS permissions. Installed skills and extensions are trusted code; the guest policy does not sandbox compilation or the whole agent.
+Cells run as WebAssembly inside WasmEdge with only the preopened directories above. The runner denies direct guest networking through import validation and forced interpreter execution, including for cells with a bridge; network capabilities are available only through registered host handlers. This is a policy of the agent's runner, not a network restriction added to standalone WasmEdge. `/workspace` remains writable by default. The `bash` tool and host handlers execute with the worker's OS permissions. Cargo and its build scripts/proc macros do too by default; the optional Cargo sandbox below changes their process boundary. Installed skills and extensions are trusted code; the guest policy does not sandbox compilation or the whole agent.
 
 Provider credentials are resolved by the TypeScript host. The bounded model catalog crosses into the guest as metadata; the full auth store does not.
 
 Runtime-managed Cargo processes receive an environment allowlist, including template preparation, workspace upgrades, cell builds, skill probes/tests, and dependency resolution/vendoring. Rust compiler and rustup probes/repairs use the same policy. Inherited variables are limited to `PATH`, `HOME`, `USERPROFILE`, `SystemRoot`, `WINDIR`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`, `TMPDIR`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`, `CARGO_HOME`, `CARGO_NET_OFFLINE`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN`, `RUSTUP_AUTO_INSTALL`, and `RUSTC` (case-insensitive on Windows). Skill test builds additionally receive host-selected target/build directories. Provider variables, registry tokens, proxy settings, compiler flags/wrappers, and other ambient variables are not inherited; setups that relied on those variables must account for this change. The host's own environment is unchanged.
 
-This prevents unlisted parent environment values from reaching compilation through ordinary inheritance. It does not isolate compiler filesystem access: `include_str!`, build scripts, and proc macros still have host permissions, and Cargo configuration files can supply environment values or credentials. Existing artifacts are not scrubbed. Do not treat this policy as a guarantee that model-generated code cannot obtain provider credentials.
+This prevents unlisted parent environment values from reaching compilation through ordinary inheritance. Without `cargoSandbox`, it does not isolate compiler filesystem access: `include_str!`, build scripts, and proc macros still have host permissions, and Cargo configuration files can supply environment values or credentials. Existing artifacts are not scrubbed. Do not treat this policy as a guarantee that model-generated code cannot obtain provider credentials.
+
+### Cargo sandbox
+
+`rustCell.cargoSandbox: "bubblewrap"` is an opt-in Linux process sandbox, using
+[Bubblewrap](https://github.com/containers/bubblewrap). It requires version 0.8+
+at `/usr/bin/bwrap` and working unprivileged user namespaces. Other platforms,
+missing binaries, unsupported flags and namespace failures fail closed. There
+is no automatic installation or unsandboxed retry. The default `"off"` preserves
+existing behavior. Reload after changes; sessions, children and standalone SDK
+tools use the same setting.
+
+On Ubuntu, an administrator may also need to load an AppArmor profile allowing
+`userns` for `/usr/bin/bwrap`; see Ubuntu's [user namespace restrictions](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/#apparmor-unprivileged-user-namespace-restrictions).
+Without it, Bubblewrap can fail during namespace setup with `RTM_NEWADDR:
+Operation not permitted`. Runtime startup never changes system policy. CI grants
+the exception only to `/usr/bin/bwrap` and leaves the global restriction enabled.
+
+The policy covers template warmup, scaffold validation, skill probe builds,
+ordinary cells, skill/library test compilation, dependency resolution/builds
+and rustdoc generation. Compilation has a separate network namespace, PID/IPC/
+UTS namespaces, no capabilities, disabled nested user namespaces and a new
+session. Cancelling an asynchronous command kills its Bubblewrap supervisor;
+the PID namespace also terminates detached build descendants. Existing
+synchronous provisioning calls still cannot be interrupted mid-call.
+
+The filesystem starts empty and exposes:
+
+- Read-only `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, the loader cache and
+  `/etc/alternatives`, plus selected Cargo/Rust tool directories and
+  `RUSTUP_HOME`. These are trusted system/toolchain inputs; do not store secrets
+  in them. Tool binaries, the kernel and Bubblewrap remain trusted.
+- The read-only compilation workspace and linked skill source directories.
+  Inputs can read one another. Unmounted project/home files are unavailable to
+  `include_str!`, build scripts and proc macros. Git metadata, session state,
+  scratch and the ordinary build cache are hidden. Other files deliberately
+  placed in a build input directory remain readable.
+- Writable `Cargo.lock` and `target/cargo-sandbox/`. The latter is the only
+  persistent build output directory; enabling the policy does not reuse the
+  ordinary unsandboxed target cache. Source/manifests cannot be rewritten by
+  build scripts. Symlink cache roots and symlink/hard-linked lockfiles are
+  rejected. Host consumers reject Wasm/rustdoc artifact links outside this cache.
+  Existing sources and artifacts are not scrubbed of past data.
+- Private `/tmp`, HOME and CARGO_HOME, minimal devices and a private `/proc`.
+  The Cargo registry cache is read-only for compilation. User Cargo config,
+  credentials files and unrelated parent-directory configs are absent;
+  workspace Cargo config still applies within the restricted filesystem.
+
+Host-managed `cargo vendor` uses the same filesystem policy but shares the host
+network, exposes DNS/certificate configuration, and can write its selected
+vendor directory and existing registry cache. Registry authentication through
+user credentials/config is unsupported. Rustup auto-install is disabled; install
+the required toolchains beforehand. Cargo/RUSTC binary overrides must be absolute
+paths. Build scripts needing network access,
+source-tree writes, external tools/assets or global Cargo config can fail under
+this policy. It does not silently widen access to make them work.
+
+This is a **compiler subprocess** boundary, not isolation of the entire agent.
+Host provisioning/source copying, toolchain probes/repairs, `doctor --fix`,
+installation, bash and host handlers retain host permissions. In particular,
+source snapshots may already contain data copied by the host; this feature is
+not a guarantee that model-generated code cannot obtain credentials through
+other agent capabilities. Host filesystem races/hard links in inputs and kernel
+exploits are outside this policy. It sets no process RSS, CPU or disk quota;
+Wasm gas/page limits still apply only to guest execution.
 
 ## Failure Modes
 

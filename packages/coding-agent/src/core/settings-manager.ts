@@ -6,6 +6,7 @@ import lockfile from "proper-lockfile";
 import { getAgentDir, getProjectConfigDir } from "../config.js";
 import { writeFileAtomicSync } from "../utils/atomic-file.js";
 import { MAX_PROVIDER_PAUSE_MS, type ProviderWaitPolicy } from "./provider-retry.js";
+import { type CargoSandbox, normalizeCargoSandbox } from "./rust-cell/cargo-sandbox.js";
 import { normalizeLibraryTestGate } from "./rust-cell/library-tests.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
@@ -130,6 +131,7 @@ export interface BundledSkillsSettings {
 }
 
 export interface RustCellSettings extends CellResourceLimits {
+	cargoSandbox?: CargoSandbox; // Linux Bubblewrap for runtime Cargo; default: off
 	rustdocToolchain?: string | null; // installed rustup toolchain for API introspection; default: null
 	libraryTestGate?: boolean; // test proposed lib edits in WASI before applying; default: false
 	workspaceWritePolicy?: WorkspaceWritePolicy; // guest /workspace access; default: rw
@@ -1187,6 +1189,10 @@ export class SettingsManager {
 
 	getRustCellWorkspaceWritePolicy(): WorkspaceWritePolicy {
 		return normalizeWorkspaceWritePolicy(this.settings.rustCell?.workspaceWritePolicy);
+	}
+
+	getRustCellCargoSandbox(): CargoSandbox {
+		return normalizeCargoSandbox(this.settings.rustCell?.cargoSandbox);
 	}
 
 	getRustCellLibraryTestGate(): boolean {

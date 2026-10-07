@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { CargoSandbox } from "./cargo-sandbox.js";
 import { objectValue, RUSTDOC_FORMAT_VERSION, type RustdocApiItem } from "./rustdoc-index.js";
 import { skillSourceFingerprint, skillTestFingerprint } from "./skill-fingerprint.js";
 
@@ -8,6 +9,7 @@ export const RUSTDOC_CACHE_PATH = "target/.agent-api.json";
 export const MAX_RUSTDOC_BYTES = 32 * 1024 * 1024;
 
 export interface RustdocCache {
+	cargoSandbox?: CargoSandbox;
 	schema: 1;
 	formatVersion: number;
 	target: "wasm32-wasip1";

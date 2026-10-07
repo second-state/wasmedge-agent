@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 
 export interface PreludeExtra {
 	name: string;
@@ -112,14 +112,20 @@ export function preludeConfigurationHash(extras: PreludeExtra[]): string | undef
 	return extras.length ? createHash("sha256").update(JSON.stringify(extras)).digest("hex") : undefined;
 }
 
-export function configurePreludeExtra(workspace: string, extras: PreludeExtra[], cargoBin: string): void {
+export function configurePreludeExtra(
+	workspace: string,
+	extras: PreludeExtra[],
+	cargoBin: string,
+	cargoSandbox?: CargoSandbox,
+): void {
 	writePreludeExtra(workspace, extras);
 	if (!extras.length) return;
 	// cargo vendor ignores source replacement by default, resolving new crates
 	// from crates.io while leaving the template's offline redirect intact.
-	execFileSync(cargoBin, ["vendor", "vendor"], {
+	const command = cargoCommand(cargoBin, ["vendor", "vendor"], { cwd: workspace, cargoSandbox, network: true });
+	execFileSync(command.bin, command.args, {
 		cwd: workspace,
-		env: cargoEnvironment(),
+		env: command.env,
 		stdio: "pipe",
 		timeout: 300_000,
 	});

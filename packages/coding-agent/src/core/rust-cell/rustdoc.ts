@@ -5,6 +5,7 @@ import { writeFileAtomicSync } from "../../utils/atomic-file.js";
 import type { HostRequestHandler } from "../host-bridge/types.js";
 import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoArtifactPath, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { runProcess } from "./process.js";
 import {
 	MAX_RUSTDOC_BYTES,
@@ -23,6 +24,7 @@ import { snapshotWorkspace } from "./workspace-snapshot.js";
 
 export function createRustdocHandler(options: {
 	workspace: string;
+	cargoSandbox?: CargoSandbox;
 	toolchain?: string | null;
 	timeoutMs: number;
 }): HostRequestHandler {
@@ -68,9 +70,14 @@ export function createRustdocHandler(options: {
 			// Use one explicitly selected compiler/rustdoc pair, not a host RUSTC override.
 			delete env.RUSTC;
 			const run = async (args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}) => {
-				const result = await runProcess(findRustupBin(), ["run", toolchain, ...args], {
+				const command = cargoCommand(findRustupBin(), ["run", toolchain, ...args], {
 					cwd,
+					cargoSandbox: options.cargoSandbox,
 					env: { ...env, ...extraEnv },
+				});
+				const result = await runProcess(command.bin, command.args, {
+					cwd,
+					env: command.env,
 					timeoutMs: deadline - Date.now(),
 					signal,
 				});
@@ -85,7 +92,12 @@ export function createRustdocHandler(options: {
 			const mounted = mountedSkillCrates(options.workspace);
 			const version = await run(["rustc", "--version", "--verbose"], options.workspace);
 			let cache = readRustdocCache(options.workspace, mounted);
-			if (!cache || cache.toolchain !== toolchain || cache.rustcVersion !== version) {
+			if (
+				!cache ||
+				cache.toolchain !== toolchain ||
+				cache.rustcVersion !== version ||
+				(cache.cargoSandbox ?? "off") !== (options.cargoSandbox ?? "off")
+			) {
 				const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-rustdoc-"));
 				try {
 					const fingerprint = rustdocFingerprint(options.workspace, mounted);
@@ -93,7 +105,7 @@ export function createRustdocHandler(options: {
 					snapshotWorkspace(options.workspace, workspace, { mountedSkillsOnly: true });
 					if (rustdocFingerprint(workspace, mounted) !== fingerprint)
 						throw new Error("Sources changed while taking the API snapshot; retry introspection");
-					const target = join(workspace, "target", "api-build");
+					const target = join(cargoTargetDir(workspace, options.cargoSandbox), "api-build");
 					const packages = ["agent_lib", "rlm", ...mounted];
 					await withBuildPermit(
 						() =>
@@ -121,7 +133,16 @@ export function createRustdocHandler(options: {
 						signal,
 					);
 					const documents = Object.fromEntries(
-						packages.map((name) => [name, readRustdocJson(join(target, "wasm32-wasip1", "doc", `${name}.json`))]),
+						packages.map((name) => [
+							name,
+							readRustdocJson(
+								cargoArtifactPath(
+									workspace,
+									options.cargoSandbox,
+									join(target, "wasm32-wasip1", "doc", `${name}.json`),
+								),
+							),
+						]),
 					);
 					const items = indexRustdoc(documents);
 					signal.throwIfAborted();
@@ -133,6 +154,7 @@ export function createRustdocHandler(options: {
 					}
 					cache = {
 						schema: 1,
+						cargoSandbox: options.cargoSandbox ?? "off",
 						formatVersion: RUSTDOC_FORMAT_VERSION,
 						target: "wasm32-wasip1",
 						toolchain,
