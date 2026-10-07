@@ -1,4 +1,8 @@
+import { normalizeProcessLimits, type ProcessLimits } from "./process-limits.js";
+
 export interface CellResourceLimits {
+	/** Optional Linux cgroup limits per Cargo/WasmEdge invocation and its descendants. */
+	processLimits?: ProcessLimits | null;
 	/** Optional gas budget per WasmEdge execution. Null/omitted keeps the runtime default. */
 	cellGasLimit?: number | null;
 	/** Optional maximum 64 KiB pages per Wasm linear memory. Not a process RSS limit. */
@@ -6,6 +10,7 @@ export interface CellResourceLimits {
 }
 
 export function validateCellResourceLimits(limits: CellResourceLimits): void {
+	normalizeProcessLimits(limits.processLimits);
 	// WasmEdge 0.14.1 narrows CLI gas limits to uint32_t. Reject overflow
 	// instead of silently enforcing a different budget on that supported version.
 	for (const [name, maximum] of [

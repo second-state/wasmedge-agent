@@ -313,6 +313,7 @@ available, authenticated model, the bounded wait runs instead.
 | `rustCell.cellTimeoutMs` | number | `120000` | Per-cell budget in ms (compile + run share it) |
 | `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
 | `rustCell.cargoSandbox` | `"off"` or `"bubblewrap"` | `"off"` | Optional Linux isolation for runtime Cargo compilation and vendoring |
+| `rustCell.processLimits` | object or null | `null` | Optional Linux cgroup v2 memory, CPU bandwidth and task limits per Cargo/WasmEdge invocation |
 | `rustCell.libraryTestGate` | boolean | `false` | Require sandboxed `agent_lib` tests before applying a cell's `lib` edits |
 | `rustCell.rustdocToolchain` | string or null | `null` | Installed rustup toolchain for on-demand rustdoc JSON API queries |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
@@ -332,6 +333,39 @@ unmounted home/project files or the host network. Host-managed vendoring shares
 the network and can write its vendor directory. User Cargo configuration and
 registry credentials are not mounted. See [Cargo sandbox](rlm-runtime.md#cargo-sandbox)
 for the precise mounts, compatibility constraints and remaining host boundary.
+
+Set `processLimits` with `cargoSandbox: "bubblewrap"` to bound each runtime
+Cargo/WasmEdge process and its descendants. This requires Linux, cgroup v2,
+systemd 254+ at `/usr/bin/systemd-run`, and a running systemd user manager with
+the requested controllers delegated to it. Missing support or ineffective
+kernel controls fail execution; there is no uncapped retry.
+
+```json
+{
+  "rustCell": {
+    "cargoSandbox": "bubblewrap",
+    "processLimits": {
+      "memoryMaxMb": 2048,
+      "cpuQuotaPercent": 200,
+      "tasksMax": 256
+    }
+  }
+}
+```
+
+`memoryMaxMb` is cgroup-charged memory in MiB, including file cache; swap is
+disabled for the scope and a cgroup OOM kills the whole invocation. It is not a
+virtual-address-space or exact RSS limit. `cpuQuotaPercent` limits CPU bandwidth
+(100 = one core, 200 = two), not total CPU time. `tasksMax` counts processes and
+threads. Values must be integers from 1 to 4294967295, 100000 and 4194304,
+respectively. Omit individual fields or set them to `null` to leave that resource
+uncapped; omit the object or use `null`/`{}` to disable this feature.
+
+Reload after changing limits; children and SDK tools inherit the same policy.
+Each command gets a separate budget, including each test module. The Node host,
+host handlers and bash remain outside these limits. This does not provide a
+shared agent-tree budget or disk quota. See [process resource limits](rlm-runtime.md#process-resource-limits)
+for coverage, setup and failure behavior.
 
 Set `"rustCell": { "libraryTestGate": true }` to validate nonempty `lib` edits
 in a disposable workspace before applying them. The gate builds `agent_lib` unit

@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { type ProcessLimits, resourceLimitedCommand, runtimeProcessLimits } from "./process-limits.js";
 
 export type CargoSandbox = "off" | "bubblewrap";
 
@@ -35,9 +36,16 @@ function within(parent: string, path: string): boolean {
 export function cargoCommand(
 	bin: string,
 	args: string[],
-	options: { cwd: string; cargoSandbox?: CargoSandbox; env?: NodeJS.ProcessEnv; network?: boolean },
+	options: {
+		cwd: string;
+		cargoSandbox?: CargoSandbox;
+		processLimits?: ProcessLimits | null;
+		env?: NodeJS.ProcessEnv;
+		network?: boolean;
+	},
 ): { bin: string; args: string[]; env: NodeJS.ProcessEnv } {
 	const mode = normalizeCargoSandbox(options.cargoSandbox);
+	const processLimits = runtimeProcessLimits(options.processLimits, mode);
 	const env = options.env ?? cargoEnvironment();
 	if (mode === "off") return { bin, args, env };
 	if (!existsSync("/usr/bin/bwrap")) throw new Error("Cargo sandbox requires Bubblewrap at /usr/bin/bwrap");
@@ -161,23 +169,26 @@ export function cargoCommand(
 	const buildTarget = options.env?.CARGO_TARGET_DIR ?? target;
 	if (!within(target, resolve(buildTarget))) throw new Error("Cargo sandbox build target must stay in its cache");
 	wrapped.push("--chdir", workspace, "--", binary, ...args);
-	return {
-		bin: "/usr/bin/bwrap",
-		args: wrapped,
-		env: {
-			...env,
-			HOME: "/tmp/home",
-			CARGO_HOME: "/tmp/cargo-home",
-			RUSTUP_HOME: rustupHome,
-			RUSTUP_AUTO_INSTALL: "0",
-			PATH: [dirname(binary), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
-			TMPDIR: "/tmp",
-			TMP: "/tmp",
-			TEMP: "/tmp",
-			CARGO_NET_OFFLINE: options.network ? env.CARGO_NET_OFFLINE : "true",
-			CARGO_TARGET_DIR: buildTarget,
-			CARGO_BUILD_TARGET_DIR: buildTarget,
-			CARGO_BUILD_BUILD_DIR: buildTarget,
+	return resourceLimitedCommand(
+		{
+			bin: "/usr/bin/bwrap",
+			args: wrapped,
+			env: {
+				...env,
+				HOME: "/tmp/home",
+				CARGO_HOME: "/tmp/cargo-home",
+				RUSTUP_HOME: rustupHome,
+				RUSTUP_AUTO_INSTALL: "0",
+				PATH: [dirname(binary), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
+				TMPDIR: "/tmp",
+				TMP: "/tmp",
+				TEMP: "/tmp",
+				CARGO_NET_OFFLINE: options.network ? env.CARGO_NET_OFFLINE : "true",
+				CARGO_TARGET_DIR: buildTarget,
+				CARGO_BUILD_TARGET_DIR: buildTarget,
+				CARGO_BUILD_BUILD_DIR: buildTarget,
+			},
 		},
-	};
+		processLimits,
+	);
 }

@@ -5,6 +5,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { isTemplateWarm, resolveToolchain } from "../../../src/core/rust-cell/toolchain.js";
 import { createRustTool } from "../../../src/core/tools/rust.js";
+import { hasProcessLimits } from "../../fixtures/process-limits.js";
 import { createHarness, getMessageText, type Harness } from "../harness.js";
 
 let available = false;
@@ -59,4 +60,43 @@ describe.skipIf(!available)("resource limits through AgentSession (faux provider
 		expect(result).toMatchObject({ details: { status: "error", exitCode: 1 } });
 		expect(getMessageText(result)).toMatch(/cost (?:exceeded limit|limit exceeded)/i);
 	});
+
+	it.skipIf(!hasProcessLimits()).each(["session", "SDK"])(
+		"enforces process memory from %s options without disabling the bridge",
+		{ timeout: 240_000 },
+		async (mode) => {
+			const rustCell = {
+				cargoSandbox: "bubblewrap" as const,
+				processLimits: { memoryMaxMb: 1024, tasksMax: 256 },
+			};
+			sdkRoot = mkdtempSync(join(tmpdir(), "sdk-process-limit-"));
+			harness = await createHarness(
+				mode === "session"
+					? { persistSession: true, isolateSessionStorage: true, settings: { rustCell } }
+					: { tools: [createRustTool(sdkRoot, { ...rustCell, workspaceDir: join(sdkRoot, "workspace") })] },
+			);
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("rust", {
+						code: 'use agent_lib::prelude::rlm; fn main() { let error = rlm::api::list("agent_lib").unwrap_err(); assert!(error.to_string().contains("API introspection is disabled")); println!("bridge works"); }',
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					fauxToolCall("rust", {
+						code: 'fn main() { let data = vec![42u8; 1536 * 1024 * 1024]; std::hint::black_box(data); println!("over budget"); }',
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("limit reached"),
+			]);
+			await harness.session.prompt("Run the cells");
+			const results = harness.session.messages.filter((message) => message.role === "toolResult");
+			expect(results).toHaveLength(2);
+			expect(results[0], getMessageText(results[0])).toMatchObject({ details: { status: "ok" } });
+			expect(getMessageText(results[0])).toContain("bridge works");
+			expect(results[1], getMessageText(results[1])).toMatchObject({ details: { status: "error" } });
+			expect(getMessageText(results[1])).not.toContain("over budget");
+		},
+	);
 });
