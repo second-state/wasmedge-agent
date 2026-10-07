@@ -3244,6 +3244,7 @@ export class AgentDaemon {
 					sessionLease,
 					sessionOptions: {
 						...(rehydratedModel ? { model: rehydratedModel } : {}),
+						rustProcessGroup: parentState.runtime.session.rustProcessGroup,
 						agentMessageController: this.createAgentMessageController(() => stateRef),
 						agentObserveController: this.createAgentObserveController(() => stateRef),
 						rlmHeartbeatController: {

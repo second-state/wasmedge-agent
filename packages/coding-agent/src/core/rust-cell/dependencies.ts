@@ -12,6 +12,7 @@ import {
 import { updateDependencies } from "./dependency-transaction.js";
 import { type PreludeExtra, preludeConfigurationHash, writePreludeExtra } from "./prelude-extra.js";
 import { type ProcOutcome, runProcess } from "./process.js";
+import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
 import { mountedSkillCrates, syncRustSkills } from "./workspace.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
@@ -21,6 +22,7 @@ export function createDependencyHandler(options: {
 	workspace: string;
 	cargoSandbox?: CargoSandbox;
 	processLimits?: ProcessLimits | null;
+	processGroup?: ProcessResourceGroup | null;
 	template: string;
 	cargoBin: string;
 	configured: PreludeExtra[];
@@ -66,6 +68,7 @@ export function createDependencyHandler(options: {
 								cwd: staged,
 								cargoSandbox: options.cargoSandbox,
 								processLimits: options.processLimits,
+								processGroup: options.processGroup,
 								network: args[0] === "vendor",
 							});
 							return runProcess(command.bin, command.args, {

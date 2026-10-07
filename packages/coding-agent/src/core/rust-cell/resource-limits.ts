@@ -1,3 +1,4 @@
+import type { ProcessResourceGroup } from "./process-group.js";
 import { normalizeProcessLimits, type ProcessLimits } from "./process-limits.js";
 
 export interface CellResourceLimits {
@@ -7,6 +8,11 @@ export interface CellResourceLimits {
 	cellGasLimit?: number | null;
 	/** Optional maximum 64 KiB pages per Wasm linear memory. Not a process RSS limit. */
 	cellMemoryPageLimit?: number | null;
+}
+
+export interface RuntimeResourceLimits extends CellResourceLimits {
+	/** Shared budget owned by the session tree or SDK caller. */
+	processGroup?: ProcessResourceGroup | null;
 }
 
 export function validateCellResourceLimits(limits: CellResourceLimits): void {

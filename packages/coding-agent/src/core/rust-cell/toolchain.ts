@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
+import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
 import { resolveTemplateDir } from "./workspace.js";
 
@@ -126,11 +127,13 @@ export function warmTemplate(
 	cargoBin: string,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
 ): void {
 	const command = cargoCommand(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
 		cargoSandbox,
 		processLimits,
+		processGroup,
 	});
 	execFileSync(command.bin, command.args, {
 		cwd: resolveTemplateDir(),
@@ -159,6 +162,7 @@ export function vendorTemplate(
 	cargoBin: string,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
 ): void {
 	const template = resolveTemplateDir();
 	const tmp = join(template, "vendor.tmp");
@@ -167,6 +171,7 @@ export function vendorTemplate(
 		cwd: template,
 		cargoSandbox,
 		processLimits,
+		processGroup,
 		network: true,
 	});
 	execFileSync(command.bin, command.args, {
@@ -194,13 +199,14 @@ export function ensureTemplateReady(
 	onProgress?: (message: string) => void,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
 ): void {
 	if (!isTemplateVendored()) {
 		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
-		vendorTemplate(cargoBin, cargoSandbox, processLimits);
+		vendorTemplate(cargoBin, cargoSandbox, processLimits, processGroup);
 	}
 	if (!isTemplateWarm(cargoSandbox)) {
 		onProgress?.("Warming the cell workspace template (one-time)...");
-		warmTemplate(cargoBin, cargoSandbox, processLimits);
+		warmTemplate(cargoBin, cargoSandbox, processLimits, processGroup);
 	}
 }

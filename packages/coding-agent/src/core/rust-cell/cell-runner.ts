@@ -52,6 +52,7 @@ export class CellRunner {
 
 	constructor(opts: RunnerOptions) {
 		this.resourceArgs = wasmedgeResourceArgs(opts);
+		runtimeProcessLimits(opts.processGroup?.limits, opts.cargoSandbox, "rustCell.treeProcessLimits");
 		this.opts = {
 			...opts,
 			cargoSandbox: normalizeCargoSandbox(opts.cargoSandbox),
@@ -150,7 +151,12 @@ export class CellRunner {
 				const command = cargoCommand(
 					this.opts.cargoBin,
 					["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
-					{ cwd: ws, cargoSandbox: this.opts.cargoSandbox, processLimits: this.opts.processLimits },
+					{
+						cwd: ws,
+						cargoSandbox: this.opts.cargoSandbox,
+						processLimits: this.opts.processLimits,
+						processGroup: this.opts.processGroup,
+					},
 				);
 				return timer.measure("cargoMs", () =>
 					runProcess(command.bin, command.args, {
@@ -285,6 +291,7 @@ export class CellRunner {
 					signal,
 					onChunk: per.onChunk,
 					processLimits: this.opts.processLimits,
+					processGroup: this.opts.processGroup,
 					bridge: bridge
 						? { token: bridge.token, attach: (connection) => bridge.attachStdio(connection) }
 						: undefined,
@@ -377,7 +384,13 @@ export class CellRunner {
 			const probe = await runProcess(
 				this.opts.wasmedgeBin,
 				["run", "--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`, wasm],
-				{ cwd: ws, timeoutMs: Math.min(10_000, timeoutMs), signal, processLimits: this.opts.processLimits },
+				{
+					cwd: ws,
+					timeoutMs: Math.min(10_000, timeoutMs),
+					signal,
+					processLimits: this.opts.processLimits,
+					processGroup: this.opts.processGroup,
+				},
 			);
 			if (!probe.aborted && !probe.timedOut && probe.exitCode === 0) {
 				this.probed = true;

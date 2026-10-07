@@ -314,6 +314,7 @@ available, authenticated model, the bounded wait runs instead.
 | `rustCell.workspaceWritePolicy` | `"rw"` or `"ro"` | `"rw"` | Guest access to the project at `/workspace` |
 | `rustCell.cargoSandbox` | `"off"` or `"bubblewrap"` | `"off"` | Optional Linux isolation for runtime Cargo compilation and vendoring |
 | `rustCell.processLimits` | object or null | `null` | Optional Linux cgroup v2 memory, CPU bandwidth and task limits per Cargo/WasmEdge invocation |
+| `rustCell.treeProcessLimits` | object or null | `null` | Shared runtime process budget across a live root session and its subagents; fixed until the tree is restarted |
 | `rustCell.libraryTestGate` | boolean | `false` | Require sandboxed `agent_lib` tests before applying a cell's `lib` edits |
 | `rustCell.rustdocToolchain` | string or null | `null` | Installed rustup toolchain for on-demand rustdoc JSON API queries |
 | `rustCell.cellGasLimit` | number or null | `null` | Optional WasmEdge gas budget per execution; integer from 1 to 4294967295 |
@@ -348,6 +349,11 @@ kernel controls fail execution; there is no uncapped retry.
       "memoryMaxMb": 2048,
       "cpuQuotaPercent": 200,
       "tasksMax": 256
+    },
+    "treeProcessLimits": {
+      "memoryMaxMb": 4096,
+      "cpuQuotaPercent": 400,
+      "tasksMax": 512
     }
   }
 }
@@ -361,10 +367,19 @@ threads. Values must be integers from 1 to 4294967295, 100000 and 4194304,
 respectively. Omit individual fields or set them to `null` to leave that resource
 uncapped; omit the object or use `null`/`{}` to disable this feature.
 
-Reload after changing limits; children and SDK tools inherit the same policy.
-Each command gets a separate budget, including each test module. The Node host,
-host handlers and bash remain outside these limits. This does not provide a
-shared agent-tree budget or disk quota. See [process resource limits](rlm-runtime.md#process-resource-limits)
+`processLimits` gives each invocation its own budget, including each test module;
+reload applies changes. `treeProcessLimits` uses the same fields, ranges and
+Linux/Bubblewrap requirements, but limits the sum of concurrent runtime commands
+in a root session and its subagents. Both can be enabled together, or either
+independently. A bridge-triggered Cargo command shares the tree budget with its
+calling guest. Tree memory exhaustion can kill an invocation; it does not
+atomically cancel the entire tree.
+
+The tree budget is fixed when the root session starts. Reload and child
+replacement/rehydration retain it; restart the whole tree to apply changes.
+Resuming after process restart creates a new live budget, not a persisted CPU-time
+allowance. The Node host, host handlers and bash remain outside both limits.
+Neither setting provides disk quotas. See [process resource limits](rlm-runtime.md#process-resource-limits)
 for coverage, setup and failure behavior.
 
 Set `"rustCell": { "libraryTestGate": true }` to validate nonempty `lib` edits

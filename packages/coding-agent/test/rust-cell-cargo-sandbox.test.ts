@@ -12,7 +12,7 @@ import {
 	cargoTargetDir,
 	normalizeCargoSandbox,
 } from "../src/core/rust-cell/cargo-sandbox.js";
-import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
+import { ProcessResourceGroup, RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { runProcess } from "../src/core/rust-cell/process.js";
 import { RUSTDOC_TEST_TOOLCHAIN } from "../src/core/rust-cell/rustdoc-index.js";
 import { findCargoBin, resolveToolchain } from "../src/core/rust-cell/toolchain.js";
@@ -23,8 +23,10 @@ import { hasRustdocToolchain } from "./fixtures/rustdoc.js";
 
 const roots: string[] = [];
 const runtimes: RustCellProvisioner[] = [];
+const groups: ProcessResourceGroup[] = [];
 afterEach(async () => {
 	await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
+	for (const group of groups.splice(0)) group.dispose();
 	vi.unstubAllEnvs();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -281,8 +283,11 @@ describe.skipIf(!runtimeAvailable || !hasProcessLimits())("Cargo sandbox with pr
 			join(skill, "src/lib.rs"),
 			"pub fn value() -> u8 { 7 } #[test] fn correct() { assert_eq!(value(), 7); }",
 		);
+		const group = new ProcessResourceGroup({ memoryMaxMb: 3072, cpuQuotaPercent: 300, tasksMax: 384 });
+		groups.push(group);
 		const options = {
 			cwd: root,
+			processGroup: group,
 			rustSkills: [
 				{ name: "guarded", crateName: "guarded_skill", cratePath: skill, cargoTomlPath: join(skill, "Cargo.toml") },
 			],

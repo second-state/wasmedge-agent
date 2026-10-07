@@ -786,6 +786,7 @@ export function resolveRuntimeSessionOptions(
 		rlmSessionDir: runtimeSessionOptions?.rlmSessionDir,
 		rlmParentNodeId: runtimeSessionOptions?.rlmParentNodeId,
 		rlmParentAgent: runtimeSessionOptions?.rlmParentAgent,
+		rustProcessGroup: runtimeSessionOptions?.rustProcessGroup,
 		semanticParentSessionId: runtimeSessionOptions?.semanticParentSessionId,
 		semanticSpawnedByRequestId: runtimeSessionOptions?.semanticSpawnedByRequestId,
 		subagentRuntimeHost: runtimeSessionOptions?.subagentRuntimeHost,

@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Duplex } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import type { ProcessResourceGroup } from "./process-group.js";
 import { type ProcessLimits, resourceLimitedCommand } from "./process-limits.js";
 import { StdioBridge } from "./stdio-bridge.js";
 import { MAX_OUTPUT_CHARS } from "./types.js";
@@ -22,6 +23,7 @@ export function runProcess(
 		signal?: AbortSignal;
 		env?: NodeJS.ProcessEnv;
 		processLimits?: ProcessLimits | null;
+		processGroup?: ProcessResourceGroup | null;
 		bridge?: { token: string; attach: (connection: Duplex) => void };
 		onChunk?: (chunk: string, stream: "stdout" | "stderr") => void;
 	},
@@ -38,7 +40,11 @@ export function runProcess(
 	return new Promise((resolvePromise, rejectPromise) => {
 		let child: ChildProcess;
 		try {
-			const command = resourceLimitedCommand({ bin, args, env: opts.env ?? process.env }, opts.processLimits);
+			const command = resourceLimitedCommand(
+				{ bin, args, env: opts.env ?? process.env },
+				opts.processLimits,
+				opts.processGroup,
+			);
 			child = spawn(command.bin, command.args, {
 				cwd: opts.cwd,
 				detached: true,

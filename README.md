@@ -31,7 +31,9 @@ skill registration, not every edit. The runner rejects direct guest network
 imports and uses a stdio bridge for host capabilities. Linux users can opt into
 `rustCell.cargoSandbox: "bubblewrap"` to isolate compiler subprocesses and
 `rustCell.processLimits` to bound each Cargo/WasmEdge invocation's memory,
-CPU bandwidth and process/thread count through cgroup v2. Cargo
+CPU bandwidth and process/thread count through cgroup v2.
+`rustCell.treeProcessLimits` optionally shares a runtime budget across the root
+session and its subagents. Cargo
 retains host permissions by default; host bash and handlers do so in either mode. See the
 [runtime architecture and trust boundary](packages/coding-agent/docs/rlm-runtime.md).
 

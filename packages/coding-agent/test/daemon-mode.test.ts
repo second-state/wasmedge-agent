@@ -2135,6 +2135,8 @@ describe("daemon mode helpers", () => {
 				recordRlmSubagentState: ReturnType<typeof vi.fn>;
 			};
 			const parentState = await internals.createRuntime({ type: "create", sessionPath: fixture.parentSessionFile });
+			const inheritedBudget = { marker: "live-parent-budget" };
+			Object.assign(parentState.runtime.session, { rustProcessGroup: inheritedBudget });
 			const registryPath = join(fixture.parentArtifactDir, "rlm-subagents.jsonl");
 			const before = readFileSync(registryPath, "utf8");
 			internals.recordRlmSubagentState = vi.fn(() => false);
@@ -2145,6 +2147,7 @@ describe("daemon mode helpers", () => {
 					.sendAgentMessage({ target: "renamed-worker", message: "report progress" }),
 			).resolves.toMatchObject({ deliveryStatus: "delivered" });
 
+			expect(fixture.createRuntime.mock.calls[1]?.[0].sessionOptions?.rustProcessGroup).toBe(inheritedBudget);
 			expect(internals.recordRlmSubagentState).not.toHaveBeenCalled();
 			expect(readFileSync(registryPath, "utf8")).toBe(before);
 			expect(existsSync(join(fixture.childSessionDir, "rlm-subagent.json"))).toBe(false);

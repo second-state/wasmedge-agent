@@ -15,6 +15,7 @@ import { McpManager } from "./mcp/mcp-manager.js";
 import { ModelRegistry } from "./model-registry.js";
 import { DefaultResourceLoader, type DefaultResourceLoaderOptions, type ResourceLoader } from "./resource-loader.js";
 import type { SubagentRuntimeHost } from "./rlm-runtime.js";
+import type { ProcessResourceGroup } from "./rust-cell/process-group.js";
 import { type CreateAgentSessionResult, createAgentSession } from "./sdk.js";
 import { semanticEdgeLedgerPath } from "./semantic-edges.js";
 import type { SessionManager } from "./session-manager.js";
@@ -53,6 +54,8 @@ export interface CreateAgentSessionServicesOptions {
 }
 
 export interface AgentSessionCreationOptions {
+	/** Share a host-owned runtime budget, or null to inherit an uncapped tree. */
+	rustProcessGroup?: ProcessResourceGroup | null;
 	model?: Model<any>;
 	thinkingLevel?: ThinkingLevel;
 	serviceTier?: ServiceTier;
@@ -280,6 +283,7 @@ export async function createAgentSessionFromServices(
 		rlmMaxDepth: options.rlmMaxDepth,
 		rlmSessionDir: options.rlmSessionDir,
 		rlmParentNodeId: options.rlmParentNodeId,
+		rustProcessGroup: options.rustProcessGroup,
 		rlmParentAgent: options.rlmParentAgent,
 		semanticParentSessionId: options.semanticParentSessionId,
 		semanticSpawnedByRequestId: options.semanticSpawnedByRequestId,

@@ -5,14 +5,14 @@ import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { type ProcOutcome, runProcess } from "./process.js";
-import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
+import { type RuntimeResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
 import { skillTestFingerprint } from "./skill-fingerprint.js";
 import { type LibFile, MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
 import { applyLib, mountedSkillCrates } from "./workspace.js";
 import { snapshotWorkspace } from "./workspace-snapshot.js";
 
-export interface CrateTestOptions extends CellResourceLimits {
+export interface CrateTestOptions extends RuntimeResourceLimits {
 	cargoSandbox?: CargoSandbox;
 	workspaceDir: string;
 	cargoBin: string;
@@ -71,6 +71,7 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 					cwd: workspace,
 					cargoSandbox: options.cargoSandbox,
 					processLimits: options.processLimits,
+					processGroup: options.processGroup,
 				},
 			);
 			return runProcess(command.bin, command.args, {
@@ -125,7 +126,13 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 					"--test-threads=1",
 					"--nocapture",
 				],
-				{ cwd: workspace, timeoutMs: deadline - Date.now(), signal, processLimits: options.processLimits },
+				{
+					cwd: workspace,
+					timeoutMs: deadline - Date.now(),
+					signal,
+					processLimits: options.processLimits,
+					processGroup: options.processGroup,
+				},
 			);
 			requireSuccess(result, `sandboxed ${kind} tests`);
 			const summary = /^test result: ok\. (\d+) passed; 0 failed;/m.exec(result.stdout);

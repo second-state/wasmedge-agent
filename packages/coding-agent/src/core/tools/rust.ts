@@ -8,8 +8,8 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 import type {
 	CargoSandbox,
 	CellInput,
-	CellResourceLimits,
 	CellResult,
+	RuntimeResourceLimits,
 	WorkspaceWritePolicy,
 } from "../rust-cell/index.js";
 import { composeToolText, RustCellProvisioner } from "../rust-cell/index.js";
@@ -44,7 +44,7 @@ const rustSchema = Type.Object({
 export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
-export interface RustToolOptions extends CellResourceLimits {
+export interface RustToolOptions extends RuntimeResourceLimits {
 	cargoSandbox?: CargoSandbox;
 	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
 	rustdocToolchain?: string | null;
@@ -87,6 +87,7 @@ export function createRustToolDefinition(
 			cellGasLimit: options?.cellGasLimit,
 			cellMemoryPageLimit: options?.cellMemoryPageLimit,
 			processLimits: options?.processLimits,
+			processGroup: options?.processGroup,
 		});
 
 	return {
@@ -110,6 +111,9 @@ export function createRustToolDefinition(
 				: "") +
 			(provisioner.libraryTestGate
 				? " Library test gate is enabled: lib edits must pass agent_lib's WASI unit/integration tests before being applied. Include at least one non-ignored test; tests have only /scratch access, without project, state, or bridge access. Failed validation leaves the submitted source edits unapplied."
+				: "") +
+			(provisioner.treeProcessLimits
+				? ` This agent tree shares runtime process limits: ${JSON.stringify(provisioner.treeProcessLimits)}. Concurrent Cargo/WasmEdge invocations consume the same budget; host handlers are outside it.`
 				: "") +
 			(provisioner.processLimits
 				? ` Each Cargo/WasmEdge invocation and its descendants have process limits: ${JSON.stringify(provisioner.processLimits)}. memoryMaxMb is charged memory in MiB; cpuQuotaPercent is CPU bandwidth (100 = one core); tasksMax counts processes and threads. Exceeding memory may terminate the invocation without diagnostics.`
