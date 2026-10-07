@@ -140,6 +140,8 @@ Workspace history 的 Git 命令將自動 maintenance／GC 留在前景，正常
 
 **Scaffold 升級實作註記（2026-10-01）**：`.workspace-version` 已記錄 template content hash、dependency hash、rustc/WasmEdge 版本與 library 預設檔案 hash。Provision 時版本不符，先在旁邊的 workspace 更新 host scaffold，保留 helpers、skills、state、cell source、Git history 與 library overrides；重新掛載 skills 並以 release/offline 編譯既有 cell，通過才切換。失敗保留原 workspace，切換中斷可由 upgrade journal 復原；前提是一個 session workspace 由一個 active runtime 擁有。沒有舊 marker 的 workspace 保守保留全部既有 library source。Marker 隨 child seed 複製並納入 Git；skill manifest 偵測繼續使用 `.skills-hash`。此 gate 只驗證 scaffold 升級的編譯相容性，D19 的 skill 登錄測試另見 §4.2，並非此 scaffold gate 的一部分。
 
+**磁碟用量與快取維護（2026-10-08）**：`wasmedge-agent storage <workspace>` 報告明確指定之 versioned workspace 的分類邏輯大小；`--prune-cache` 預覽、`--apply` 才移除 `target/`。保留 source、state、vendor、Git history、scratch 與未知檔案，下次 cell 由保留的來源與 vendored dependencies 離線重建。Provisioner 從 scaffold 準備到 dispose 完成持有 workspace lease，清理拒絕使用中的 workspace；同主機的另一 provisioner 可在 startup budget 內等待。這是參與協定的本機程序協調，不涵蓋舊版、手動 Cargo 或 host crash 留下的孤兒程序。邏輯大小不代表實際釋放空間；尚無 disk quota、自動 retention 或全域 workspace 清理。詳見 [storage 文件](packages/coding-agent/docs/rlm-runtime.md#workspace-storage)。
+
 ### 2.2 RustCellManager（TS API）
 
 取代 `KernelManager`，但介面刻意模仿其形狀以縮小 `AgentSession` 的改動面（對映 REPORT §1.12 的 85 處耦合點中多數只需改型別名）：

@@ -43,7 +43,9 @@ describe.skipIf(!available)("configured crates with real Cargo and WasmEdge", ()
 			workspaceDir: workspace,
 			preludeExtra: [{ name: "itoa", version: "1.0.18", defaultFeatures: false }],
 		};
-		await provision({ ...options, preludeExtra: [] }).ensure();
+		const initial = provision({ ...options, preludeExtra: [] });
+		await initial.ensure();
+		await initial.dispose();
 		// Older user-edited roots/preludes predate the generated extra module.
 		const library = join(workspace, "agent_lib/src/lib.rs");
 		writeFileSync(
@@ -75,15 +77,18 @@ describe.skipIf(!available)("configured crates with real Cargo and WasmEdge", ()
 			join(workspace, ".workspace-version"),
 			JSON.stringify({ ...JSON.parse(marker), rustcVersion: "older compiler" }),
 		);
-		await provision(options).ensure();
+		const upgraded = provision(options);
+		await upgraded.ensure();
 		expect(readFileSync(join(workspace, "Cargo.lock"), "utf-8")).toBe(lock);
 		expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
+		await upgraded.dispose();
 
 		// A matching workspace and an inherited seed must not fetch or re-vendor.
 		const cargoHome = join(root, "empty-cargo-home");
 		mkdirSync(cargoHome);
 		vi.stubEnv("CARGO_HOME", cargoHome);
-		const resumed = await provision(options).ensure();
+		const resuming = provision(options);
+		const resumed = await resuming.ensure();
 		expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
 		expect((await resumed.execute({ code })).status).toBe("ok");
 		const seed = join(root, "seed");
@@ -94,6 +99,7 @@ describe.skipIf(!available)("configured crates with real Cargo and WasmEdge", ()
 			initialWorkspaceDir: seed,
 		}).ensure();
 		expect((await child.execute({ code })).stdout.trim()).toBe("42");
+		await resuming.dispose();
 		vi.unstubAllEnvs();
 		vi.stubEnv("CARGO_NET_OFFLINE", "true");
 
@@ -111,7 +117,8 @@ describe.skipIf(!available)("configured crates with real Cargo and WasmEdge", ()
 		await expect(invalid.ensure()).rejects.toThrow("original workspace retained");
 		expect(readFileSync(join(workspace, ".workspace-version"), "utf-8")).toBe(marker);
 		expect(existsSync(join(root, ".workspace.upgrade"))).toBe(false);
-		expect((await resumed.execute({ code: "fn main() {}" })).status).toBe("ok");
+		expect((await (await resuming.ensure()).execute({ code: "fn main() {}" })).status).toBe("ok");
+		await resuming.dispose();
 		await removal.ensure();
 		expect(readFileSync(join(workspace, "agent_lib/Cargo.toml"), "utf-8")).not.toContain("itoa");
 		expect(readFileSync(join(workspace, "agent_lib/src/prelude_extra.rs"), "utf-8")).not.toContain("pub use");
