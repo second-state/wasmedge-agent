@@ -11,6 +11,7 @@ import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox
 import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
 import type { ProvisioningContext } from "./provisioning.js";
+import { acquireTemplateLock, acquireTemplateLockSync, templatePreparationActive } from "./template-lock.js";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -175,14 +176,30 @@ export function warmTemplate(
 	processLimits?: ProcessLimits | null,
 	processGroup?: ProcessResourceGroup | null,
 ): void {
+	const template = realpathSync(resolveTemplateDir());
+	const release = acquireTemplateLockSync(template);
+	try {
+		warmTemplateUnlocked(template, cargoBin, cargoSandbox, processLimits, processGroup);
+	} finally {
+		release();
+	}
+}
+
+function warmTemplateUnlocked(
+	template: string,
+	cargoBin: string,
+	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
+): void {
 	const command = cargoCommand(cargoBin, ["build", "--release", "-p", "cell"], {
-		cwd: resolveTemplateDir(),
+		cwd: template,
 		cargoSandbox,
 		processLimits,
 		processGroup,
 	});
 	execFileSync(command.bin, command.args, {
-		cwd: resolveTemplateDir(),
+		cwd: template,
 		env: command.env,
 		stdio: "pipe",
 	});
@@ -210,23 +227,41 @@ export function vendorTemplate(
 	processLimits?: ProcessLimits | null,
 	processGroup?: ProcessResourceGroup | null,
 ): void {
-	const template = resolveTemplateDir();
-	const tmp = join(template, "vendor.tmp");
-	rmSync(tmp, { recursive: true, force: true });
-	const command = cargoCommand(cargoBin, ["vendor", "--locked", tmp], {
-		cwd: template,
-		cargoSandbox,
-		processLimits,
-		processGroup,
-		network: true,
-	});
-	execFileSync(command.bin, command.args, {
-		cwd: template,
-		env: command.env,
-		stdio: "pipe",
-	});
-	rmSync(join(template, "vendor"), { recursive: true, force: true });
-	renameSync(tmp, join(template, "vendor"));
+	const template = realpathSync(resolveTemplateDir());
+	const release = acquireTemplateLockSync(template);
+	try {
+		vendorTemplateUnlocked(template, cargoBin, cargoSandbox, processLimits, processGroup);
+	} finally {
+		release();
+	}
+}
+
+function vendorTemplateUnlocked(
+	template: string,
+	cargoBin: string,
+	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
+): void {
+	const tmp = mkdtempSync(join(template, "vendor.tmp-"));
+	try {
+		const command = cargoCommand(cargoBin, ["vendor", "--locked", tmp], {
+			cwd: template,
+			cargoSandbox,
+			processLimits,
+			processGroup,
+			network: true,
+		});
+		execFileSync(command.bin, command.args, {
+			cwd: template,
+			env: command.env,
+			stdio: "pipe",
+		});
+		rmSync(join(template, "vendor"), { recursive: true, force: true });
+		renameSync(tmp, join(template, "vendor"));
+	} finally {
+		rmSync(tmp, { recursive: true, force: true });
+	}
 }
 
 /** True when the template carries vendored sources. */
@@ -247,19 +282,24 @@ export function ensureTemplateReady(
 	processLimits?: ProcessLimits | null,
 	processGroup?: ProcessResourceGroup | null,
 ): void {
-	if (!isTemplateVendored()) {
-		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
-		vendorTemplate(cargoBin, cargoSandbox, processLimits, processGroup);
-	}
-	if (!isTemplateWarm(cargoSandbox)) {
-		onProgress?.("Warming the cell workspace template (one-time)...");
-		warmTemplate(cargoBin, cargoSandbox, processLimits, processGroup);
+	const template = realpathSync(resolveTemplateDir());
+	if (templateReady(template, cargoSandbox) && !templatePreparationActive(template)) return;
+	const release = acquireTemplateLockSync(template);
+	try {
+		if (!existsSync(join(template, "vendor"))) {
+			onProgress?.("Vendoring cell workspace dependencies (one-time)...");
+			vendorTemplateUnlocked(template, cargoBin, cargoSandbox, processLimits, processGroup);
+		}
+		if (!existsSync(join(cargoTargetDir(template, cargoSandbox), "wasm32-wasip1", "release", "cell.wasm"))) {
+			onProgress?.("Warming the cell workspace template (one-time)...");
+			warmTemplateUnlocked(template, cargoBin, cargoSandbox, processLimits, processGroup);
+		}
+	} finally {
+		release();
 	}
 }
 
-const templatePreparations = new Map<string, Promise<void>>();
-
-/** Serialize runtime preparation within this host. Each owner keeps its own
+/** Serialize template preparation across local host processes. Each owner keeps its own
  * cancellation and resource policy; cancelling a waiter never kills the owner. */
 export async function ensureTemplateReadyAsync(
 	cargoBin: string,
@@ -270,16 +310,11 @@ export async function ensureTemplateReadyAsync(
 	processGroup?: ProcessResourceGroup | null,
 ): Promise<void> {
 	const template = realpathSync(resolveTemplateDir());
-	while (templatePreparations.has(template)) {
-		await context.wait(templatePreparations.get(template)!);
-	}
 	context.check();
-	let release!: () => void;
-	const preparing = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	templatePreparations.set(template, preparing);
+	if (templateReady(template, cargoSandbox) && !templatePreparationActive(template)) return;
+	const release = await acquireTemplateLock(template, context);
 	try {
+		context.check();
 		if (!existsSync(join(template, "vendor"))) {
 			onProgress?.("Vendoring cell workspace dependencies (one-time)...");
 			context.check();
@@ -295,8 +330,8 @@ export async function ensureTemplateReadyAsync(
 					}),
 					template,
 				);
-				// Another host may have published while we were fetching.
-				if (!existsSync(join(template, "vendor"))) renameSync(tmp, join(template, "vendor"));
+				context.check();
+				renameSync(tmp, join(template, "vendor"));
 			} finally {
 				rmSync(tmp, { recursive: true, force: true });
 			}
@@ -319,7 +354,13 @@ export async function ensureTemplateReadyAsync(
 			);
 		}
 	} finally {
-		templatePreparations.delete(template);
 		release();
 	}
+}
+
+function templateReady(template: string, cargoSandbox?: CargoSandbox): boolean {
+	return (
+		existsSync(join(template, "vendor")) &&
+		existsSync(join(cargoTargetDir(template, cargoSandbox), "wasm32-wasip1", "release", "cell.wasm"))
+	);
 }

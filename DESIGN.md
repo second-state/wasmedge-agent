@@ -203,6 +203,8 @@ Process 錯誤路徑：已取得 child process handle 後，即使 bridge attach
 
 併發治理：cargo build 吃 CPU。沿用 `boot-gate.ts` 的許可證模式做 **compile gate**：全 worker 進程內同時編譯數 `min(4, cpus/2)`，可用 `WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS` 覆寫（對映 `PRIME_AGENT_MAX_CONCURRENT_KERNEL_BOOTS`）。
 
+**Template 跨程序協調（2026-10-08）**：runtime、installer／doctor 與同步 warm／vendor APIs 共用 canonical template 路徑的本機 ownership lock；取得後重查 caches，runtime 等待可取消且計入 startup budget，取消等待者不影響 owner。Owner record 原子發布，僅確認同 host／PID namespace 的 owner PID 已不存在才接手；PID reuse／權限不明保守視為存活，不因 build 過久搶鎖。短期 metadata guard 與長期 build ownership 分離；同步 maintenance 最多等待五分鐘，同程序重入拒絕。鎖位於 template 旁、排除於 clone／release assets；冷準備需 parent 可寫，已完成且 idle 的 template 可唯讀使用。Host crash 的 orphan Cargo／暫存目錄不由接手者清除，Cargo 自有 build lock 保留；不是跨主機／container 或手動 Cargo 操作的協調機制。詳見 runtime 文件。
+
 ### 2.3 編譯管線
 
 ```

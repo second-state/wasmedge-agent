@@ -460,11 +460,33 @@ same provisioner cancels the shared attempt, including prewarm; all callers
 wait for cleanup before it can be retried. Cancelling a provisioner queued for
 a different provisioner's template preparation does not cancel that owner.
 
-Template preparation is serialized within one host process and rechecks caches
-after acquiring ownership. Vendoring uses a unique temporary directory and
-publishes only on success. Successful template work remains cached if a later
-startup phase fails. There is no cross-process preparation lock; Cargo retains
-its own build locking.
+Template preparation is serialized across participating processes on the same
+host and PID namespace, including runtime startup, installer/doctor and the
+synchronous warm/vendor APIs. Symlink aliases share the canonical template's
+lock. Waiters recheck vendor/build caches after acquiring ownership; runtime
+waiting is cancellable and consumes the startup budget without cancelling the
+owner. Synchronous maintenance waits at most five minutes for ownership and
+rejects reentry from an active preparation in the same process.
+
+Ownership records and a short-lived metadata guard sit beside the template
+(`template.prepare-owner` and `.guard`), outside workspace clones and release
+assets. Preparing an uncached template requires write access to its parent;
+a ready, idle template can still be used read-only. Ownership records carry
+hostname, PID and a unique token, are published atomically, and are reclaimed
+only when the local owner PID no longer exists. Age alone never expires a
+preparation; permission-denied PID probes are treated as live. PID reuse can
+therefore delay recovery until that process exits. Corrupt or foreign-host
+records fail closed; do not remove an owner record without first verifying that
+its preparation has stopped. The metadata guard covers only synchronous file
+operations, with a 30-second stale threshold for interrupted guard operations.
+This is local coordination, not a distributed or cross-container lock, and
+older clients/manual Cargo commands do not participate.
+
+Vendoring uses unique temporary directories and publishes only on success.
+Successful work remains cached if a later startup phase fails. A killed host
+can leave temporary files and orphaned Cargo processes; reclaiming its owner
+record does not kill those processes or sweep their temporary directories.
+Cargo retains its own build locking.
 
 Initial workspace cloning and scaffold upgrades copy files asynchronously,
 checking cancellation between entries, and stream source hashes with an abort
