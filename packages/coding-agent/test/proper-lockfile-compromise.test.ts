@@ -25,6 +25,7 @@ vi.mock("proper-lockfile", () => {
 import { acquireDaemonUpdateRestartCoordinator } from "../src/cli/daemon-update-restart.js";
 import { FileAuthStorageBackend } from "../src/core/auth-storage.js";
 import { AgentCronJobStore } from "../src/core/cron-jobs.js";
+import { acquireTemplateLockSync } from "../src/core/rust-cell/template-lock.js";
 import { acquireSessionLease, SESSION_LEASES_ENABLED_ENV } from "../src/core/session-lease.js";
 import { FileSettingsStorage } from "../src/core/settings-manager.js";
 import {
@@ -54,6 +55,13 @@ function tempDir(prefix: string): string {
 }
 
 describe("proper-lockfile compromise boundaries", () => {
+	it("does not publish template ownership after its guard is compromised", () => {
+		lockState.compromiseSync = true;
+		const template = tempDir("template-lock-compromise-");
+		expect(() => acquireTemplateLockSync(template)).toThrow("sync lock compromised");
+		expect(existsSync(`${template}.prepare-owner`)).toBe(false);
+	});
+
 	it("records a socket lease compromise and fails before preparing the socket", async () => {
 		lockState.compromiseAsync = true;
 		const socketPath = join(tempDir("pa-lock-socket-"), "daemon.sock");
