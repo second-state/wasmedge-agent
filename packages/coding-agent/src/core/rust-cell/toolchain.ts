@@ -6,6 +6,7 @@ import { existsSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -120,19 +121,23 @@ export function resolveToolchain(): ToolchainInfo {
 }
 
 /** Build the template once so cloned workspaces start with a warm target/. */
-export function warmTemplate(cargoBin: string): void {
-	execFileSync(cargoBin, ["build", "--release", "-p", "cell"], {
+export function warmTemplate(cargoBin: string, cargoSandbox?: CargoSandbox): void {
+	const command = cargoCommand(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
-		env: cargoEnvironment(),
+		cargoSandbox,
+	});
+	execFileSync(command.bin, command.args, {
+		cwd: resolveTemplateDir(),
+		env: command.env,
 		stdio: "pipe",
 	});
 }
 
 /** True when the template already has a compiled cell.wasm (warm cache). */
-export function isTemplateWarm(): boolean {
+export function isTemplateWarm(cargoSandbox?: CargoSandbox): boolean {
 	try {
 		const template = resolveTemplateDir();
-		return existsSync(join(template, "target", "wasm32-wasip1", "release", "cell.wasm"));
+		return existsSync(join(cargoTargetDir(template, cargoSandbox), "wasm32-wasip1", "release", "cell.wasm"));
 	} catch {
 		return false;
 	}
@@ -144,13 +149,14 @@ export function isTemplateWarm(): boolean {
  * sources — into a tmp dir first, renamed so a crash never leaves a
  * half-vendored dir that isTemplateVendored would trust. The only step that
  * may touch the network. */
-export function vendorTemplate(cargoBin: string): void {
+export function vendorTemplate(cargoBin: string, cargoSandbox?: CargoSandbox): void {
 	const template = resolveTemplateDir();
 	const tmp = join(template, "vendor.tmp");
 	rmSync(tmp, { recursive: true, force: true });
-	execFileSync(cargoBin, ["vendor", "--locked", tmp], {
+	const command = cargoCommand(cargoBin, ["vendor", "--locked", tmp], { cwd: template, cargoSandbox, network: true });
+	execFileSync(command.bin, command.args, {
 		cwd: template,
-		env: cargoEnvironment(),
+		env: command.env,
 		stdio: "pipe",
 	});
 	rmSync(join(template, "vendor"), { recursive: true, force: true });
@@ -168,13 +174,17 @@ export function isTemplateVendored(): boolean {
 
 /** One-time template preparation: vendor the dependency set, then compile.
  * Idempotent; both postinstall and lazy first use funnel through here. */
-export function ensureTemplateReady(cargoBin: string, onProgress?: (message: string) => void): void {
+export function ensureTemplateReady(
+	cargoBin: string,
+	onProgress?: (message: string) => void,
+	cargoSandbox?: CargoSandbox,
+): void {
 	if (!isTemplateVendored()) {
 		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
-		vendorTemplate(cargoBin);
+		vendorTemplate(cargoBin, cargoSandbox);
 	}
-	if (!isTemplateWarm()) {
+	if (!isTemplateWarm(cargoSandbox)) {
 		onProgress?.("Warming the cell workspace template (one-time)...");
-		warmTemplate(cargoBin);
+		warmTemplate(cargoBin, cargoSandbox);
 	}
 }

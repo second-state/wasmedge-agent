@@ -2,7 +2,7 @@ import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HostRequestHandler } from "../host-bridge/types.js";
 import { withBuildPermit } from "./build-gate.js";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import {
 	CELL_DEPENDENCIES_FILE,
 	curatedDependency,
@@ -18,6 +18,7 @@ import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js"
 
 export function createDependencyHandler(options: {
 	workspace: string;
+	cargoSandbox?: CargoSandbox;
 	template: string;
 	cargoBin: string;
 	configured: PreludeExtra[];
@@ -58,13 +59,19 @@ export function createDependencyHandler(options: {
 					}
 					writePreludeExtra(staged, extras);
 					await withBuildPermit(async () => {
-						const cargo = (args: string[]) =>
-							runProcess(options.cargoBin, args, {
+						const cargo = (args: string[]) => {
+							const command = cargoCommand(options.cargoBin, args, {
 								cwd: staged,
-								env: cargoEnvironment(),
+								cargoSandbox: options.cargoSandbox,
+								network: args[0] === "vendor",
+							});
+							return runProcess(command.bin, command.args, {
+								cwd: staged,
+								env: command.env,
 								timeoutMs: deadline - Date.now(),
 								signal,
 							});
+						};
 						const requireSuccess = (result: ProcOutcome, operation: string) => {
 							signal.throwIfAborted();
 							if (result.timedOut || result.exitCode !== 0) {

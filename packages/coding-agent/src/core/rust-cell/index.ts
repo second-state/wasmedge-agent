@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { loadHarnessState } from "../refinement/refinement.js";
 import { BridgeServer } from "./bridge-server.js";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand, normalizeCargoSandbox } from "./cargo-sandbox.js";
 import { CellRunner } from "./cell-runner.js";
 import { createDependencyHandler } from "./dependencies.js";
 import { readCellDependencies, workspaceDependencies } from "./dependency-catalog.js";
@@ -45,6 +45,7 @@ export {
 	BridgeServer,
 	type BridgeServerOptions,
 } from "./bridge-server.js";
+export type { CargoSandbox } from "./cargo-sandbox.js";
 export { CellRunner, composeToolText } from "./cell-runner.js";
 export type { CellResourceLimits } from "./resource-limits.js";
 export {
@@ -78,6 +79,8 @@ export {
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends CellResourceLimits {
+	/** Linux Bubblewrap sandbox for runtime Cargo; defaults to off. */
+	cargoSandbox?: CargoSandbox;
 	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
 	rustdocToolchain?: string | null;
 	/** Test proposed lib edits in WASI before applying them; defaults to false. */
@@ -131,6 +134,7 @@ export class RustCellProvisioner {
 		validateCellResourceLimits(options);
 		this.options = {
 			...options,
+			cargoSandbox: normalizeCargoSandbox(options.cargoSandbox),
 			rustdocToolchain: normalizeRustdocToolchain(options.rustdocToolchain),
 			libraryTestGate: normalizeLibraryTestGate(options.libraryTestGate),
 			preludeExtra: normalizePreludeExtra(options.preludeExtra),
@@ -143,6 +147,10 @@ export class RustCellProvisioner {
 
 	get workspaceWritePolicy(): WorkspaceWritePolicy {
 		return this.options.workspaceWritePolicy;
+	}
+
+	get cargoSandbox(): CargoSandbox {
+		return this.options.cargoSandbox ?? "off";
 	}
 
 	get libraryTestGate(): boolean {
@@ -223,7 +231,7 @@ export class RustCellProvisioner {
 	private async start(onProgress?: (message: string) => void): Promise<CellRunner> {
 		onProgress?.("Checking Rust/WasmEdge toolchain...");
 		this.toolchainInfo = resolveToolchain();
-		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress);
+		ensureTemplateReady(this.toolchainInfo.cargoBin, onProgress, this.cargoSandbox);
 		onProgress?.("Preparing the cell workspace...");
 		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
@@ -250,13 +258,21 @@ export class RustCellProvisioner {
 					}
 				}
 				onProgress?.("Preparing configured prelude dependencies...");
-				configurePreludeExtra(workspace, extras, this.toolchainInfo!.cargoBin);
-				syncRustSkills(workspace, skills, { cargoBin: this.toolchainInfo!.cargoBin });
+				configurePreludeExtra(workspace, extras, this.toolchainInfo!.cargoBin, this.cargoSandbox);
+				syncRustSkills(workspace, skills, {
+					cargoBin: this.toolchainInfo!.cargoBin,
+					cargoSandbox: this.cargoSandbox,
+				});
 			},
 			validate: (workspace) => {
-				execFileSync(this.toolchainInfo!.cargoBin, ["build", "--release", "--offline", "-p", "cell"], {
+				const command = cargoCommand(
+					this.toolchainInfo!.cargoBin,
+					["build", "--release", "--offline", "-p", "cell"],
+					{ cwd: workspace, cargoSandbox: this.cargoSandbox },
+				);
+				execFileSync(command.bin, command.args, {
 					cwd: workspace,
-					env: cargoEnvironment(),
+					env: command.env,
 					stdio: "pipe",
 					timeout: 300_000,
 				});
@@ -271,7 +287,10 @@ export class RustCellProvisioner {
 		}
 		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
 			onProgress?.("Mounting rust skills...");
-			const sync = syncRustSkills(this.workspace, rustSkills, { cargoBin: this.toolchainInfo.cargoBin });
+			const sync = syncRustSkills(this.workspace, rustSkills, {
+				cargoBin: this.toolchainInfo.cargoBin,
+				cargoSandbox: this.cargoSandbox,
+			});
 			for (const failure of sync.failed) {
 				this.options.onDiagnostic?.(`rust skill "${failure.name}" was unmounted: ${failure.message}`);
 			}
@@ -284,11 +303,13 @@ export class RustCellProvisioner {
 					...this.options.hostHandlers,
 					"api.describe": createRustdocHandler({
 						workspace: this.workspace,
+						cargoSandbox: this.cargoSandbox,
 						toolchain: this.options.rustdocToolchain,
 						timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
 					}),
 					"deps.add": createDependencyHandler({
 						workspace: this.workspace,
+						cargoSandbox: this.cargoSandbox,
 						template: templateDir,
 						cargoBin: this.toolchainInfo.cargoBin,
 						configured: this.options.preludeExtra!,
@@ -301,6 +322,7 @@ export class RustCellProvisioner {
 		}
 		this.skillValidation = new SkillValidation({
 			workspaceDir: this.workspace,
+			cargoSandbox: this.cargoSandbox,
 			cargoBin: this.toolchainInfo.cargoBin,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			timeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,
@@ -312,6 +334,7 @@ export class RustCellProvisioner {
 			workspaceWritePolicy: this.workspaceWritePolicy,
 			cwd: this.options.cwd,
 			workspaceDir: this.workspace,
+			cargoSandbox: this.cargoSandbox,
 			wasmedgeBin: this.toolchainInfo.wasmedgeBin,
 			cargoBin: this.toolchainInfo.cargoBin,
 			cellTimeoutMs: this.options.cellTimeoutMs ?? DEFAULT_CELL_TIMEOUT_MS,

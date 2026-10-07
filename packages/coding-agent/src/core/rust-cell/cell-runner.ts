@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { cargoArtifactPath, cargoCommand, cargoTargetDir, normalizeCargoSandbox } from "./cargo-sandbox.js";
 import { CellTimer } from "./cell-timing.js";
 import { assertHarnessMountsIsolated, assertReadonlyWorkspaceMounts } from "./harness-mounts.js";
 import { normalizeLibraryTestGate, testLibraryEdits } from "./library-tests.js";
@@ -53,6 +53,7 @@ export class CellRunner {
 		this.resourceArgs = wasmedgeResourceArgs(opts);
 		this.opts = {
 			...opts,
+			cargoSandbox: normalizeCargoSandbox(opts.cargoSandbox),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy),
 			libraryTestGate: normalizeLibraryTestGate(opts.libraryTestGate),
 		};
@@ -144,17 +145,18 @@ export class CellRunner {
 			const admitted = timer.start("buildQueueMs");
 			build = await withBuildPermit(() => {
 				admitted();
+				const command = cargoCommand(
+					this.opts.cargoBin,
+					["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
+					{ cwd: ws, cargoSandbox: this.opts.cargoSandbox },
+				);
 				return timer.measure("cargoMs", () =>
-					runProcess(
-						this.opts.cargoBin,
-						["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
-						{
-							cwd: ws,
-							env: cargoEnvironment(),
-							timeoutMs: remainingMs(),
-							signal,
-						},
-					),
+					runProcess(command.bin, command.args, {
+						cwd: ws,
+						env: command.env,
+						timeoutMs: remainingMs(),
+						signal,
+					}),
 				);
 			}, signal)
 				.finally(admitted)
@@ -223,7 +225,7 @@ export class CellRunner {
 		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
 		try {
 			await timer.measure("importPolicyMs", async () => {
-				const wasm = await readFile(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"), { signal });
+				const wasm = await readFile(this.cellArtifact(), { signal });
 				await validateWasiImports(wasm, "cell", signal);
 			});
 		} catch (error) {
@@ -345,8 +347,16 @@ export class CellRunner {
 		for (const [name, value] of Object.entries(cellEnv)) {
 			args.push("--env", `${name}=${value}`);
 		}
-		args.push(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"));
+		args.push(this.cellArtifact());
 		return args;
+	}
+
+	private cellArtifact(): string {
+		return cargoArtifactPath(
+			this.opts.workspaceDir,
+			this.opts.cargoSandbox,
+			join(cargoTargetDir(this.opts.workspaceDir, this.opts.cargoSandbox), "wasm32-wasip1", "release", "cell.wasm"),
+		);
 	}
 
 	/** Defensive probe: if the readonly preopen ever fails to bind on this

@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import { listLibraryApi } from "./library-api.js";
 import { readRustdocCache } from "./rustdoc-cache.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
@@ -404,10 +404,16 @@ function applySkillMounts(workspaceDir: string, skills: RustSkillMount[]): void 
 	writeSkillConfiguration(workspaceDir, skills);
 }
 
-function probeBuild(workspaceDir: string, cargoBin: string, crate: string): { ok: boolean; message: string } {
-	const result = spawnSync(cargoBin, ["build", "--release", "-p", crate], {
+function probeBuild(
+	workspaceDir: string,
+	cargoBin: string,
+	crate: string,
+	cargoSandbox?: CargoSandbox,
+): { ok: boolean; message: string } {
+	const command = cargoCommand(cargoBin, ["build", "--release", "-p", crate], { cwd: workspaceDir, cargoSandbox });
+	const result = spawnSync(command.bin, command.args, {
 		cwd: workspaceDir,
-		env: cargoEnvironment(),
+		env: command.env,
 		encoding: "utf-8",
 	});
 	if (result.status === 0) return { ok: true, message: "" };
@@ -426,7 +432,7 @@ function probeBuild(workspaceDir: string, cargoBin: string, crate: string): { ok
 export function syncRustSkills(
 	workspaceDir: string,
 	skills: RustSkillMount[],
-	options?: { cargoBin?: string },
+	options?: { cargoBin?: string; cargoSandbox?: CargoSandbox },
 ): SyncRustSkillsResult {
 	const sources = new Map<RustSkillMount, string>();
 	const failed: SyncRustSkillsResult["failed"] = [];
@@ -441,7 +447,7 @@ export function syncRustSkills(
 		}
 	}
 	const hashPath = join(workspaceDir, SKILLS_HASH_FILE);
-	const fingerprint = `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, sources)}`;
+	const fingerprint = `${options?.cargoBin ?? "unprobed"}${options?.cargoSandbox === "bubblewrap" ? ":bubblewrap" : ""}\n${skillsFingerprint(workspaceDir, sources)}`;
 	const previous = existsSync(hashPath) ? readFileSync(hashPath, "utf-8").trim() : undefined;
 	if (previous === fingerprint && failed.length === 0) {
 		return { mounted: skills.map((skill) => skill.crateName), failed: [], changed: false };
@@ -451,7 +457,7 @@ export function syncRustSkills(
 	applySkillMounts(workspaceDir, active);
 
 	if (options?.cargoBin && active.length > 0) {
-		const agentLib = probeBuild(workspaceDir, options.cargoBin, "agent_lib");
+		const agentLib = probeBuild(workspaceDir, options.cargoBin, "agent_lib", options.cargoSandbox);
 		if (!agentLib.ok) {
 			// Attribute the breakage per skill, then remount only the healthy ones.
 			const failuresBeforeProbes = failed.length;
@@ -459,7 +465,7 @@ export function syncRustSkills(
 				// Cargo resolves all members even with -p. Keep only this skill in the
 				// generated config, but retain source mounts for its path dependencies.
 				writeSkillConfiguration(workspaceDir, [skill]);
-				const probe = probeBuild(workspaceDir, options.cargoBin, skill.crateName);
+				const probe = probeBuild(workspaceDir, options.cargoBin, skill.crateName, options.cargoSandbox);
 				if (!probe.ok) {
 					failed.push({ name: skill.name, message: probe.message });
 					active = active.filter((entry) => entry !== skill);
@@ -475,7 +481,10 @@ export function syncRustSkills(
 
 	// Keep the pre-probe source hashes so concurrent edits require another probe.
 	const activeSources = new Map([...sources].filter(([skill]) => active.includes(skill)));
-	writeFileSync(hashPath, `${options?.cargoBin ?? "unprobed"}\n${skillsFingerprint(workspaceDir, activeSources)}\n`);
+	writeFileSync(
+		hashPath,
+		`${options?.cargoBin ?? "unprobed"}${options?.cargoSandbox === "bubblewrap" ? ":bubblewrap" : ""}\n${skillsFingerprint(workspaceDir, activeSources)}\n`,
+	);
 	return { mounted: active.map((skill) => skill.crateName), failed, changed: true };
 }
 

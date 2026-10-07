@@ -10616,6 +10616,7 @@ export class AgentSession {
 				cellTimeoutMs: this.settingsManager.getRustCellTimeoutMs(),
 				workspaceWritePolicy: this.settingsManager.getRustCellWorkspaceWritePolicy(),
 				libraryTestGate: this.settingsManager.getRustCellLibraryTestGate(),
+				cargoSandbox: this.settingsManager.getRustCellCargoSandbox(),
 				rustdocToolchain: this.settingsManager.getRustCellRustdocToolchain(),
 				preludeExtra: this.settingsManager.getRustCellPreludeExtra(),
 				...this.settingsManager.getRustCellResourceLimits(),

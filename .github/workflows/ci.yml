@@ -158,8 +158,22 @@ jobs:
           test -f /etc/apt/sources.list.d/ubuntu.sources
           apt_sources=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
           sudo apt-get "${apt_sources[@]}" update
-          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep bubblewrap
           sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+
+      - name: Allow Bubblewrap user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Scope Ubuntu's AppArmor exception to bwrap; keep the global restriction enabled.
+          sudo tee /etc/apparmor.d/wasmedge-agent-ci-bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile wasmedge-agent-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/wasmedge-agent-ci-bwrap
+          bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind / / -- /usr/bin/true
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'

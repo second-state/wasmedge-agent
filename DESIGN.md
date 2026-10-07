@@ -741,6 +741,8 @@ wasmedge-agent/
 
 **資源上限提前落實於 T1（2026-10-01）**：stock WasmEdge CLI 已提供 `--gas-limit` 與 `--memory-page-limit`，因此不用等待 T2。`rustCell.cellGasLimit`（1–4294967295）及 `cellMemoryPageLimit`（1–65536，每頁 64 KiB）現在由 session、獨立 SDK tool、runner 與 sandboxed skill tests 共用；每個 cell／test module 各有獨立上限。預設省略／null 保留 runtime 預設，無效值拒絕啟動 runtime，不靜默降級；gas 上限刻意限於 uint32 範圍，避免 WasmEdge 0.14.1 CLI 的窄化轉型。Gas 耗盡是 runtime error，memory.grow 超限回失敗值（guest 可處理），過小的 memory cap 也可能導致初始化或配置失敗。Memory cap 是每個 linear memory 的頁數，不是 RSS／compiler／host handler／所有 children 的總額；timeout 照常執行。T2 host functions 與 Async cancel 仍未完成；guest 網路限制已於 2026-10-02 以 stdio bridge + import 白名單提前落實（§2.7）。
 
+**Cargo 編譯沙箱（2026-10-07）**：`rustCell.cargoSandbox: "off" | "bubblewrap"`，預設 off；Linux 可選 Bubblewrap 0.8+ 與 unprivileged user namespaces。Runtime 的 template／scaffold／cell／skill tests／library tests／rustdoc／dependency build 共用政策：來源與工具鏈唯讀、Cargo.lock 與獨立 `target/cargo-sandbox/` 可寫、private tmp/home/proc、編譯無網路，失敗不回退。Git／state／scratch 與未隔離 target 不掛入；host 管理的 vendoring 另允許 network、vendor 目錄與 registry cache 寫入。取消 async commands 會終止沙箱內 descendants；同步初始化仍不可中途取消。macOS 尚不支援。這只隔離 compiler subprocess，host provisioning／source copying、doctor／toolchain repairs、bash 與 handlers 仍有 host 權限；不提供 RSS／CPU／disk 總額限制或整條 pipeline 的 credentials 保證。完整 mounts、cache 與相容性限制見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md#cargo-sandbox)。
+
 ### 8.2 其他
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。

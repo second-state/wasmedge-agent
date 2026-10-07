@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
-import { cargoEnvironment } from "./cargo-environment.js";
+import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { type CellResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
 import { skillTestFingerprint } from "./skill-fingerprint.js";
@@ -13,6 +13,7 @@ import { applyLib, mountedSkillCrates } from "./workspace.js";
 import { snapshotWorkspace } from "./workspace-snapshot.js";
 
 export interface CrateTestOptions extends CellResourceLimits {
+	cargoSandbox?: CargoSandbox;
 	workspaceDir: string;
 	cargoBin: string;
 	wasmedgeBin: string;
@@ -49,38 +50,40 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 		}
 		if (lib) applyLib(workspace, lib);
 		const testedFingerprint = lib ? skillTestFingerprint(workspace, mounted) : undefined;
-		const target = join(workspace, "target");
-		const build = await withBuildPermit(
-			() =>
-				runProcess(
-					options.cargoBin,
-					[
-						"test",
-						"--release",
-						"--offline",
-						"--target",
-						"wasm32-wasip1",
-						"--no-run",
-						"--lib",
-						"--tests",
-						"-p",
-						crateName,
-						"--message-format=json-diagnostic-rendered-ansi",
-					],
-					{
-						cwd: workspace,
-						timeoutMs: deadline - Date.now(),
-						signal,
-						env: {
-							...cargoEnvironment(),
-							CARGO_TARGET_DIR: target,
-							CARGO_BUILD_TARGET_DIR: target,
-							CARGO_BUILD_BUILD_DIR: target,
-						},
-					},
-				),
-			signal,
-		);
+		const target = cargoTargetDir(workspace, options.cargoSandbox);
+		const build = await withBuildPermit(() => {
+			const command = cargoCommand(
+				options.cargoBin,
+				[
+					"test",
+					"--release",
+					"--offline",
+					"--target",
+					"wasm32-wasip1",
+					"--no-run",
+					"--lib",
+					"--tests",
+					"-p",
+					crateName,
+					"--message-format=json-diagnostic-rendered-ansi",
+				],
+				{
+					cwd: workspace,
+					cargoSandbox: options.cargoSandbox,
+				},
+			);
+			return runProcess(command.bin, command.args, {
+				cwd: workspace,
+				timeoutMs: deadline - Date.now(),
+				signal,
+				env: {
+					...command.env,
+					CARGO_TARGET_DIR: target,
+					CARGO_BUILD_TARGET_DIR: target,
+					CARGO_BUILD_BUILD_DIR: target,
+				},
+			});
+		}, signal);
 		requireSuccess(build, `${kind} test build`);
 		if (build.stdout.length >= MAX_OUTPUT_CHARS * 2) {
 			throw new Error(`${kind} test build output exceeded the limit; cannot enumerate every test module`);
