@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import * as cellProcess from "../src/core/rust-cell/process.js";
 import { createRustdocHandler } from "../src/core/rust-cell/rustdoc.js";
+import * as rustdocCache from "../src/core/rust-cell/rustdoc-cache.js";
 import {
 	normalizeRustdocToolchain,
 	RUSTDOC_CACHE_PATH,
@@ -242,6 +243,23 @@ describe.skipIf(!hasRustdocToolchain())("rustdoc JSON against the WASI target", 
 		writeFileSync(join(f.workspace, "agent_lib/src/lib.rs"), broken);
 		await expect(f.query("agent_lib")).rejects.toThrow("Rustdoc introspection failed");
 		expect(readFileSync(join(f.workspace, "agent_lib/src/lib.rs"), "utf8")).toBe(broken);
+		expect(existsSync(join(f.workspace, RUSTDOC_CACHE_PATH))).toBe(false);
+	});
+
+	it("does not publish cache when cancelled after the final source scan", { timeout: 120_000 }, async () => {
+		const f = fixture();
+		const controller = new AbortController();
+		const original = rustdocCache.rustdocFingerprintAsync;
+		let liveScans = 0;
+		vi.spyOn(rustdocCache, "rustdocFingerprintAsync").mockImplementation(async (...args) => {
+			const fingerprint = await original(...args);
+			if (args[0] === f.workspace && ++liveScans === 2) controller.abort(new Error("cancel final scan"));
+			return fingerprint;
+		});
+		await expect(f.handler({ path: "agent_lib" }, { signal: controller.signal })).rejects.toThrow(
+			"cancel final scan",
+		);
+		expect(liveScans).toBe(2);
 		expect(existsSync(join(f.workspace, RUSTDOC_CACHE_PATH))).toBe(false);
 	});
 

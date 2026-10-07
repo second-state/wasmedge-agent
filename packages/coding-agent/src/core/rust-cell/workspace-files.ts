@@ -24,7 +24,10 @@ export async function copyWorkspacePath(
 	context.check();
 }
 
-export async function hashWorkspaceFile(path: string, context: ProvisioningContext): Promise<string> {
+export async function hashWorkspaceFile(
+	path: string,
+	context: { signal?: AbortSignal; check(): void },
+): Promise<string> {
 	context.check();
 	const hash = createHash("sha256");
 	const stream = createReadStream(path, { signal: context.signal });

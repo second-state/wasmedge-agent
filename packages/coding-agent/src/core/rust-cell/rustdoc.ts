@@ -15,9 +15,9 @@ import {
 	normalizeRustdocToolchain,
 	RUSTDOC_CACHE_PATH,
 	type RustdocCache,
-	readRustdocCache,
-	readRustdocJson,
-	rustdocFingerprint,
+	readRustdocCacheAsync,
+	readRustdocJsonAsync,
+	rustdocFingerprintAsync,
 } from "./rustdoc-cache.js";
 import { indexRustdoc, RUSTDOC_FORMAT_VERSION } from "./rustdoc-index.js";
 import { findRustupBin } from "./toolchain.js";
@@ -98,7 +98,8 @@ export function createRustdocHandler(options: {
 			};
 			const mounted = mountedSkillCrates(options.workspace);
 			const version = await run(["rustc", "--version", "--verbose"], options.workspace);
-			let cache = readRustdocCache(options.workspace, mounted);
+			let cache = await readRustdocCacheAsync(options.workspace, mounted, signal);
+			signal.throwIfAborted();
 			if (
 				!cache ||
 				cache.toolchain !== toolchain ||
@@ -107,11 +108,11 @@ export function createRustdocHandler(options: {
 			) {
 				const root = mkdtempSync(join(tmpdir(), "wasmedge-agent-rustdoc-"));
 				try {
-					const fingerprint = rustdocFingerprint(options.workspace, mounted);
+					const fingerprint = await rustdocFingerprintAsync(options.workspace, mounted, signal);
 					const workspace = join(root, "workspace");
 					await snapshotWorkspace(options.workspace, workspace, { mountedSkillsOnly: true, signal });
 					signal.throwIfAborted();
-					if (rustdocFingerprint(workspace, mounted) !== fingerprint)
+					if ((await rustdocFingerprintAsync(workspace, mounted, signal)) !== fingerprint)
 						throw new Error("Sources changed while taking the API snapshot; retry introspection");
 					const target = join(cargoTargetDir(workspace, options.cargoSandbox), "api-build");
 					const packages = ["agent_lib", "rlm", ...mounted];
@@ -140,23 +141,22 @@ export function createRustdocHandler(options: {
 							),
 						signal,
 					);
-					const documents = Object.fromEntries(
-						packages.map((name) => [
-							name,
-							readRustdocJson(
-								cargoArtifactPath(
-									workspace,
-									options.cargoSandbox,
-									join(target, "wasm32-wasip1", "doc", `${name}.json`),
-								),
+					const documents: Record<string, unknown> = {};
+					for (const name of packages) {
+						documents[name] = await readRustdocJsonAsync(
+							cargoArtifactPath(
+								workspace,
+								options.cargoSandbox,
+								join(target, "wasm32-wasip1", "doc", `${name}.json`),
 							),
-						]),
-					);
+							signal,
+						);
+					}
 					const items = indexRustdoc(documents);
 					signal.throwIfAborted();
 					if (
-						rustdocFingerprint(workspace, mounted) !== fingerprint ||
-						rustdocFingerprint(options.workspace, mounted) !== fingerprint
+						(await rustdocFingerprintAsync(workspace, mounted, signal)) !== fingerprint ||
+						(await rustdocFingerprintAsync(options.workspace, mounted, signal)) !== fingerprint
 					) {
 						throw new Error("Sources changed during API introspection; retry introspection");
 					}
@@ -173,6 +173,7 @@ export function createRustdocHandler(options: {
 					const serialized = JSON.stringify(cache);
 					if (Buffer.byteLength(serialized) > MAX_RUSTDOC_BYTES)
 						throw new Error("Rustdoc API cache exceeds 32 MiB");
+					signal.throwIfAborted();
 					mkdirSync(join(options.workspace, "target"), { recursive: true });
 					writeFileAtomicSync(join(options.workspace, RUSTDOC_CACHE_PATH), serialized);
 				} finally {

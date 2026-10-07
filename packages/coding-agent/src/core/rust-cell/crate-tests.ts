@@ -6,7 +6,7 @@ import { withBuildPermit } from "./build-gate.js";
 import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { type RuntimeResourceLimits, wasmedgeResourceArgs } from "./resource-limits.js";
-import { skillTestFingerprint } from "./skill-fingerprint.js";
+import { skillTestFingerprintAsync } from "./skill-fingerprint.js";
 import { type LibFile, MAX_OUTPUT_CHARS, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
 import { applyLib, mountedSkillCrates } from "./workspace.js";
@@ -43,14 +43,14 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 	const root = mkdtempSync(join(tmpdir(), `wasmedge-agent-${kind}-tests-`));
 	try {
 		const workspace = join(root, "workspace");
-		const fingerprint = skillTestFingerprint(options.workspaceDir, mounted);
+		const fingerprint = await skillTestFingerprintAsync(options.workspaceDir, mounted, signal);
 		await snapshotWorkspace(options.workspaceDir, workspace, { mountedSkillsOnly: true, signal });
 		signal.throwIfAborted();
-		if (skillTestFingerprint(workspace, mounted) !== fingerprint) {
+		if ((await skillTestFingerprintAsync(workspace, mounted, signal)) !== fingerprint) {
 			throw new Error(`${sourceLabel} sources changed while taking the test snapshot; retry validation`);
 		}
 		if (lib) applyLib(workspace, lib);
-		const testedFingerprint = lib ? skillTestFingerprint(workspace, mounted) : undefined;
+		const testedFingerprint = lib ? await skillTestFingerprintAsync(workspace, mounted, signal) : undefined;
 		const target = cargoTargetDir(workspace, options.cargoSandbox);
 		const build = await withBuildPermit(() => {
 			const command = cargoCommand(
@@ -145,10 +145,13 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 			throw new Error(`${requirement} at least one passing, non-ignored test`);
 		}
 		signal.throwIfAborted();
-		if (testedFingerprint !== undefined && skillTestFingerprint(workspace, mounted) !== testedFingerprint) {
+		if (
+			testedFingerprint !== undefined &&
+			(await skillTestFingerprintAsync(workspace, mounted, signal)) !== testedFingerprint
+		) {
 			throw new Error("Library test snapshot changed during testing; retry validation");
 		}
-		if (skillTestFingerprint(options.workspaceDir, mounted) !== fingerprint) {
+		if ((await skillTestFingerprintAsync(options.workspaceDir, mounted, signal)) !== fingerprint) {
 			throw new Error(`${sourceLabel} sources changed during testing; retry validation`);
 		}
 	} catch (error) {
