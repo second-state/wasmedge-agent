@@ -158,7 +158,7 @@ jobs:
           test -f /etc/apt/sources.list.d/ubuntu.sources
           apt_sources=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
           sudo apt-get "${apt_sources[@]}" update
-          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep bubblewrap
+          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep bubblewrap dbus-user-session
           sudo ln -s "$(which fdfind)" /usr/local/bin/fd
 
       - name: Allow Bubblewrap user namespaces (Linux)
@@ -174,6 +174,21 @@ jobs:
           PROFILE
           sudo apparmor_parser -r /etc/apparmor.d/wasmedge-agent-ci-bwrap
           bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind / / -- /usr/bin/true
+
+      - name: Enable process resource controllers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          user_unit="user@$(id -u).service"
+          sudo mkdir -p "/run/systemd/system/$user_unit.d"
+          printf '[Service]\nDelegate=cpu memory pids\n' | sudo tee "/run/systemd/system/$user_unit.d/50-process-limits.conf" >/dev/null
+          sudo systemctl daemon-reload
+          sudo systemctl restart "$user_unit"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          systemd-run --user --scope --expand-environment=no --quiet --collect \
+            -p MemoryMax=128M -p MemorySwapMax=0 -p OOMPolicy=kill \
+            -p CPUQuota=100% -p TasksMax=64 /usr/bin/true
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'

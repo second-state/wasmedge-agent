@@ -12,6 +12,7 @@ import {
 import { updateDependencies } from "./dependency-transaction.js";
 import { type PreludeExtra, preludeConfigurationHash, writePreludeExtra } from "./prelude-extra.js";
 import { type ProcOutcome, runProcess } from "./process.js";
+import type { ProcessLimits } from "./process-limits.js";
 import { mountedSkillCrates, syncRustSkills } from "./workspace.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
 import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js";
@@ -19,6 +20,7 @@ import { snapshotWorkspace, withInheritedSkills } from "./workspace-snapshot.js"
 export function createDependencyHandler(options: {
 	workspace: string;
 	cargoSandbox?: CargoSandbox;
+	processLimits?: ProcessLimits | null;
 	template: string;
 	cargoBin: string;
 	configured: PreludeExtra[];
@@ -63,6 +65,7 @@ export function createDependencyHandler(options: {
 							const command = cargoCommand(options.cargoBin, args, {
 								cwd: staged,
 								cargoSandbox: options.cargoSandbox,
+								processLimits: options.processLimits,
 								network: args[0] === "vendor",
 							});
 							return runProcess(command.bin, command.args, {

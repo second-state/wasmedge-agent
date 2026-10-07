@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
+import type { ProcessLimits } from "./process-limits.js";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -121,10 +122,15 @@ export function resolveToolchain(): ToolchainInfo {
 }
 
 /** Build the template once so cloned workspaces start with a warm target/. */
-export function warmTemplate(cargoBin: string, cargoSandbox?: CargoSandbox): void {
+export function warmTemplate(
+	cargoBin: string,
+	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
+): void {
 	const command = cargoCommand(cargoBin, ["build", "--release", "-p", "cell"], {
 		cwd: resolveTemplateDir(),
 		cargoSandbox,
+		processLimits,
 	});
 	execFileSync(command.bin, command.args, {
 		cwd: resolveTemplateDir(),
@@ -149,11 +155,20 @@ export function isTemplateWarm(cargoSandbox?: CargoSandbox): boolean {
  * sources — into a tmp dir first, renamed so a crash never leaves a
  * half-vendored dir that isTemplateVendored would trust. The only step that
  * may touch the network. */
-export function vendorTemplate(cargoBin: string, cargoSandbox?: CargoSandbox): void {
+export function vendorTemplate(
+	cargoBin: string,
+	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
+): void {
 	const template = resolveTemplateDir();
 	const tmp = join(template, "vendor.tmp");
 	rmSync(tmp, { recursive: true, force: true });
-	const command = cargoCommand(cargoBin, ["vendor", "--locked", tmp], { cwd: template, cargoSandbox, network: true });
+	const command = cargoCommand(cargoBin, ["vendor", "--locked", tmp], {
+		cwd: template,
+		cargoSandbox,
+		processLimits,
+		network: true,
+	});
 	execFileSync(command.bin, command.args, {
 		cwd: template,
 		env: command.env,
@@ -178,13 +193,14 @@ export function ensureTemplateReady(
 	cargoBin: string,
 	onProgress?: (message: string) => void,
 	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
 ): void {
 	if (!isTemplateVendored()) {
 		onProgress?.("Vendoring cell workspace dependencies (one-time)...");
-		vendorTemplate(cargoBin, cargoSandbox);
+		vendorTemplate(cargoBin, cargoSandbox, processLimits);
 	}
 	if (!isTemplateWarm(cargoSandbox)) {
 		onProgress?.("Warming the cell workspace template (one-time)...");
-		warmTemplate(cargoBin, cargoSandbox);
+		warmTemplate(cargoBin, cargoSandbox, processLimits);
 	}
 }

@@ -9,6 +9,7 @@ import { MAX_PROVIDER_PAUSE_MS, type ProviderWaitPolicy } from "./provider-retry
 import { type CargoSandbox, normalizeCargoSandbox } from "./rust-cell/cargo-sandbox.js";
 import { normalizeLibraryTestGate } from "./rust-cell/library-tests.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
+import { runtimeProcessLimits } from "./rust-cell/process-limits.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
 import { normalizeRustdocToolchain } from "./rust-cell/rustdoc-cache.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
@@ -1182,6 +1183,10 @@ export class SettingsManager {
 		const limits = {
 			cellGasLimit: this.settings.rustCell?.cellGasLimit,
 			cellMemoryPageLimit: this.settings.rustCell?.cellMemoryPageLimit,
+			processLimits: runtimeProcessLimits(
+				this.settings.rustCell?.processLimits,
+				this.settings.rustCell?.cargoSandbox,
+			),
 		};
 		validateCellResourceLimits(limits);
 		return limits;

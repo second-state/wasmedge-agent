@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
+import type { ProcessLimits } from "./process-limits.js";
 
 export interface PreludeExtra {
 	name: string;
@@ -117,12 +118,18 @@ export function configurePreludeExtra(
 	extras: PreludeExtra[],
 	cargoBin: string,
 	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
 ): void {
 	writePreludeExtra(workspace, extras);
 	if (!extras.length) return;
 	// cargo vendor ignores source replacement by default, resolving new crates
 	// from crates.io while leaving the template's offline redirect intact.
-	const command = cargoCommand(cargoBin, ["vendor", "vendor"], { cwd: workspace, cargoSandbox, network: true });
+	const command = cargoCommand(cargoBin, ["vendor", "vendor"], {
+		cwd: workspace,
+		cargoSandbox,
+		processLimits,
+		network: true,
+	});
 	execFileSync(command.bin, command.args, {
 		cwd: workspace,
 		env: command.env,

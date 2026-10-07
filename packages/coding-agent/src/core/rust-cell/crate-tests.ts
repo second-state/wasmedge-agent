@@ -70,6 +70,7 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 				{
 					cwd: workspace,
 					cargoSandbox: options.cargoSandbox,
+					processLimits: options.processLimits,
 				},
 			);
 			return runProcess(command.bin, command.args, {
@@ -124,7 +125,7 @@ export async function testRustCrate(crateName: string, options: CrateTestOptions
 					"--test-threads=1",
 					"--nocapture",
 				],
-				{ cwd: workspace, timeoutMs: deadline - Date.now(), signal },
+				{ cwd: workspace, timeoutMs: deadline - Date.now(), signal, processLimits: options.processLimits },
 			);
 			requireSuccess(result, `sandboxed ${kind} tests`);
 			const summary = /^test result: ok\. (\d+) passed; 0 failed;/m.exec(result.stdout);

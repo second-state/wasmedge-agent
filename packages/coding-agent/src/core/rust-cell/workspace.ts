@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import { listLibraryApi } from "./library-api.js";
+import type { ProcessLimits } from "./process-limits.js";
 import { readRustdocCache } from "./rustdoc-cache.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
@@ -409,8 +410,13 @@ function probeBuild(
 	cargoBin: string,
 	crate: string,
 	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
 ): { ok: boolean; message: string } {
-	const command = cargoCommand(cargoBin, ["build", "--release", "-p", crate], { cwd: workspaceDir, cargoSandbox });
+	const command = cargoCommand(cargoBin, ["build", "--release", "-p", crate], {
+		cwd: workspaceDir,
+		cargoSandbox,
+		processLimits,
+	});
 	const result = spawnSync(command.bin, command.args, {
 		cwd: workspaceDir,
 		env: command.env,
@@ -432,7 +438,7 @@ function probeBuild(
 export function syncRustSkills(
 	workspaceDir: string,
 	skills: RustSkillMount[],
-	options?: { cargoBin?: string; cargoSandbox?: CargoSandbox },
+	options?: { cargoBin?: string; cargoSandbox?: CargoSandbox; processLimits?: ProcessLimits | null },
 ): SyncRustSkillsResult {
 	const sources = new Map<RustSkillMount, string>();
 	const failed: SyncRustSkillsResult["failed"] = [];
@@ -457,7 +463,13 @@ export function syncRustSkills(
 	applySkillMounts(workspaceDir, active);
 
 	if (options?.cargoBin && active.length > 0) {
-		const agentLib = probeBuild(workspaceDir, options.cargoBin, "agent_lib", options.cargoSandbox);
+		const agentLib = probeBuild(
+			workspaceDir,
+			options.cargoBin,
+			"agent_lib",
+			options.cargoSandbox,
+			options.processLimits,
+		);
 		if (!agentLib.ok) {
 			// Attribute the breakage per skill, then remount only the healthy ones.
 			const failuresBeforeProbes = failed.length;
@@ -465,7 +477,13 @@ export function syncRustSkills(
 				// Cargo resolves all members even with -p. Keep only this skill in the
 				// generated config, but retain source mounts for its path dependencies.
 				writeSkillConfiguration(workspaceDir, [skill]);
-				const probe = probeBuild(workspaceDir, options.cargoBin, skill.crateName, options.cargoSandbox);
+				const probe = probeBuild(
+					workspaceDir,
+					options.cargoBin,
+					skill.crateName,
+					options.cargoSandbox,
+					options.processLimits,
+				);
 				if (!probe.ok) {
 					failed.push({ name: skill.name, message: probe.message });
 					active = active.filter((entry) => entry !== skill);

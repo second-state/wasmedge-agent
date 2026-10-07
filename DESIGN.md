@@ -743,6 +743,8 @@ wasmedge-agent/
 
 **Cargo 編譯沙箱（2026-10-07）**：`rustCell.cargoSandbox: "off" | "bubblewrap"`，預設 off；Linux 可選 Bubblewrap 0.8+ 與 unprivileged user namespaces。Runtime 的 template／scaffold／cell／skill tests／library tests／rustdoc／dependency build 共用政策：來源與工具鏈唯讀、Cargo.lock 與獨立 `target/cargo-sandbox/` 可寫、private tmp/home/proc、編譯無網路，失敗不回退。Git／state／scratch 與未隔離 target 不掛入；host 管理的 vendoring 另允許 network、vendor 目錄與 registry cache 寫入。取消 async commands 會終止沙箱內 descendants；同步初始化仍不可中途取消。macOS 尚不支援。這只隔離 compiler subprocess，host provisioning／source copying、doctor／toolchain repairs、bash 與 handlers 仍有 host 權限；不提供 RSS／CPU／disk 總額限制或整條 pipeline 的 credentials 保證。完整 mounts、cache 與相容性限制見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md#cargo-sandbox)。
 
+**Process 資源限制（2026-10-07）**：`rustCell.processLimits` 預設關閉；Linux 可選 systemd 254+ user scopes 與 cgroup v2，且要求 `cargoSandbox: "bubblewrap"`。`memoryMaxMb` 限制單次 invocation 與 descendants 的 charged memory（含 file cache、禁 swap、OOM 整組終止），`cpuQuotaPercent` 限 CPU bandwidth，`tasksMax` 限 processes＋threads。每次啟動先核對 kernel controls，不可用即失敗、無 uncapped fallback。Runtime Cargo／WasmEdge（含 tests、rustdoc、vendor 與 template 準備）共用政策，session／children／SDK 傳遞；每個 invocation 各有額度，並非 RSS 精確上限、整棵 agent tree 的總預算或 disk quota。Host handlers／bash／source copying／toolchain probes／doctor 不在額度內；同步 provisioning 的取消限制不變。詳見 [process resource limits](packages/coding-agent/docs/rlm-runtime.md#process-resource-limits)。
+
 ### 8.2 其他
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。

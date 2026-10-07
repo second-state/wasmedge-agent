@@ -86,6 +86,7 @@ export function createRustToolDefinition(
 			preludeExtra: options?.preludeExtra,
 			cellGasLimit: options?.cellGasLimit,
 			cellMemoryPageLimit: options?.cellMemoryPageLimit,
+			processLimits: options?.processLimits,
 		});
 
 	return {
@@ -109,6 +110,9 @@ export function createRustToolDefinition(
 				: "") +
 			(provisioner.libraryTestGate
 				? " Library test gate is enabled: lib edits must pass agent_lib's WASI unit/integration tests before being applied. Include at least one non-ignored test; tests have only /scratch access, without project, state, or bridge access. Failed validation leaves the submitted source edits unapplied."
+				: "") +
+			(provisioner.processLimits
+				? ` Each Cargo/WasmEdge invocation and its descendants have process limits: ${JSON.stringify(provisioner.processLimits)}. memoryMaxMb is charged memory in MiB; cpuQuotaPercent is CPU bandwidth (100 = one core); tasksMax counts processes and threads. Exceeding memory may terminate the invocation without diagnostics.`
 				: ""),
 		promptSnippet: "rust - sandboxed Rust cells with explicit persistence (rlm::state, agent_lib)",
 		// Cells share one workspace and one target dir — never two cells at once.

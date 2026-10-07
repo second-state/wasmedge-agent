@@ -7,6 +7,7 @@ import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { type CargoSandbox, cargoArtifactPath, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import { runProcess } from "./process.js";
+import type { ProcessLimits } from "./process-limits.js";
 import {
 	MAX_RUSTDOC_BYTES,
 	normalizeRustdocToolchain,
@@ -25,6 +26,7 @@ import { snapshotWorkspace } from "./workspace-snapshot.js";
 export function createRustdocHandler(options: {
 	workspace: string;
 	cargoSandbox?: CargoSandbox;
+	processLimits?: ProcessLimits | null;
 	toolchain?: string | null;
 	timeoutMs: number;
 }): HostRequestHandler {
@@ -73,6 +75,7 @@ export function createRustdocHandler(options: {
 				const command = cargoCommand(findRustupBin(), ["run", toolchain, ...args], {
 					cwd,
 					cargoSandbox: options.cargoSandbox,
+					processLimits: options.processLimits,
 					env: { ...env, ...extraEnv },
 				});
 				const result = await runProcess(command.bin, command.args, {

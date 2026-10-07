@@ -12,6 +12,7 @@ import { CellTimer } from "./cell-timing.js";
 import { assertHarnessMountsIsolated, assertReadonlyWorkspaceMounts } from "./harness-mounts.js";
 import { normalizeLibraryTestGate, testLibraryEdits } from "./library-tests.js";
 import { type ProcOutcome, runProcess } from "./process.js";
+import { runtimeProcessLimits } from "./process-limits.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
@@ -54,6 +55,7 @@ export class CellRunner {
 		this.opts = {
 			...opts,
 			cargoSandbox: normalizeCargoSandbox(opts.cargoSandbox),
+			processLimits: runtimeProcessLimits(opts.processLimits, opts.cargoSandbox),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy),
 			libraryTestGate: normalizeLibraryTestGate(opts.libraryTestGate),
 		};
@@ -148,7 +150,7 @@ export class CellRunner {
 				const command = cargoCommand(
 					this.opts.cargoBin,
 					["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
-					{ cwd: ws, cargoSandbox: this.opts.cargoSandbox },
+					{ cwd: ws, cargoSandbox: this.opts.cargoSandbox, processLimits: this.opts.processLimits },
 				);
 				return timer.measure("cargoMs", () =>
 					runProcess(command.bin, command.args, {
@@ -282,6 +284,7 @@ export class CellRunner {
 					timeoutMs: remainingMs(),
 					signal,
 					onChunk: per.onChunk,
+					processLimits: this.opts.processLimits,
 					bridge: bridge
 						? { token: bridge.token, attach: (connection) => bridge.attachStdio(connection) }
 						: undefined,
@@ -374,7 +377,7 @@ export class CellRunner {
 			const probe = await runProcess(
 				this.opts.wasmedgeBin,
 				["run", "--dir", `/agent/lib:${join(ws, "agent_lib")}:readonly`, wasm],
-				{ cwd: ws, timeoutMs: Math.min(10_000, timeoutMs), signal },
+				{ cwd: ws, timeoutMs: Math.min(10_000, timeoutMs), signal, processLimits: this.opts.processLimits },
 			);
 			if (!probe.aborted && !probe.timedOut && probe.exitCode === 0) {
 				this.probed = true;

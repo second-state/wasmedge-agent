@@ -18,6 +18,7 @@ import { RUSTDOC_TEST_TOOLCHAIN } from "../src/core/rust-cell/rustdoc-index.js";
 import { findCargoBin, resolveToolchain } from "../src/core/rust-cell/toolchain.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createRustToolDefinition } from "../src/core/tools/rust.js";
+import { hasProcessLimits } from "./fixtures/process-limits.js";
 import { hasRustdocToolchain } from "./fixtures/rustdoc.js";
 
 const roots: string[] = [];
@@ -217,6 +218,33 @@ assert!(std::net::TcpStream::connect_timeout(&"127.0.0.1:${address.port}".parse(
 		expect(existsSync(marker)).toBe(false);
 	}, 90_000);
 
+	it.skipIf(!hasProcessLimits())(
+		"bounds build-script memory and permits a retry without limits",
+		async () => {
+			const { workspace, run } = fixture();
+			writeFileSync(
+				join(workspace, "build.rs"),
+				'fn main() { eprintln!("allocation-started"); let data = vec![42u8; 384 * 1024 * 1024]; std::hint::black_box(data); }',
+			);
+			const command = cargoCommand(findCargoBin(), ["build", "--release", "-vv"], {
+				cwd: workspace,
+				cargoSandbox: "bubblewrap",
+				processLimits: { memoryMaxMb: 256 },
+			});
+			const denied = await runProcess(command.bin, command.args, {
+				cwd: workspace,
+				env: command.env,
+				timeoutMs: 60_000,
+			});
+			expect(denied.exitCode).not.toBe(0);
+			expect(denied.timedOut).toBe(false);
+			expect(denied.stderr).toContain("allocation-started");
+			const allowed = await run();
+			expect(allowed.exitCode, allowed.stderr).toBe(0);
+		},
+		90_000,
+	);
+
 	it("rejects symlink caches and lock files before launching Cargo", () => {
 		const { root, workspace, secret } = fixture();
 		symlinkSync(secret, join(workspace, "Cargo.lock"));
@@ -243,7 +271,7 @@ if (process.platform === "linux" && process.env.CI && process.env.WASMEDGE_AGENT
 	it("has the required runtime and rustdoc toolchains in CI", () => expect(runtimeAvailable).toBe(true));
 }
 
-describe.skipIf(!runtimeAvailable)("Cargo sandbox runtime wiring", () => {
+describe.skipIf(!runtimeAvailable || !hasProcessLimits())("Cargo sandbox with process limits runtime wiring", () => {
 	it("covers provisioning, library tests, dependency updates, rustdoc, and resumed execution", async () => {
 		const root = rootDir();
 		const skill = join(root, "guarded-skill");
@@ -260,6 +288,7 @@ describe.skipIf(!runtimeAvailable)("Cargo sandbox runtime wiring", () => {
 			],
 			workspaceDir: join(root, "workspace"),
 			cargoSandbox: "bubblewrap" as const,
+			processLimits: { memoryMaxMb: 2048, cpuQuotaPercent: 200, tasksMax: 256 },
 			libraryTestGate: true,
 			rustdocToolchain: RUSTDOC_TEST_TOOLCHAIN,
 			cellTimeoutMs: 180_000,

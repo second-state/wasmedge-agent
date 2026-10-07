@@ -457,8 +457,55 @@ installation, bash and host handlers retain host permissions. In particular,
 source snapshots may already contain data copied by the host; this feature is
 not a guarantee that model-generated code cannot obtain credentials through
 other agent capabilities. Host filesystem races/hard links in inputs and kernel
-exploits are outside this policy. It sets no process RSS, CPU or disk quota;
+exploits are outside this policy. Cargo sandboxing alone sets no process memory,
+CPU or disk quota. Optional process limits below bound individual invocations;
 Wasm gas/page limits still apply only to guest execution.
+
+### Process resource limits
+
+`rustCell.processLimits` optionally bounds runtime Cargo and WasmEdge invocations
+with Linux cgroup v2. It requires `cargoSandbox: "bubblewrap"`, systemd 254+
+at `/usr/bin/systemd-run`, a running user manager at `/run/user/<uid>/bus`, and
+delegated `memory`, `cpu` and/or `pids` controllers for the requested fields.
+An administrator may need to enable controller delegation on `user@<uid>.service`;
+see systemd's [delegation documentation](https://systemd.io/CGROUP_DELEGATION/).
+The runtime never installs tools, starts the manager or changes system policy.
+Unsupported platforms, unavailable controllers and launch failures are errors;
+execution never retries without limits. Omitted/null/empty settings keep the
+existing execution path without any systemd requirement.
+
+Every command gets a fresh systemd user scope. Before launching the compiler or
+guest, the runner verifies the scope's actual kernel controls against the
+requested values. The scope preserves working directory, literal arguments,
+environment, output and private bridge pipes. Cargo remains inside Bubblewrap,
+without access to the user bus or cgroup control files. Guest imports and mounts
+retain their existing policy. These boundaries assume trusted system tools and
+host code; host bash or handlers can still change user-owned policy.
+
+- `memoryMaxMb` sets aggregate charged memory in MiB, including file cache,
+  with no swap and group OOM killing. It is not a virtual-address-space or exact
+  RSS ceiling. Exceeding it can kill Cargo, WasmEdge and their descendants.
+- `cpuQuotaPercent` sets CPU bandwidth with a 100 ms period; 100 permits one
+  core and 200 permits two. CPU-heavy work is throttled, not immediately killed.
+  Existing wall-time deadlines still apply.
+- `tasksMax` bounds processes plus threads across the invocation. At the limit,
+  further process/thread creation fails, which the invoked program may handle.
+
+Coverage includes template warmup/vendoring, scaffold and skill probe builds,
+cell compilation/execution, skill/library test builds and each Wasm test module,
+dependency updates, rustdoc and the inert readonly-mount probe. Each invocation
+has its own budget. Concurrent commands, parent/child agents and host handlers
+do not share a combined budget; a bridge-triggered Cargo command has a separate
+scope from its calling guest. The Node host, source copying, toolchain/version
+probes, `doctor --fix`, installation and host bash/handlers remain outside these
+limits. Synchronous provisioning retains its existing cancellation behavior.
+Disk quotas and an aggregate agent-tree resource budget are not implemented.
+
+Resource failures use existing compile/runtime error results; a killed process
+may have no exit code or diagnostics. A kill alone is not proof of OOM. Build
+failure still restores the submitted sources; runtime failure retains the
+existing source/state semantics. See [settings](settings.md#rust-cells) for
+ranges, examples and reload behavior.
 
 ## Failure Modes
 
