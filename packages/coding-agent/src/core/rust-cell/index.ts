@@ -375,7 +375,7 @@ export class RustCellProvisioner {
 		}
 		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
 		context.check();
-		history?.ensure();
+		await history?.ensure({ signal: context.signal });
 		context.check();
 		if (!this.bridgeServer) {
 			this.bridgeServer = new BridgeServer({

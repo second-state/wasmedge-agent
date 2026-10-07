@@ -322,7 +322,7 @@ export class CellRunner {
 		if (result.status === "ok" && this.opts.history) {
 			const snapshotted = timer.start("snapshotMs");
 			try {
-				result.workspaceCommit = this.opts.history.snapshot(cellId);
+				result.workspaceCommit = await this.opts.history.snapshot(cellId, { signal, timeoutMs: remainingMs() });
 			} catch (error) {
 				result.workspaceCommitError = truncate(error instanceof Error ? error.message : String(error));
 			}

@@ -109,7 +109,7 @@ export function createDependencyHandler(options: {
 				signal,
 			);
 			try {
-				options.history?.snapshotDependency(name);
+				await options.history?.snapshotDependency(name, { signal, timeoutMs: deadline - Date.now() });
 			} catch (error) {
 				throw new Error(
 					`Dependency ${name} was added, but its Git snapshot failed: ${error instanceof Error ? error.message : String(error)}`,

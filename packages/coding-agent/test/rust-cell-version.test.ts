@@ -86,7 +86,7 @@ describe("workspace scaffold upgrades", () => {
 		expect(f.read("agent_lib/src/helpers/custom.rs")).toBe("custom");
 	});
 
-	it("updates runtime and untouched defaults while preserving all user assets and Git history", () => {
+	it("updates runtime and untouched defaults while preserving all user assets and Git history", async () => {
 		const f = fixture();
 		f.write(f.template, "agent_lib/src/obsolete.rs", "obsolete");
 		f.write(f.template, "agent_lib/src/deleted.rs", "deleted by user");
@@ -109,7 +109,7 @@ describe("workspace scaffold upgrades", () => {
 		f.write(f.root, "skill/Cargo.toml", "skill manifest");
 		mkdirSync(join(f.workspace, "skills"));
 		symlinkSync(join(f.root, "skill"), join(f.workspace, "skills/linked"));
-		new WorkspaceHistory(f.workspace).ensure();
+		await new WorkspaceHistory(f.workspace).ensure();
 		const head = () => execFileSync("git", ["-C", f.workspace, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
 		const beforeHead = head();
 		for (const path of [

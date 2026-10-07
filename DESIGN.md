@@ -136,6 +136,8 @@
 
 Workspace history 的 Git 命令將自動 maintenance／GC 留在前景，正常返回前完成維護，避免背景程序修改 `.git` 的 objects／lock 與隨後的 scaffold 升級複製重疊。這不協調使用者另行啟動的 Git 操作或排程維護。
 
+**Git 快照取消（2026-10-07）**：初始化、成功 cell 與 dependency snapshots 的 Git 改為非同步 subprocess；每次完整操作共用最多 30 秒，並受 startup／cell 剩餘預算與取消訊號約束。同一 history instance 內序列化，排隊計入預算。取消先向 process group 發 SIGTERM，最多一秒後 SIGKILL，等 subprocess 與 pipes 關閉才釋放 workspace。成功 cell 保留 `ok`，快照錯誤獨立回報；已發布的 dependency 不因 Git 失敗回滾。取消可能發生在 commit 已發布或 maintenance 期間，因此錯誤不代表沒有 commit，不自動重跑。強制終止／host crash 可能留下 lock；不自動刪 lock，操作人須確認沒有活躍 Git 後才修復。這不是交易式快照或跨進程鎖。
+
 **Scaffold 升級實作註記（2026-10-01）**：`.workspace-version` 已記錄 template content hash、dependency hash、rustc/WasmEdge 版本與 library 預設檔案 hash。Provision 時版本不符，先在旁邊的 workspace 更新 host scaffold，保留 helpers、skills、state、cell source、Git history 與 library overrides；重新掛載 skills 並以 release/offline 編譯既有 cell，通過才切換。失敗保留原 workspace，切換中斷可由 upgrade journal 復原；前提是一個 session workspace 由一個 active runtime 擁有。沒有舊 marker 的 workspace 保守保留全部既有 library source。Marker 隨 child seed 複製並納入 Git；skill manifest 偵測繼續使用 `.skills-hash`。此 gate 只驗證 scaffold 升級的編譯相容性，D19 的 skill 登錄測試另見 §4.2，並非此 scaffold gate 的一部分。
 
 ### 2.2 RustCellManager（TS API）
@@ -191,7 +193,7 @@ export interface CellResult {
 
 **Runtime 關閉實作註記（2026-10-06）**：`RustCellProvisioner.dispose()` 取消進行中與排隊的 cells、skill tests，等待失敗／中斷 build 的來源回復及 bridge 清理；舊 runner 後續呼叫回報 `aborted`，不再修改來源。啟動中的 runner 不會在關閉後重新掛回；同一 provisioner 關閉完成後可透過 `ensure()` 建立新 runner。`AgentSession.dispose()` 發起取消，`disposeAsync()` 等待清理；reload／runtime 重建須等前一 runtime 釋放 workspace 才開始 provision。關閉不刪 workspace、不額外 Git snapshot，也不回滾已發生的 runtime 副作用。Runtime toolchain probes 與初始化 Cargo 已支援取消及獨立 startup budget（見下段）；不合作的 host handlers 沿用 bridge 的有限等待，不保證其外部副作用已停止。
 
-**初始化取消（2026-10-07）**：runtime toolchain probes、template vendoring／warm build、configured deps vendoring、scaffold validation 與 skill compile probes 改為非同步 subprocess，共用預設五分鐘 startup budget（SDK `provisionTimeoutMs`，與 `cellTimeoutMs` 分開）。`rust` tool abort、`ensure(onProgress, signal)` 或 runtime disposal 取消進行中的初始化；等 subprocess 結束才清理 staged tree，取消 scaffold build 保留原 workspace，取消 skill probe 不當成壞 skill／不快取半套 probe。初始化 build 共用既有 Cargo concurrency gate，排隊可取消且計入 startup budget。相同 provisioner（含 prewarm）共用一次啟動，任一等待者取消會取消整次；下一次可重試。同 host 的 template 準備序列化，等待者取消不影響其他 provisioner 的 owner；vendor 使用獨立暫存目錄、成功才發布。Host copying／hashing、Git 初始化與 systemd group setup 仍同步，取消及 deadline 在階段邊界檢查，不是整段初始化的硬即時上限；doctor／installer 維持同步 maintenance API。
+**初始化取消（2026-10-07）**：runtime toolchain probes、template vendoring／warm build、configured deps vendoring、scaffold validation 與 skill compile probes 改為非同步 subprocess，共用預設五分鐘 startup budget（SDK `provisionTimeoutMs`，與 `cellTimeoutMs` 分開）。`rust` tool abort、`ensure(onProgress, signal)` 或 runtime disposal 取消進行中的初始化；等 subprocess 結束才清理 staged tree，取消 scaffold build 保留原 workspace，取消 skill probe 不當成壞 skill／不快取半套 probe。初始化 build 共用既有 Cargo concurrency gate，排隊可取消且計入 startup budget。相同 provisioner（含 prewarm）共用一次啟動，任一等待者取消會取消整次；下一次可重試。同 host 的 template 準備序列化，等待者取消不影響其他 provisioner 的 owner；vendor 使用獨立暫存目錄、成功才發布。Git 初始化亦走上述可取消路徑；Host copying／hashing 與 systemd group setup 仍同步，取消及 deadline 在階段邊界檢查，不是整段初始化的硬即時上限；doctor／installer 維持同步 maintenance API。
 
 Session 關閉路徑共用一次 runtime teardown：先 `dispose()` 再 `disposeAsync()`，或同步關閉插入非同步 refinement drain 期間，後續等待仍涵蓋該 session 的 runtime 與 disposal callbacks，不會因 session 已標示 disposed 而提前完成。
 

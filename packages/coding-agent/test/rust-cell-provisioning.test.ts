@@ -7,6 +7,7 @@ import { RustCellProvisioner, type RustCellProvisionerOptions } from "../src/cor
 import { ProvisioningContext } from "../src/core/rust-cell/provisioning.js";
 import { ensureTemplateReadyAsync } from "../src/core/rust-cell/toolchain.js";
 import { mountedSkillCrates, resolveTemplateDir, syncRustSkillsAsync } from "../src/core/rust-cell/workspace.js";
+import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 import { createRustTool } from "../src/core/tools/rust.js";
 
 const sourceTemplate = resolveTemplateDir();
@@ -16,6 +17,7 @@ const contexts: ProvisioningContext[] = [];
 afterEach(async () => {
 	await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
 	for (const context of contexts.splice(0)) context.dispose();
+	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -152,6 +154,43 @@ describe("cancellable runtime provisioning", () => {
 			expect(await runtime.ensure()).toBeDefined();
 		},
 	);
+
+	it("cancels and drains Git initialization before allowing a new runtime", async () => {
+		const f = fixture();
+		f.warm();
+		const runtime = f.runtime();
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let signal: AbortSignal | undefined;
+		const ensure = vi.spyOn(WorkspaceHistory.prototype, "ensure").mockImplementationOnce(async (options) => {
+			signal = options!.signal;
+			await draining;
+			signal!.throwIfAborted();
+		});
+		const starting = runtime.ensure().catch((error: unknown) => error);
+		try {
+			await vi.waitFor(() => expect(signal).toBeDefined(), { timeout: 5000 });
+			let stopped = false;
+			const stopping = runtime.dispose().then(() => {
+				stopped = true;
+			});
+			expect(signal!.aborted).toBe(true);
+			await Promise.resolve();
+			expect(stopped).toBe(false);
+			expect(runtime.hasRunner).toBe(false);
+			release();
+			expect(await starting).toBeInstanceOf(Error);
+			await stopping;
+			ensure.mockRestore();
+			await runtime.ensure();
+			expect(existsSync(join(f.workspace, ".git/HEAD"))).toBe(true);
+		} finally {
+			release();
+			await starting;
+		}
+	});
 
 	it("bounds a predecessor barrier without starting work after timeout", async () => {
 		const f = fixture();

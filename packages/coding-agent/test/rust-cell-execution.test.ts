@@ -44,10 +44,11 @@ setTimeout(() => process.exit(behavior[phase + "Exit"] ?? 0), behavior[phase + "
 describe.skipIf(process.platform === "win32")("cell execution boundaries", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 
-	function fixture(cellTimeoutMs = 20_000, persist = false) {
+	async function fixture(cellTimeoutMs = 20_000, persist = false) {
 		const ws = mkdtempSync(join(tmpdir(), "cell-execution-"));
 		dirs.push(ws);
 		mkdirSync(join(ws, "agent_lib", "src", "helpers"), { recursive: true });
@@ -78,13 +79,13 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 				: [];
 		};
 		const history = persist ? new WorkspaceHistory(ws) : undefined;
-		history?.ensure();
+		await history?.ensure();
 		const runner = new CellRunner({ cwd: ws, workspaceDir: ws, cargoBin, wasmedgeBin, cellTimeoutMs, history });
-		return { ws, main, mod, behavior, invocations, runner };
+		return { ws, main, mod, behavior, invocations, runner, history };
 	}
 
 	it("probes with an inert module and executes each submitted cell only once", async () => {
-		const f = fixture();
+		const f = await fixture();
 		expect((await f.runner.execute({ code: "first cell" })).status).toBe("ok");
 		expect((await f.runner.execute({ code: "second cell" })).status).toBe("ok");
 		const calls = f.invocations();
@@ -97,7 +98,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it("rejects uninspectable artifacts before probing or executing", async () => {
-		const f = fixture();
+		const f = await fixture();
 		writeFileSync(join(f.ws, "target/wasm32-wasip1/release/cell.wasm"), "invalid Wasm");
 		const result = await f.runner.execute({ code: "built source" });
 		expect(result.status).toBe("error");
@@ -106,7 +107,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it("snapshots successful cells only and reports a commit failure without repeating execution", async () => {
-		const f = fixture(20_000, true);
+		const f = await fixture(20_000, true);
 		const count = () =>
 			execFileSync("git", ["-C", f.ws, "rev-list", "--count", "HEAD"], { encoding: "utf-8" }).trim();
 		const success = await f.runner.execute({ code: "first" }, { cellId: "tool-first" });
@@ -129,8 +130,62 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		expect(f.invocations().filter((call) => call.phase === "run")).toHaveLength(3);
 	});
 
+	it.each(["abort", "dispose", "timeout"])("preserves cell success while draining a snapshot on %s", async (kind) => {
+		const f = await fixture(kind === "timeout" ? 2000 : 20_000, true);
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let snapshotSignal: AbortSignal | undefined;
+		let snapshotBudget: number | undefined;
+		vi.spyOn(f.history!, "snapshot").mockImplementation(async (_cell, options) => {
+			snapshotSignal = options!.signal;
+			snapshotBudget = options!.timeoutMs;
+			await draining;
+			snapshotSignal!.throwIfAborted();
+			return "unexpected commit";
+		});
+		const controller = new AbortController();
+		const active = f.runner.execute({ code: "successful cell" }, { signal: controller.signal });
+		const queued = f.runner.execute({ code: "next cell" });
+		let stopped = false;
+		let settled = false;
+		void active.then(() => {
+			settled = true;
+		});
+		try {
+			await vi.waitFor(() => expect(snapshotSignal).toBeDefined(), { timeout: 5000 });
+			expect(snapshotBudget).toBeGreaterThan(0);
+			expect(snapshotBudget).toBeLessThan(kind === "timeout" ? 2000 : 20_000);
+			if (kind === "abort") controller.abort(new Error("cell cancelled"));
+			if (kind === "timeout") await vi.waitFor(() => expect(snapshotSignal!.aborted).toBe(true), { timeout: 5000 });
+			const stopping = f.runner.dispose().then(() => {
+				stopped = true;
+			});
+			await Promise.resolve();
+			expect(snapshotSignal!.aborted).toBe(true);
+			expect(settled).toBe(false);
+			expect(stopped).toBe(false);
+			expect(readFileSync(f.main, "utf8")).toBe("successful cell");
+			expect(f.invocations().map((call) => call.phase)).toEqual(["build", "probe", "run"]);
+			release();
+			const result = await active;
+			expect(result.status).toBe("ok");
+			expect(result.workspaceCommit).toBeUndefined();
+			expect(result.workspaceCommitError).toBeTruthy();
+			expect(result.timings!.snapshotMs).toBeGreaterThan(0);
+			expect(composeToolText(result)).toContain("cell succeeded, but its workspace snapshot failed");
+			expect((await queued).status).toBe("aborted");
+			await stopping;
+		} finally {
+			release();
+			await f.runner.dispose();
+			await Promise.allSettled([active, queued]);
+		}
+	});
+
 	it.each(["stdout", "stderr"] as const)("drops a failed readonly mount reported on %s", async (stream) => {
-		const f = fixture();
+		const f = await fixture();
 		f.behavior({ probeBindFailure: stream });
 		expect(await f.runner.execute({ code: "cell" })).toMatchObject({ status: "ok", libReadonlyFallback: true });
 		const calls = f.invocations();
@@ -139,7 +194,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it.each(["abort", "timeout", "error"])("does not execute or cache an interrupted probe: %s", async (kind) => {
-		const f = fixture(kind === "timeout" ? 5_000 : 20_000);
+		const f = await fixture(kind === "timeout" ? 5_000 : 20_000);
 		f.behavior(kind === "error" ? { probeExit: 1 } : { probeDelay: 60_000 });
 		const controller = new AbortController();
 		const pending = f.runner.execute({ code: "cell" }, { signal: controller.signal });
@@ -156,7 +211,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it.each(["abort", "timeout"])("restores sources when the build is interrupted: %s", async (kind) => {
-		const f = fixture(kind === "timeout" ? 5_000 : 20_000);
+		const f = await fixture(kind === "timeout" ? 5_000 : 20_000);
 		f.behavior({ buildDelay: 60_000 });
 		const controller = new AbortController();
 		const pending = f.runner.execute(
@@ -173,7 +228,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it("expires while waiting for the build gate without starting cargo", async () => {
-		const f = fixture(100);
+		const f = await fixture(100);
 		let release = () => {};
 		const held = new Promise<void>((resolve) => {
 			release = resolve;
@@ -201,7 +256,7 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 	});
 
 	it("retains compiled source changes after a runtime error", async () => {
-		const f = fixture();
+		const f = await fixture();
 		f.behavior({ runExit: 1 });
 		expect(
 			await f.runner.execute({ code: "new cell", lib: [{ path: "src/helpers/new.rs", content: "new helper" }] }),

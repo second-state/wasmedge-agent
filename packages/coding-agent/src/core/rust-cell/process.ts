@@ -20,6 +20,8 @@ export function runProcess(
 	opts: {
 		cwd: string;
 		timeoutMs: number;
+		/** On cancellation, allow SIGTERM cleanup before SIGKILL; default is immediate. */
+		terminateGraceMs?: number;
 		signal?: AbortSignal;
 		env?: NodeJS.ProcessEnv;
 		processLimits?: ProcessLimits | null;
@@ -63,18 +65,26 @@ export function runProcess(
 		let closed = false;
 		let bridgeError: Error | undefined;
 		let bridge: StdioBridge | undefined;
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
 		const stdoutDecoder = new StringDecoder("utf8");
 		const stderrDecoder = new StringDecoder("utf8");
 
-		const killGroup = () => {
+		const killGroup = (signal: NodeJS.Signals = "SIGKILL") => {
 			if (closed) return;
 			if (child.pid) {
 				try {
-					process.kill(-child.pid, "SIGKILL");
+					process.kill(-child.pid, signal);
 				} catch {
-					child.kill("SIGKILL");
+					child.kill(signal);
 				}
 			}
+		};
+		const cancel = () => {
+			if (closed || killTimer) return;
+			if (opts.terminateGraceMs && opts.terminateGraceMs > 0) {
+				killTimer = setTimeout(() => killGroup(), opts.terminateGraceMs);
+				killGroup("SIGTERM");
+			} else killGroup();
 		};
 		const fail = (error: unknown) => {
 			if (failure) return;
@@ -86,10 +96,10 @@ export function runProcess(
 
 		const timer = setTimeout(() => {
 			timedOut = true;
-			killGroup();
+			cancel();
 		}, opts.timeoutMs);
 
-		const onAbort = () => killGroup();
+		const onAbort = () => cancel();
 		opts.signal?.addEventListener("abort", onAbort, { once: true });
 
 		const output = (text: string, stream: "stdout" | "stderr") => {
@@ -126,6 +136,7 @@ export function runProcess(
 		child.on("close", (code) => {
 			closed = true;
 			clearTimeout(timer);
+			clearTimeout(killTimer);
 			opts.signal?.removeEventListener("abort", onAbort);
 			bridge?.finish();
 			// Callers may roll back sources or start another cell after rejection.
@@ -145,5 +156,6 @@ export function runProcess(
 				aborted: opts.signal?.aborted ?? false,
 			});
 		});
+		if (opts.signal?.aborted) onAbort();
 	});
 }
