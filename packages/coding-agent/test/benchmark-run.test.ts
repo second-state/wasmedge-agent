@@ -1058,7 +1058,7 @@ JS`,
 		const { stdout, csv } = f.analyze();
 		expect(stdout).toContain("agent launcher fingerprints incomplete or inconsistent — no verdict");
 		expect(stdout).not.toContain("→ GO");
-		expect(csv.split("\n")[0].endsWith(",launcherHash,sourceInputsHash")).toBe(true);
+		expect(csv.split("\n")[0].split(",").slice(26, 28)).toEqual(["launcherHash", "sourceInputsHash"]);
 		for (const meta of f.metas()) expect(csv).toContain(meta.launcherHash);
 	});
 

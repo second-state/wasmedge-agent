@@ -188,7 +188,10 @@ describe.skipIf(process.platform === "win32")("cell execution boundaries", () =>
 		);
 		try {
 			await vi.waitFor(() => expect(admitted).toBe(permits));
-			expect((await f.runner.execute({ code: "queued cell" })).status).toBe("timeout");
+			const timed = await f.runner.execute({ code: "queued cell" });
+			expect(timed.status).toBe("timeout");
+			expect(timed.timings!.buildQueueMs).toBeGreaterThan(0);
+			expect(timed.timings).toMatchObject({ cargoMs: 0, executionMs: 0 });
 			expect(f.invocations()).toEqual([]);
 			expect(readFileSync(f.main, "utf-8")).toBe("original main");
 		} finally {

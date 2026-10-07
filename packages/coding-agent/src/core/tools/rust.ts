@@ -104,6 +104,7 @@ export function createRustToolDefinition(
 		executionMode: "sequential",
 		parameters: rustSchema,
 		execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+			const toolStarted = performance.now();
 			let hasWorkingMessage = false;
 			const setToolWorkingMessage = (message?: string) => {
 				setWorkingMessage(ctx, message);
@@ -117,6 +118,7 @@ export function createRustToolDefinition(
 						details: { status: "starting" },
 					});
 				});
+				const provisionMs = performance.now() - toolStarted;
 				const result = await runner.execute(params as CellInput, {
 					signal,
 					cellId: toolCallId,
@@ -137,6 +139,7 @@ export function createRustToolDefinition(
 						data: attachment.data,
 						mimeType: attachment.mimeType,
 					}));
+				result.toolTiming = { provisionMs, totalMs: performance.now() - toolStarted };
 				return {
 					content: [{ type: "text", text: text || "(no output)" }, ...images],
 					details: result,

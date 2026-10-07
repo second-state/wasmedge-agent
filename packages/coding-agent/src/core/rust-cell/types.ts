@@ -2,6 +2,7 @@
 
 import type { CellAttachment, CellDiffDisplay, CellSentAgentMessage } from "../host-bridge/types.js";
 import type { BridgeServer } from "./bridge-server.js";
+import type { CellTimings } from "./cell-timing.js";
 import type { CellResourceLimits } from "./resource-limits.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
 import type { WorkspaceWritePolicy } from "./workspace-policy.js";
@@ -30,8 +31,15 @@ export interface CellResult {
 	workspaceCommit?: string;
 	/** The cell succeeded but its snapshot failed; execution must not be retried. */
 	workspaceCommitError?: string;
+	/** Admitted runner wall time; excludes provisioning and the per-runner queue. */
 	durationMs: number;
+	/** Versioned, non-overlapping phases; absent on historical results. */
+	timings?: CellTimings;
+	/** Tool wrapper wall time, including provisioning and the runner queue. */
+	toolTiming?: { provisionMs: number; totalMs: number };
+	/** Legacy bucket: build admission + Cargo + source rollback. */
 	compileMs: number;
+	/** Legacy bucket: execution + bridge cleanup. */
 	runMs: number;
 	/** Lib files were declared, written, and compiled successfully. */
 	libApplied: boolean;

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
+import { CellTimer } from "./cell-timing.js";
 import { assertHarnessMountsIsolated, assertReadonlyWorkspaceMounts } from "./harness-mounts.js";
 import { normalizeLibraryTestGate, testLibraryEdits } from "./library-tests.js";
 import { type ProcOutcome, runProcess } from "./process.js";
@@ -59,8 +60,13 @@ export class CellRunner {
 
 	/** Serialize cells (executionMode "sequential" is also enforced host-side). */
 	execute(input: CellInput, per: PerCallOptions = {}): Promise<CellResult> {
+		const queuedAt = performance.now();
 		const submitted = { code: input.code, lib: input.lib?.map((file) => ({ ...file })) };
-		const run = this.queue.then(() => this.executeInner(submitted, per));
+		const run = this.queue.then(async () => {
+			const timer = new CellTimer();
+			const result = await this.executeInner(submitted, per, timer);
+			return Object.assign(result, timer.finish(timer.started - queuedAt));
+		});
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
@@ -71,12 +77,12 @@ export class CellRunner {
 		await this.queue;
 	}
 
-	private async executeInner(input: CellInput, per: PerCallOptions): Promise<CellResult> {
-		const started = Date.now();
+	private async executeInner(input: CellInput, per: PerCallOptions, timer: CellTimer): Promise<CellResult> {
+		const started = timer.started;
 		const cellId = per.cellId ?? `cell-${randomBytes(6).toString("hex")}`;
 		const deadline = AbortSignal.timeout(this.opts.cellTimeoutMs);
 		const signal = AbortSignal.any([this.shutdown.signal, deadline, ...(per.signal ? [per.signal] : [])]);
-		const remainingMs = () => this.opts.cellTimeoutMs - (Date.now() - started);
+		const remainingMs = () => Math.max(0, Math.floor(this.opts.cellTimeoutMs - (performance.now() - started)));
 		const interruptedStatus = () => (this.shutdown.signal.aborted || per.signal?.aborted ? "aborted" : "timeout");
 		if (signal.aborted) {
 			return this.result(interruptedStatus(), {
@@ -89,13 +95,19 @@ export class CellRunner {
 			});
 		}
 		const ws = this.opts.workspaceDir;
+		const prepared = timer.start("prepareMs");
 		this.checkMounts();
 		ensureStateDir(ws);
+		prepared();
 		try {
-			await this.opts.validateSkills?.(signal, remainingMs());
+			if (this.opts.validateSkills) {
+				await timer.measure("skillValidationMs", () => this.opts.validateSkills!(signal, remainingMs()));
+			}
 			signal.throwIfAborted();
 			if (this.opts.libraryTestGate && input.lib?.length) {
-				await testLibraryEdits(input.lib, { ...this.opts, timeoutMs: Math.max(0, remainingMs()), signal });
+				await timer.measure("libraryTestsMs", () =>
+					testLibraryEdits(input.lib!, { ...this.opts, timeoutMs: Math.max(0, remainingMs()), signal }),
+				);
 				signal.throwIfAborted();
 			}
 		} catch (error) {
@@ -112,10 +124,11 @@ export class CellRunner {
 		let applied: AppliedLib | undefined;
 		let libApplied = false;
 		const mainPath = join(ws, "cell", "src", "main.rs");
+		const sourcesPrepared = timer.start("prepareMs");
 		const previousMain = existsSync(mainPath) ? readFileSync(mainPath, "utf-8") : null;
 		let mainWritten = false;
 		let buildSucceeded = false;
-		let compileStarted = Date.now();
+		let compileStarted = performance.now();
 		let build: ProcOutcome;
 		try {
 			if (input.lib && input.lib.length > 0) {
@@ -124,11 +137,14 @@ export class CellRunner {
 			}
 			mainWritten = true;
 			writeFileSync(mainPath, input.code);
-			compileStarted = Date.now();
+			sourcesPrepared();
+			compileStarted = performance.now();
 			// The same deadline covers waiting for a permit, building, probing,
 			// and running. No phase may start after cancellation or budget expiry.
-			build = await withBuildPermit(
-				() =>
+			const admitted = timer.start("buildQueueMs");
+			build = await withBuildPermit(() => {
+				admitted();
+				return timer.measure("cargoMs", () =>
 					runProcess(
 						this.opts.cargoBin,
 						["build", "--release", "--offline", "-p", "cell", "--message-format=json-diagnostic-rendered-ansi"],
@@ -139,24 +155,35 @@ export class CellRunner {
 							signal,
 						},
 					),
-				signal,
-			).catch((error) => {
-				if (signal.aborted) {
-					return { exitCode: null, stdout: "", stderr: "", aborted: true, timedOut: false } satisfies ProcOutcome;
-				}
-				throw error;
-			});
+				);
+			}, signal)
+				.finally(admitted)
+				.catch((error) => {
+					if (signal.aborted) {
+						return {
+							exitCode: null,
+							stdout: "",
+							stderr: "",
+							aborted: true,
+							timedOut: false,
+						} satisfies ProcOutcome;
+					}
+					throw error;
+				});
 			buildSucceeded = build.exitCode === 0 && !build.aborted && !build.timedOut;
 		} finally {
+			sourcesPrepared();
 			if (!buildSucceeded) {
+				const rolledBack = timer.start("rollbackMs");
 				if (applied) revertLib(applied);
 				if (mainWritten) {
 					if (previousMain === null) rmSync(mainPath, { force: true });
 					else writeFileSync(mainPath, previousMain);
 				}
+				rolledBack();
 			}
 		}
-		const compileMs = Date.now() - compileStarted;
+		const compileMs = performance.now() - compileStarted;
 
 		if (build.aborted || build.timedOut) {
 			return this.result(interruptedStatus(), {
@@ -195,8 +222,10 @@ export class CellRunner {
 		const attachments: CellResult["attachments"] = [];
 		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
 		try {
-			const wasm = await readFile(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"), { signal });
-			await validateWasiImports(wasm, "cell", signal);
+			await timer.measure("importPolicyMs", async () => {
+				const wasm = await readFile(join(ws, "target", "wasm32-wasip1", "release", "cell.wasm"), { signal });
+				await validateWasiImports(wasm, "cell", signal);
+			});
 		} catch (error) {
 			return this.result(signal.aborted ? interruptedStatus() : "error", {
 				started,
@@ -208,7 +237,9 @@ export class CellRunner {
 				stderr: truncate(`cell did not run: ${error instanceof Error ? error.message : String(error)}`),
 			});
 		}
-		const probe = await this.probeLibReadonly(remainingMs(), signal);
+		const probe = this.probed
+			? undefined
+			: await timer.measure("probeMs", () => this.probeLibReadonly(remainingMs(), signal));
 		if (probe && (probe.aborted || probe.timedOut || probe.exitCode !== 0)) {
 			return this.result(probe.aborted || probe.timedOut ? interruptedStatus() : "error", {
 				started,
@@ -240,24 +271,26 @@ export class CellRunner {
 			cellEnv.RLM_CELL_TIMEOUT_MS = String(this.opts.cellTimeoutMs);
 		}
 
-		const runStarted = Date.now();
+		const runStarted = performance.now();
 		let exec: ProcOutcome;
 		try {
-			exec = await runProcess(this.opts.wasmedgeBin, this.wasmedgeArgs(cellEnv), {
-				cwd: ws,
-				timeoutMs: remainingMs(),
-				signal,
-				onChunk: per.onChunk,
-				bridge: bridge
-					? { token: bridge.token, attach: (connection) => bridge.attachStdio(connection) }
-					: undefined,
-			});
+			exec = await timer.measure("executionMs", () =>
+				runProcess(this.opts.wasmedgeBin, this.wasmedgeArgs(cellEnv), {
+					cwd: ws,
+					timeoutMs: remainingMs(),
+					signal,
+					onChunk: per.onChunk,
+					bridge: bridge
+						? { token: bridge.token, attach: (connection) => bridge.attachStdio(connection) }
+						: undefined,
+				}),
+			);
 		} finally {
 			// Cancels cooperative handlers, waits briefly for pending receipts,
 			// then drops the cell's connections.
-			if (bridge) await bridge.endCell();
+			if (bridge) await timer.measure("bridgeCleanupMs", () => bridge.endCell());
 		}
-		const runMs = Date.now() - runStarted;
+		const runMs = performance.now() - runStarted;
 
 		const base = {
 			started,
@@ -275,12 +308,13 @@ export class CellRunner {
 		if (exec.aborted || exec.timedOut) return this.result(interruptedStatus(), base);
 		const result = this.result(exec.exitCode === 0 ? "ok" : "error", base);
 		if (result.status === "ok" && this.opts.history) {
+			const snapshotted = timer.start("snapshotMs");
 			try {
 				result.workspaceCommit = this.opts.history.snapshot(cellId);
 			} catch (error) {
 				result.workspaceCommitError = truncate(error instanceof Error ? error.message : String(error));
 			}
-			result.durationMs = Date.now() - started;
+			snapshotted();
 		}
 		return result;
 	}
@@ -367,7 +401,7 @@ export class CellRunner {
 			stderr: partial.stderr ?? "",
 			compileDiagnostics: partial.compileDiagnostics,
 			exitCode: partial.exitCode,
-			durationMs: Date.now() - partial.started,
+			durationMs: performance.now() - partial.started,
 			compileMs: partial.compileMs,
 			runMs: partial.runMs,
 			libApplied: partial.libApplied,
@@ -392,7 +426,7 @@ export function composeToolText(result: CellResult): string {
 		if (result.stdout) parts.push(result.stdout);
 		if (result.stderr) parts.push(result.stderr);
 		if (result.status === "timeout") {
-			parts.push(`[cell timed out after ${result.durationMs}ms and was killed]`);
+			parts.push(`[cell timed out after ${Math.round(result.durationMs)}ms and was killed]`);
 		} else if (result.status === "aborted") {
 			parts.push("[cell was aborted]");
 		} else if (result.exitCode !== undefined && result.exitCode !== 0) {
