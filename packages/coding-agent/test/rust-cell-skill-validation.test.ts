@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CellRunner } from "../src/core/rust-cell/cell-runner.js";
+import * as fingerprints from "../src/core/rust-cell/skill-fingerprint.js";
 import * as skillTests from "../src/core/rust-cell/skill-tests.js";
 import { SkillValidation } from "../src/core/rust-cell/skill-validation.js";
 import { syncRustSkills } from "../src/core/rust-cell/workspace.js";
@@ -32,6 +33,49 @@ function fixture() {
 }
 
 describe("skill source revalidation", () => {
+	it.each(["initial", "final"])("does not cache cancellation during the %s fingerprint", async (phase) => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		const controller = new AbortController();
+		const original = fingerprints.skillTestFingerprintAsync;
+		let scans = 0;
+		const scan = vi.spyOn(fingerprints, "skillTestFingerprintAsync").mockImplementation(async (...args) => {
+			const result = await original(...args);
+			if (++scans === (phase === "initial" ? 1 : 2)) {
+				controller.abort(new Error("cancel source scan"));
+				args[2]!.throwIfAborted();
+			}
+			return result;
+		});
+		await expect(f.gate.test(reference, controller.signal)).rejects.toThrow("cancel source scan");
+		const completedTests = phase === "initial" ? 0 : 1;
+		expect(tests).toHaveBeenCalledTimes(completedTests);
+		scan.mockRestore();
+		await f.gate.revalidate([reference], new AbortController().signal, 30_000);
+		expect(tests).toHaveBeenCalledTimes(completedTests + 1);
+	});
+
+	it.each(["test", "revalidate"])("includes source scans in the %s timeout", async (operation) => {
+		const f = fixture();
+		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();
+		// Revalidation must still enforce its budget when the source cache would hit.
+		if (operation === "revalidate") await f.gate.test(reference);
+		vi.spyOn(fingerprints, "skillTestFingerprintAsync").mockImplementationOnce(
+			async (_workspace, _mounted, signal) => {
+				signal!.throwIfAborted();
+				return new Promise((_, reject) =>
+					signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }),
+				);
+			},
+		);
+		const pending =
+			operation === "test"
+				? f.gate.test(reference, undefined, 25)
+				: f.gate.revalidate([reference], new AbortController().signal, 25);
+		await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+		expect(tests).toHaveBeenCalledTimes(operation === "test" ? 0 : 1);
+	});
+
 	it.each(["dangling", "cycle"])("ignores %s links only in unmounted sources", async (kind) => {
 		const f = fixture();
 		const tests = vi.spyOn(skillTests, "testRustSkill").mockResolvedValue();

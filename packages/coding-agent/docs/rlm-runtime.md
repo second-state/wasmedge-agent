@@ -54,6 +54,13 @@ validation. Library tests are not cached between edits; doctests and dependent
 skill test suites are not included. Cargo retains host permissions unless `cargoSandbox` is enabled, and the
 fingerprint has the same external-input limitations as skill validation.
 
+Skill registration/revalidation, crate tests and rustdoc queries scan source
+fingerprints asynchronously, streaming file contents and checking cancellation
+between entries and chunks. Initial and final scans share the operation deadline;
+cancellation waits for open files to close and does not cache a successful test.
+Fingerprint identities and source-change checks remain compatible with existing
+caches. Skill mount probes and state-restoration notices still scan synchronously.
+
 No process lives between cells. Continuity comes from the workspace: `rlm::state` key-value entries and blobs under `/agent/state`, and code promoted into `agent_lib`, are available to every later cell.
 
 Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are enforced by WasmEdge's `--gas-limit` and `--memory-page-limit` flags. The same settings apply independently to each sandboxed skill test module. They default to unset; invalid values are rejected before provisioning, and unsupported runtime flags fail execution without retrying uncapped. Gas exhaustion is a runtime error, while denied linear-memory growth returns the Wasm failure value (which guest code may handle); small memory caps can also fail initialization or allocation. Memory limits apply per linear-memory instance, not to total process RSS, Cargo, host handlers, or aggregate subagent usage. See [settings](settings.md#rust-cells) for ranges and an example.
@@ -181,6 +188,11 @@ live workspace or its snapshot. Source rollback can make the prior cache valid
 again. Vendor content, arbitrary external build inputs and host environment are
 not fingerprinted; this does not provide cross-process file locking. Resume and
 compaction only verify sources and report the toolchain that produced the cache.
+
+Queries read rustdoc JSON asynchronously with cancellation and the existing
+32 MiB per-file limit. A cancelled cache check fails the query instead of treating
+it as a cache miss and starting Cargo. JSON parsing and API indexing still run
+synchronously, so the deadline is not a hard real-time bound.
 
 ### Toolchain resolution
 
@@ -312,8 +324,8 @@ and cleanup. After admission, the child's existing independent lifecycle applies
 Tests, rustdoc and dependency snapshots count toward their operation budgets.
 
 This is not an atomic snapshot against concurrent external edits. One copy
-syscall cannot be interrupted; source fingerprints and dependency recovery still
-include synchronous work. Temporary test/rustdoc trees and ordinary dependency
+syscall cannot be interrupted; skill mount probes, state notices and dependency
+recovery still include synchronous work. Temporary test/rustdoc trees and ordinary dependency
 transaction cleanup are removed asynchronously without abandoning pending I/O.
 
 The frozen seed is stored under the child session directory as `.rust-workspace-seed/`, so delayed startup and daemon restoration before the first cell use the same snapshot. Existing child workspaces survive reload without being overwritten. Root skill mounts remain editable symlinks; inherited child skills are local copies and stay local on reload.
@@ -465,7 +477,7 @@ timestamps and literal symlinks and requests best-effort reflinks.
 Staging cleanup is asynchronous. Cancellation waits for the current filesystem
 call and open hash streams to finish before cleanup and retry; a single copy
 syscall cannot be interrupted. Small metadata operations, systemd group setup,
-skill/rustdoc source fingerprints, and dependency crash recovery/rollback still
+skill mount fingerprints, state notices, and dependency crash recovery/rollback still
 contain synchronous work.
 Cleanup and these operations can extend elapsed time beyond the startup budget. Startup errors are reported by
 the tool before a cell result exists. `doctor --fix` and installation keep their
