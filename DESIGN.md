@@ -142,6 +142,8 @@ Workspace history 的 Git 命令將自動 maintenance／GC 留在前景，正常
 
 **磁碟用量與快取維護（2026-10-08）**：`wasmedge-agent storage <workspace>` 報告明確指定之 versioned workspace 的分類邏輯大小；`--prune-cache` 預覽、`--apply` 才移除 `target/`。保留 source、state、vendor、Git history、scratch 與未知檔案，下次 cell 由保留的來源與 vendored dependencies 離線重建。Provisioner 從 scaffold 準備到 dispose 完成持有 workspace lease，清理拒絕使用中的 workspace；同主機的另一 provisioner 可在 startup budget 內等待。這是參與協定的本機程序協調，不涵蓋舊版、手動 Cargo 或 host crash 留下的孤兒程序。邏輯大小不代表實際釋放空間；尚無 disk quota、自動 retention 或全域 workspace 清理。詳見 [storage 文件](packages/coding-agent/docs/rlm-runtime.md#workspace-storage)。
 
+`storage --artifacts <dir>` 在明確指定的 session-artifacts root 下探索 parent／child workspace，先完成探索，再逐一量測或清理。只沿用管理中的目錄結構，不追蹤 symlink、seed 或任意附件目錄；每個 workspace 驗證 metadata，清理另檢查 lease。使用中或失敗的項目回報為 skipped／error，合計只涵蓋成功項目，並以非零 exit status 標示不完整；取消或 timeout 不回復已完成的清理。這是有範圍的批次維護，不是自動 retention 或全域磁碟掃描。
+
 ### 2.2 RustCellManager（TS API）
 
 取代 `KernelManager`，但介面刻意模仿其形狀以縮小 `AgentSession` 的改動面（對映 REPORT §1.12 的 85 處耦合點中多數只需改型別名）：

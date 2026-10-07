@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { inspectWorkspaceStorage } from "../src/core/rust-cell/storage.js";
+import { inspectArtifactsStorage } from "../src/core/rust-cell/storage-inventory.js";
 import { isTemplateWarm, resolveToolchain } from "../src/core/rust-cell/toolchain.js";
 
 let available = false;
@@ -18,7 +19,8 @@ describe.skipIf(!available)("storage maintenance with Cargo and WasmEdge", () =>
 		timeout: 180_000,
 	}, async () => {
 		const root = mkdtempSync(join(tmpdir(), "storage-runtime-"));
-		const workspace = join(root, "workspace");
+		const artifacts = join(root, "session-artifacts");
+		const workspace = join(artifacts, "session", "workspace");
 		const runtime = new RustCellProvisioner({ cwd: root, workspaceDir: workspace, cellTimeoutMs: 120_000 });
 		try {
 			const runner = await runtime.ensure();
@@ -33,8 +35,10 @@ describe.skipIf(!available)("storage maintenance with Cargo and WasmEdge", () =>
 			await runtime.dispose();
 			const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8" });
 			const lib = readFileSync(join(workspace, "agent_lib/src/helpers/storage_test.rs"), "utf8");
-			const pruned = await inspectWorkspaceStorage(workspace, { pruneCache: true, apply: true });
-			expect(pruned.prune?.applied).toBe(true);
+			const pruned = await inspectArtifactsStorage(artifacts, { pruneCache: true, apply: true });
+			expect(pruned.complete).toBe(true);
+			expect(pruned.workspaces).toHaveLength(1);
+			expect(pruned.workspaces[0]).toMatchObject({ status: "ok", report: { prune: { applied: true } } });
 			expect(existsSync(join(workspace, "target"))).toBe(false);
 			expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8" })).toBe(head);
 			expect(readFileSync(join(workspace, "agent_lib/src/helpers/storage_test.rs"), "utf8")).toBe(lib);
