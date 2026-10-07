@@ -295,7 +295,7 @@ export class RustCellProvisioner {
 		context.check();
 		this.workspace = this.options.workspaceDir ?? this.workspace ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
-		recoverWorkspaceUpgrade(this.workspace);
+		await recoverWorkspaceUpgrade(this.workspace);
 		recoverDependencyUpdate(this.workspace);
 		const recordSource = existsSync(join(this.workspace, "Cargo.toml"))
 			? this.workspace

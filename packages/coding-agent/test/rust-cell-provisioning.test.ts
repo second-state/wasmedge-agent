@@ -7,6 +7,7 @@ import { RustCellProvisioner, type RustCellProvisionerOptions } from "../src/cor
 import { ProvisioningContext } from "../src/core/rust-cell/provisioning.js";
 import { ensureTemplateReadyAsync } from "../src/core/rust-cell/toolchain.js";
 import { mountedSkillCrates, resolveTemplateDir, syncRustSkillsAsync } from "../src/core/rust-cell/workspace.js";
+import * as workspaceFiles from "../src/core/rust-cell/workspace-files.js";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 import { createRustTool } from "../src/core/tools/rust.js";
 
@@ -185,6 +186,47 @@ describe("cancellable runtime provisioning", () => {
 			await stopping;
 			ensure.mockRestore();
 			await runtime.ensure();
+			expect(existsSync(join(f.workspace, ".git/HEAD"))).toBe(true);
+		} finally {
+			release();
+			await starting;
+		}
+	});
+
+	it("disposes during initial copying, waits for cleanup, and can provision again", async () => {
+		const f = fixture();
+		f.warm();
+		const runtime = f.runtime();
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const copy = workspaceFiles.copyWorkspacePath;
+		let copying: ProvisioningContext | undefined;
+		vi.spyOn(workspaceFiles, "copyWorkspacePath").mockImplementationOnce(async (...args) => {
+			await copy(...args);
+			copying = args[2];
+			await draining;
+			copying.check();
+		});
+		const starting = runtime.ensure().catch((error: unknown) => error);
+		try {
+			await vi.waitFor(() => expect(copying).toBeDefined(), { timeout: 5000 });
+			let disposed = false;
+			const stopping = runtime.dispose().then(() => {
+				disposed = true;
+			});
+			expect(copying!.signal.aborted).toBe(true);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(disposed).toBe(false);
+			expect(runtime.hasRunner).toBe(false);
+			expect(existsSync(join(f.workspace, "Cargo.toml"))).toBe(false);
+			release();
+			expect(await starting).toBeInstanceOf(Error);
+			await stopping;
+			expect(existsSync(join(f.root, ".workspace.upgrade"))).toBe(false);
+			await runtime.ensure();
+			expect(runtime.hasRunner).toBe(true);
 			expect(existsSync(join(f.workspace, ".git/HEAD"))).toBe(true);
 		} finally {
 			release();
