@@ -18,10 +18,12 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withBuildPermit } from "./build-gate.js";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import { listLibraryApi } from "./library-api.js";
 import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
+import type { ProvisioningContext } from "./provisioning.js";
 import { readRustdocCache } from "./rustdoc-cache.js";
 import { skillSourceFingerprint } from "./skill-fingerprint.js";
 import type { LibFile } from "./types.js";
@@ -430,6 +432,15 @@ function probeBuild(
 	return { ok: false, message: output.slice(-2000) || `cargo build -p ${crate} failed` };
 }
 
+interface SyncRustSkillsOptions {
+	cargoBin?: string;
+	cargoSandbox?: CargoSandbox;
+	processLimits?: ProcessLimits | null;
+	processGroup?: ProcessResourceGroup | null;
+}
+
+type SkillProbe = { ok: boolean; message: string };
+
 /**
  * Mount skill crates into the workspace: workspace members + agent_lib path
  * dependencies + agent_lib::skills re-exports. Skills mount in place, so
@@ -441,13 +452,69 @@ function probeBuild(
 export function syncRustSkills(
 	workspaceDir: string,
 	skills: RustSkillMount[],
-	options?: {
-		cargoBin?: string;
-		cargoSandbox?: CargoSandbox;
-		processLimits?: ProcessLimits | null;
-		processGroup?: ProcessResourceGroup | null;
-	},
+	options?: SyncRustSkillsOptions,
 ): SyncRustSkillsResult {
+	const sync = mountRustSkills(workspaceDir, skills, options);
+	let step = sync.next();
+	while (!step.done) {
+		let probe: SkillProbe;
+		try {
+			probe = probeBuild(
+				workspaceDir,
+				options!.cargoBin!,
+				step.value,
+				options?.cargoSandbox,
+				options?.processLimits,
+				options?.processGroup,
+			);
+		} catch (error) {
+			sync.throw(error);
+			throw error;
+		}
+		step = sync.next(probe);
+	}
+	return step.value;
+}
+
+export async function syncRustSkillsAsync(
+	workspaceDir: string,
+	skills: RustSkillMount[],
+	context: ProvisioningContext,
+	options?: SyncRustSkillsOptions,
+): Promise<SyncRustSkillsResult> {
+	context.check();
+	const sync = mountRustSkills(workspaceDir, skills, options);
+	let step = sync.next();
+	while (!step.done) {
+		let probe: SkillProbe;
+		try {
+			context.check();
+			const command = cargoCommand(options!.cargoBin!, ["build", "--release", "-p", step.value], {
+				cwd: workspaceDir,
+				cargoSandbox: options?.cargoSandbox,
+				processLimits: options?.processLimits,
+				processGroup: options?.processGroup,
+			});
+			const result = await withBuildPermit(() => context.run(command, workspaceDir), context.signal);
+			probe = {
+				ok: result.exitCode === 0,
+				message: result.stderr.trim().slice(-2000) || `cargo build -p ${step.value} failed`,
+			};
+		} catch (error) {
+			sync.throw(error);
+			throw error;
+		}
+		step = sync.next(probe);
+	}
+	context.check();
+	return step.value;
+}
+
+function* mountRustSkills(
+	workspaceDir: string,
+	skills: RustSkillMount[],
+	options?: SyncRustSkillsOptions,
+): Generator<string, SyncRustSkillsResult, SkillProbe> {
 	const sources = new Map<RustSkillMount, string>();
 	const failed: SyncRustSkillsResult["failed"] = [];
 	for (const skill of skills) {
@@ -470,41 +537,35 @@ export function syncRustSkills(
 	let active = [...sources.keys()];
 	applySkillMounts(workspaceDir, active);
 
-	if (options?.cargoBin && active.length > 0) {
-		const agentLib = probeBuild(
-			workspaceDir,
-			options.cargoBin,
-			"agent_lib",
-			options.cargoSandbox,
-			options.processLimits,
-			options.processGroup,
-		);
-		if (!agentLib.ok) {
-			// Attribute the breakage per skill, then remount only the healthy ones.
-			const failuresBeforeProbes = failed.length;
-			for (const skill of [...active]) {
-				// Cargo resolves all members even with -p. Keep only this skill in the
-				// generated config, but retain source mounts for its path dependencies.
-				writeSkillConfiguration(workspaceDir, [skill]);
-				const probe = probeBuild(
-					workspaceDir,
-					options.cargoBin,
-					skill.crateName,
-					options.cargoSandbox,
-					options.processLimits,
-					options.processGroup,
-				);
-				if (!probe.ok) {
-					failed.push({ name: skill.name, message: probe.message });
-					active = active.filter((entry) => entry !== skill);
+	try {
+		if (options?.cargoBin && active.length > 0) {
+			const agentLib = yield "agent_lib";
+			if (!agentLib.ok) {
+				// Attribute the breakage per skill, then remount only the healthy ones.
+				const failuresBeforeProbes = failed.length;
+				for (const skill of [...active]) {
+					// Cargo resolves all members even with -p. Keep only this skill in the
+					// generated config, but retain source mounts for its path dependencies.
+					writeSkillConfiguration(workspaceDir, [skill]);
+					const probe = yield skill.crateName;
+					if (!probe.ok) {
+						failed.push({ name: skill.name, message: probe.message });
+						active = active.filter((entry) => entry !== skill);
+					}
+				}
+				applySkillMounts(workspaceDir, active);
+				if (failed.length === failuresBeforeProbes) {
+					// agent_lib itself is broken (e.g. stale helpers); surface that.
+					failed.push({ name: "agent_lib", message: agentLib.message });
 				}
 			}
-			applySkillMounts(workspaceDir, active);
-			if (failed.length === failuresBeforeProbes) {
-				// agent_lib itself is broken (e.g. stale helpers); surface that.
-				failed.push({ name: "agent_lib", message: agentLib.message });
-			}
 		}
+	} catch (error) {
+		// Cancellation is not evidence of a broken skill. Restore the requested
+		// mounts and force all probes to run again on the next attempt.
+		applySkillMounts(workspaceDir, [...sources.keys()]);
+		rmSync(hashPath, { force: true });
+		throw error;
 	}
 
 	// Keep the pre-probe source hashes so concurrent edits require another probe.

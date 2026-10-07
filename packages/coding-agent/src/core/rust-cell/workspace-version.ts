@@ -12,6 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import type { ProvisioningContext } from "./provisioning.js";
 import { ensureWorkspaceAt } from "./workspace.js";
 
 export const WORKSPACE_VERSION_FILE = ".workspace-version";
@@ -43,6 +44,11 @@ interface WorkspaceVersionOptions {
 	onProgress?: (message: string) => void;
 }
 
+type AsyncWorkspaceVersionOptions = Omit<WorkspaceVersionOptions, "configure" | "validate"> & {
+	configure: (workspace: string) => Promise<void>;
+	validate: (workspace: string) => Promise<void>;
+};
+
 function hashFile(path: string): string {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -66,7 +72,7 @@ function fileHashes(root: string, paths: string[]): Record<string, string> {
 	return result;
 }
 
-function versionFor(options: WorkspaceVersionOptions): WorkspaceVersion {
+function versionFor(options: Omit<WorkspaceVersionOptions, "configure" | "validate">): WorkspaceVersion {
 	const files = fileHashes(options.templateDir, [...HOST_PATHS, "agent_lib/src", "cell/src"]);
 	const digest = (entries: Record<string, string>) =>
 		createHash("sha256").update(JSON.stringify(entries)).digest("hex");
@@ -181,6 +187,48 @@ function updateSources(
 /** Refresh scaffold in a separate tree; the existing workspace stays intact
  * until its retained cell and library compile against the new runtime. */
 export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersionOptions): void {
+	const upgrade = stageWorkspaceUpgrade(dir, options);
+	const staged = upgrade.next();
+	if (staged.done) return;
+	try {
+		options.configure(staged.value);
+		options.validate(staged.value);
+	} catch (error) {
+		upgrade.throw(error);
+	}
+	upgrade.next();
+}
+
+export async function prepareVersionedWorkspaceAsync(
+	dir: string,
+	options: AsyncWorkspaceVersionOptions,
+	context: ProvisioningContext,
+): Promise<void> {
+	context.check();
+	const upgrade = stageWorkspaceUpgrade(dir, options);
+	const staged = upgrade.next();
+	if (staged.done) {
+		context.check();
+		return;
+	}
+	try {
+		context.check();
+		await options.configure(staged.value);
+		context.check();
+		await options.validate(staged.value);
+		context.check();
+	} catch (error) {
+		upgrade.throw(error);
+	}
+	upgrade.next();
+}
+
+/** Yield the staged tree for validation, keeping publication and rollback
+ * identical for synchronous maintenance and asynchronous runtime startup. */
+function* stageWorkspaceUpgrade(
+	dir: string,
+	options: Omit<WorkspaceVersionOptions, "configure" | "validate">,
+): Generator<string, void, void> {
 	const workspace = resolve(dir);
 	recoverWorkspaceUpgrade(workspace);
 	const fresh = !existsSync(join(workspace, "Cargo.toml")) && !options.initialWorkspaceDir;
@@ -242,8 +290,7 @@ export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersion
 		updateSources(staged, options.templateDir, previous, next);
 		if (retainedLock) writeFileSync(join(staged, "Cargo.lock"), retainedLock);
 		rmSync(join(staged, ".skills-hash"), { force: true });
-		options.configure(staged);
-		options.validate(staged);
+		yield staged;
 		writeVersion(staged, next);
 		renameSync(workspace, backup);
 		renameSync(staged, workspace);

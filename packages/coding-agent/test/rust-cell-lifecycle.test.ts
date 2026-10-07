@@ -36,14 +36,14 @@ function fixture(options: Partial<RustCellProvisionerOptions> = {}) {
 	writeFileSync(join(workspace, "Cargo.toml"), "[workspace]\n");
 	writeFileSync(join(workspace, "cell/src/main.rs"), "previous cell");
 	writeFileSync(join(workspace, "agent_lib/src/lib.rs"), "previous library");
-	vi.spyOn(toolchain, "resolveToolchain").mockReturnValue({
+	vi.spyOn(toolchain, "resolveToolchainAsync").mockResolvedValue({
 		cargoBin: "cargo",
 		wasmedgeBin: "wasmedge",
 		wasmedgeVersion: "test",
 	});
-	vi.spyOn(toolchain, "rustcVersion").mockReturnValue("test");
-	vi.spyOn(toolchain, "ensureTemplateReady").mockImplementation(() => {});
-	vi.spyOn(workspaceVersion, "prepareVersionedWorkspace").mockImplementation(() => {});
+	vi.spyOn(toolchain, "rustcVersionAsync").mockResolvedValue("test");
+	vi.spyOn(toolchain, "ensureTemplateReadyAsync").mockResolvedValue(undefined);
+	vi.spyOn(workspaceVersion, "prepareVersionedWorkspaceAsync").mockResolvedValue(undefined);
 	vi.spyOn(WorkspaceHistory.prototype, "ensure").mockImplementation(() => {});
 	const provisioner = new RustCellProvisioner({ cwd: root, workspaceDir: workspace, ...options });
 	provisioners.push(provisioner);
@@ -107,10 +107,10 @@ describe("runtime disposal", () => {
 		try {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(started).toBe(false);
-			expect(toolchain.resolveToolchain).not.toHaveBeenCalled();
+			expect(toolchain.resolveToolchainAsync).not.toHaveBeenCalled();
 			previous.resolve();
 			expect(await starting).toBeDefined();
-			expect(toolchain.resolveToolchain).toHaveBeenCalledTimes(1);
+			expect(toolchain.resolveToolchainAsync).toHaveBeenCalledTimes(1);
 		} finally {
 			previous.resolve();
 			await Promise.allSettled([stopped, starting]);
@@ -120,7 +120,7 @@ describe("runtime disposal", () => {
 	it("rejects startup if the previous runtime failed to stop", async () => {
 		const { provisioner } = fixture({ beforeStart: Promise.reject(new Error("teardown failed")) });
 		await expect(provisioner.ensure()).rejects.toThrow("teardown failed");
-		expect(toolchain.resolveToolchain).not.toHaveBeenCalled();
+		expect(toolchain.resolveToolchainAsync).not.toHaveBeenCalled();
 		await expect(provisioner.dispose()).rejects.toThrow("teardown failed");
 		provisioners.splice(provisioners.indexOf(provisioner), 1);
 	});

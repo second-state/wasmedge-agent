@@ -32,7 +32,7 @@ function within(parent: string, path: string): boolean {
 	return tail === "" || (tail !== ".." && !tail.startsWith("../") && !isAbsolute(tail));
 }
 
-/** Build a complete command, shared by synchronous provisioning and async cells.
+/** Build a complete command, shared by maintenance, provisioning and cells.
  * Vendoring alone shares the host network; no fallback runs an unwrapped command. */
 export function cargoCommand(
 	bin: string,
@@ -149,7 +149,7 @@ export function cargoCommand(
 	if (options.network) {
 		const vendor = resolve(workspace, args.at(-1) ?? "");
 		if (
-			![join(workspace, "vendor"), join(workspace, "vendor.tmp")].includes(vendor) ||
+			!/^vendor(?:\.tmp(?:-[A-Za-z0-9]{6})?)?$/.test(relative(workspace, vendor)) ||
 			lstatSync(vendor, { throwIfNoEntry: false })?.isSymbolicLink()
 		)
 			throw new Error("Cargo sandbox vendoring requires a workspace vendor directory");

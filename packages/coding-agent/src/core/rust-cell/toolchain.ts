@@ -2,13 +2,15 @@
  * build. Mirrors ensureKernelPython's role at PoC scale (DESIGN.md §2.2). */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { withBuildPermit } from "./build-gate.js";
 import { cargoEnvironment } from "./cargo-environment.js";
 import { type CargoSandbox, cargoCommand, cargoTargetDir } from "./cargo-sandbox.js";
 import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
+import type { ProvisioningContext } from "./provisioning.js";
 import { resolveTemplateDir } from "./workspace.js";
 
 export interface ToolchainInfo {
@@ -37,14 +39,22 @@ export function findRustupBin(): string {
 
 /** Probe beside the selected Cargo first, respecting an explicit RUSTC. */
 export function rustcVersion(cargoBin: string, cwd: string): string {
-	const sibling = join(dirname(cargoBin), "rustc");
-	const rustc = process.env.RUSTC ?? (existsSync(sibling) ? sibling : (findOnPath("rustc") ?? "rustc"));
+	const rustc = findRustcBin(cargoBin);
 	return execFileSync(rustc, ["--version", "--verbose"], {
 		cwd,
 		env: cargoEnvironment(),
 		encoding: "utf-8",
 		timeout: 30_000,
 	}).trim();
+}
+
+function findRustcBin(cargoBin: string): string {
+	const sibling = join(dirname(cargoBin), "rustc");
+	return process.env.RUSTC ?? (existsSync(sibling) ? sibling : (findOnPath("rustc") ?? "rustc"));
+}
+
+export function rustcVersionAsync(cargoBin: string, cwd: string, context: ProvisioningContext): Promise<string> {
+	return context.exec({ bin: findRustcBin(cargoBin), args: ["--version", "--verbose"], env: cargoEnvironment() }, cwd);
 }
 
 /** Where wasmedge might be, in precedence order. An explicit override is the
@@ -119,6 +129,42 @@ export function resolveToolchain(): ToolchainInfo {
 		throw new Error(`rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1`);
 	}
 
+	return { cargoBin, wasmedgeBin: wasmedge.bin, wasmedgeVersion: wasmedge.version };
+}
+
+/** Runtime probes use the same discovery order without blocking cancellation. */
+export async function resolveToolchainAsync(context: ProvisioningContext): Promise<ToolchainInfo> {
+	context.check();
+	const cargoBin = findCargoBin();
+	if (!existsSync(cargoBin)) throw new Error("cargo not found (checked WASMEDGE_AGENT_CARGO, PATH, ~/.cargo/bin)");
+	let wasmedge: WasmedgeProbe = {};
+	for (const candidate of wasmedgeCandidates()) {
+		if (!existsSync(candidate)) continue;
+		try {
+			const version = await context.exec({ bin: candidate, args: ["--version"] }, process.cwd());
+			wasmedge = { bin: candidate, version };
+			break;
+		} catch {
+			context.check();
+			wasmedge.bin ??= candidate;
+		}
+	}
+	if (wasmedge.version === undefined || wasmedge.bin === undefined) {
+		throw new Error(
+			wasmedge.bin === undefined
+				? "wasmedge not found; install it or set WASMEDGE_AGENT_WASMEDGE to the binary path"
+				: `wasmedge at ${wasmedge.bin} does not run; reinstall it or set WASMEDGE_AGENT_WASMEDGE`,
+		);
+	}
+	const rustup = findRustupBin();
+	if (existsSync(rustup)) {
+		const targets = await context.exec(
+			{ bin: rustup, args: ["target", "list", "--installed"], env: cargoEnvironment() },
+			process.cwd(),
+		);
+		if (!targets.includes("wasm32-wasip1"))
+			throw new Error("rust target wasm32-wasip1 missing; run: rustup target add wasm32-wasip1");
+	}
 	return { cargoBin, wasmedgeBin: wasmedge.bin, wasmedgeVersion: wasmedge.version };
 }
 
@@ -208,5 +254,72 @@ export function ensureTemplateReady(
 	if (!isTemplateWarm(cargoSandbox)) {
 		onProgress?.("Warming the cell workspace template (one-time)...");
 		warmTemplate(cargoBin, cargoSandbox, processLimits, processGroup);
+	}
+}
+
+const templatePreparations = new Map<string, Promise<void>>();
+
+/** Serialize runtime preparation within this host. Each owner keeps its own
+ * cancellation and resource policy; cancelling a waiter never kills the owner. */
+export async function ensureTemplateReadyAsync(
+	cargoBin: string,
+	context: ProvisioningContext,
+	onProgress?: (message: string) => void,
+	cargoSandbox?: CargoSandbox,
+	processLimits?: ProcessLimits | null,
+	processGroup?: ProcessResourceGroup | null,
+): Promise<void> {
+	const template = realpathSync(resolveTemplateDir());
+	while (templatePreparations.has(template)) {
+		await context.wait(templatePreparations.get(template)!);
+	}
+	context.check();
+	let release!: () => void;
+	const preparing = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	templatePreparations.set(template, preparing);
+	try {
+		if (!existsSync(join(template, "vendor"))) {
+			onProgress?.("Vendoring cell workspace dependencies (one-time)...");
+			context.check();
+			const tmp = mkdtempSync(join(template, "vendor.tmp-"));
+			try {
+				await context.exec(
+					cargoCommand(cargoBin, ["vendor", "--locked", tmp], {
+						cwd: template,
+						cargoSandbox,
+						processLimits,
+						processGroup,
+						network: true,
+					}),
+					template,
+				);
+				// Another host may have published while we were fetching.
+				if (!existsSync(join(template, "vendor"))) renameSync(tmp, join(template, "vendor"));
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		}
+		if (!existsSync(join(cargoTargetDir(template, cargoSandbox), "wasm32-wasip1", "release", "cell.wasm"))) {
+			onProgress?.("Warming the cell workspace template (one-time)...");
+			context.check();
+			await withBuildPermit(
+				() =>
+					context.exec(
+						cargoCommand(cargoBin, ["build", "--release", "-p", "cell"], {
+							cwd: template,
+							cargoSandbox,
+							processLimits,
+							processGroup,
+						}),
+						template,
+					),
+				context.signal,
+			);
+		}
+	} finally {
+		templatePreparations.delete(template);
+		release();
 	}
 }

@@ -56,6 +56,8 @@ export interface RustToolOptions extends RuntimeResourceLimits {
 	workspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
+	/** Startup budget in ms; defaults to five minutes, separate from the cell budget. */
+	provisionTimeoutMs?: number;
 	preludeExtra?: PreludeExtra[];
 	/** Shared provisioner owning the runtime lifecycle. When provided, the remaining options are ignored. */
 	provisioner?: RustCellProvisioner;
@@ -83,6 +85,7 @@ export function createRustToolDefinition(
 			workspaceWritePolicy: options?.workspaceWritePolicy,
 			workspaceDir: options?.workspaceDir,
 			cellTimeoutMs: options?.cellTimeoutMs,
+			provisionTimeoutMs: options?.provisionTimeoutMs,
 			preludeExtra: options?.preludeExtra,
 			cellGasLimit: options?.cellGasLimit,
 			cellMemoryPageLimit: options?.cellMemoryPageLimit,
@@ -136,7 +139,7 @@ export function createRustToolDefinition(
 						content: [{ type: "text", text: message }],
 						details: { status: "starting" },
 					});
-				});
+				}, signal);
 				const provisionMs = performance.now() - toolStarted;
 				const result = await runner.execute(params as CellInput, {
 					signal,

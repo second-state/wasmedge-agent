@@ -2,13 +2,13 @@
  * IPython kernel (DESIGN.md §2). The provisioner mirrors the lifecycle shape
  * the kernel provisioner had so AgentSession wiring stays small. */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRequestHandlers } from "../host-bridge/types.js";
 import { loadHarnessState } from "../refinement/refinement.js";
 import { BridgeServer } from "./bridge-server.js";
+import { withBuildPermit } from "./build-gate.js";
 import { type CargoSandbox, cargoCommand, normalizeCargoSandbox } from "./cargo-sandbox.js";
 import { CellRunner } from "./cell-runner.js";
 import { createDependencyHandler } from "./dependencies.js";
@@ -22,22 +22,23 @@ import {
 	preludeConfigurationHash,
 } from "./prelude-extra.js";
 import { type ProcessLimits, runtimeProcessLimits } from "./process-limits.js";
+import { ProvisioningContext } from "./provisioning.js";
 import { type RuntimeResourceLimits, validateCellResourceLimits } from "./resource-limits.js";
 import { createRustdocHandler } from "./rustdoc.js";
 import { normalizeRustdocToolchain } from "./rustdoc-cache.js";
 import { SkillValidation } from "./skill-validation.js";
-import { ensureTemplateReady, resolveToolchain, rustcVersion, type ToolchainInfo } from "./toolchain.js";
+import { ensureTemplateReadyAsync, resolveToolchainAsync, rustcVersionAsync, type ToolchainInfo } from "./toolchain.js";
 import {
 	listPersistentState,
 	type PersistentStateListing,
 	type RustSkillMount,
 	resolveTemplateDir,
-	syncRustSkills,
+	syncRustSkillsAsync,
 } from "./workspace.js";
 import { WorkspaceHistory } from "./workspace-history.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./workspace-policy.js";
 import { withInheritedSkills } from "./workspace-snapshot.js";
-import { prepareVersionedWorkspace, recoverWorkspaceUpgrade } from "./workspace-version.js";
+import { prepareVersionedWorkspaceAsync, recoverWorkspaceUpgrade } from "./workspace-version.js";
 
 export {
 	BRIDGE_PROTOCOL_VERSION,
@@ -100,6 +101,8 @@ export interface RustCellProvisionerOptions extends RuntimeResourceLimits {
 	initialWorkspaceDir?: string;
 	/** Per-cell budget in ms (compile + run). */
 	cellTimeoutMs?: number;
+	/** Startup budget including queueing, probes and Cargo; defaults to five minutes. */
+	provisionTimeoutMs?: number;
 	/** User-selected crates.io dependencies, fixed for the provisioner's lifetime. */
 	preludeExtra?: PreludeExtra[];
 	/** Additional host requests; deps.add is always provided by the runtime. */
@@ -124,6 +127,7 @@ const DEFAULT_CELL_TIMEOUT_MS = 120_000;
 export class RustCellProvisioner {
 	private readonly options: RustCellProvisionerOptions & { workspaceWritePolicy: WorkspaceWritePolicy };
 	private starting: Promise<CellRunner> | undefined;
+	private provisioning: ProvisioningContext | undefined;
 	private runner: CellRunner | undefined;
 	private toolchainInfo: ToolchainInfo | undefined;
 	private workspace: string | undefined;
@@ -134,6 +138,10 @@ export class RustCellProvisioner {
 	private readonly pendingSkillTests = new Set<Promise<void>>();
 
 	constructor(options: RustCellProvisionerOptions) {
+		const timeout = options.provisionTimeoutMs === undefined ? 300_000 : options.provisionTimeoutMs;
+		if (!Number.isInteger(timeout) || timeout < 1 || timeout > 2_147_483_647) {
+			throw new Error("provisionTimeoutMs must be an integer between 1 and 2147483647");
+		}
 		validateCellResourceLimits(options);
 		runtimeProcessLimits(options.processGroup?.limits, options.cargoSandbox, "rustCell.treeProcessLimits");
 		this.options = {
@@ -202,11 +210,9 @@ export class RustCellProvisioner {
 
 	async testSkill(reference: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
-		await this.stopping;
+		await this.ensure(undefined, signal);
 		const lifetime = this.lifetime.signal;
 		const combined = signal ? AbortSignal.any([lifetime, signal]) : lifetime;
-		combined.throwIfAborted();
-		await this.ensure();
 		combined.throwIfAborted();
 		const testing = this.skillValidation!.test(reference, combined);
 		this.pendingSkillTests.add(testing);
@@ -217,42 +223,77 @@ export class RustCellProvisioner {
 		}
 	}
 
-	ensure(onProgress?: (message: string) => void): Promise<CellRunner> {
-		if (this.stopping) return this.stopping.then(() => this.ensure(onProgress));
-		if (this.runner) return Promise.resolve(this.runner);
-		if (this.starting) return this.starting;
-		const lifetime = this.lifetime.signal;
-		this.starting = Promise.resolve(this.options.beforeStart)
-			.then(() => {
-				lifetime.throwIfAborted();
-				return this.start(onProgress);
-			})
-			.then(async (runner) => {
-				this.runner = runner;
-				if (lifetime.aborted) {
-					await runner.dispose();
-					lifetime.throwIfAborted();
-				}
-				return runner;
-			})
-			.finally(() => {
-				this.starting = undefined;
-			});
-		return this.starting;
+	/** Callers share one startup attempt. Cancelling any waiter cancels that
+	 * attempt (including prewarm); all waiters drain it before a retry. */
+	async ensure(onProgress?: (message: string) => void, signal?: AbortSignal): Promise<CellRunner> {
+		signal?.throwIfAborted();
+		if (this.stopping) {
+			// Disposal retains the predecessor barrier even if this caller stops waiting.
+			const waiting = new ProvisioningContext(
+				signal ?? new AbortController().signal,
+				this.options.provisionTimeoutMs ?? 300_000,
+			);
+			try {
+				await waiting.wait(this.stopping);
+			} finally {
+				waiting.dispose();
+			}
+			return this.ensure(onProgress, signal);
+		}
+		if (this.runner) return this.runner;
+		if (!this.starting) {
+			const context = new ProvisioningContext(this.lifetime.signal, this.options.provisionTimeoutMs ?? 300_000);
+			this.provisioning = context;
+			this.starting = Promise.resolve()
+				.then(async () => {
+					await context.wait(Promise.resolve(this.options.beforeStart));
+					context.check();
+					return this.start(context, onProgress);
+				})
+				.then(async (runner) => {
+					try {
+						context.check();
+					} catch (error) {
+						await runner.dispose();
+						await this.bridgeServer?.dispose();
+						this.bridgeServer = undefined;
+						this.skillValidation = undefined;
+						throw error;
+					}
+					this.runner = runner;
+					return runner;
+				})
+				.finally(() => {
+					context.dispose();
+					this.starting = undefined;
+					this.provisioning = undefined;
+				});
+		}
+		const context = this.provisioning!;
+		const onAbort = () => context.abort(signal!.reason);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await this.starting;
+		} finally {
+			signal?.removeEventListener("abort", onAbort);
+		}
 	}
 
-	private async start(onProgress?: (message: string) => void): Promise<CellRunner> {
+	private async start(context: ProvisioningContext, onProgress?: (message: string) => void): Promise<CellRunner> {
 		onProgress?.("Checking Rust/WasmEdge toolchain...");
-		this.toolchainInfo = resolveToolchain();
-		ensureTemplateReady(
+		context.check();
+		this.toolchainInfo = await resolveToolchainAsync(context);
+		await ensureTemplateReadyAsync(
 			this.toolchainInfo.cargoBin,
+			context,
 			onProgress,
 			this.cargoSandbox,
 			this.options.processLimits,
 			this.options.processGroup,
 		);
 		onProgress?.("Preparing the cell workspace...");
-		this.workspace = this.options.workspaceDir ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
+		context.check();
+		this.workspace = this.options.workspaceDir ?? this.workspace ?? mkdtempSync(join(tmpdir(), "wasmedge-agent-ws-"));
 		const templateDir = resolveTemplateDir();
 		recoverWorkspaceUpgrade(this.workspace);
 		recoverDependencyUpdate(this.workspace);
@@ -260,58 +301,60 @@ export class RustCellProvisioner {
 			? this.workspace
 			: (this.options.initialWorkspaceDir ?? this.workspace);
 		const extras = workspaceDependencies(this.options.preludeExtra!, readCellDependencies(recordSource));
-		prepareVersionedWorkspace(this.workspace, {
-			templateDir,
-			initialWorkspaceDir: this.options.initialWorkspaceDir,
-			rustcVersion: rustcVersion(
-				this.toolchainInfo.cargoBin,
-				existsSync(this.workspace) ? this.workspace : templateDir,
-			),
-			wasmedgeVersion: this.toolchainInfo.wasmedgeVersion,
-			configurationHash: preludeConfigurationHash(extras),
-			configure: (workspace) => {
-				const skills = withInheritedSkills(workspace, this.options.rustSkills ?? []);
-				for (const extra of extras) {
-					if (skills.some((skill) => skill.crateName === extra.name.replaceAll("-", "_"))) {
-						throw new Error(`preludeExtra crate conflicts with a mounted skill: ${extra.name}`);
+		await prepareVersionedWorkspaceAsync(
+			this.workspace,
+			{
+				templateDir,
+				initialWorkspaceDir: this.options.initialWorkspaceDir,
+				rustcVersion: await rustcVersionAsync(
+					this.toolchainInfo.cargoBin,
+					existsSync(this.workspace) ? this.workspace : templateDir,
+					context,
+				),
+				wasmedgeVersion: this.toolchainInfo.wasmedgeVersion,
+				configurationHash: preludeConfigurationHash(extras),
+				configure: async (workspace) => {
+					const skills = withInheritedSkills(workspace, this.options.rustSkills ?? []);
+					for (const extra of extras) {
+						if (skills.some((skill) => skill.crateName === extra.name.replaceAll("-", "_"))) {
+							throw new Error(`preludeExtra crate conflicts with a mounted skill: ${extra.name}`);
+						}
 					}
-				}
-				onProgress?.("Preparing configured prelude dependencies...");
-				configurePreludeExtra(
-					workspace,
-					extras,
-					this.toolchainInfo!.cargoBin,
-					this.cargoSandbox,
-					this.options.processLimits,
-					this.options.processGroup,
-				);
-				syncRustSkills(workspace, skills, {
-					cargoBin: this.toolchainInfo!.cargoBin,
-					cargoSandbox: this.cargoSandbox,
-					processLimits: this.options.processLimits,
-					processGroup: this.options.processGroup,
-				});
-			},
-			validate: (workspace) => {
-				const command = cargoCommand(
-					this.toolchainInfo!.cargoBin,
-					["build", "--release", "--offline", "-p", "cell"],
-					{
-						cwd: workspace,
+					onProgress?.("Preparing configured prelude dependencies...");
+					await configurePreludeExtra(
+						workspace,
+						extras,
+						this.toolchainInfo!.cargoBin,
+						context,
+						this.cargoSandbox,
+						this.options.processLimits,
+						this.options.processGroup,
+					);
+					await syncRustSkillsAsync(workspace, skills, context, {
+						cargoBin: this.toolchainInfo!.cargoBin,
 						cargoSandbox: this.cargoSandbox,
 						processLimits: this.options.processLimits,
 						processGroup: this.options.processGroup,
-					},
-				);
-				execFileSync(command.bin, command.args, {
-					cwd: workspace,
-					env: command.env,
-					stdio: "pipe",
-					timeout: 300_000,
-				});
+					});
+				},
+				validate: async (workspace) => {
+					const command = cargoCommand(
+						this.toolchainInfo!.cargoBin,
+						["build", "--release", "--offline", "-p", "cell"],
+						{
+							cwd: workspace,
+							cargoSandbox: this.cargoSandbox,
+							processLimits: this.options.processLimits,
+							processGroup: this.options.processGroup,
+						},
+					);
+					await withBuildPermit(() => context.exec(command, workspace), context.signal);
+				},
+				onProgress,
 			},
-			onProgress,
-		});
+			context,
+		);
+		context.check();
 		const rustSkills = withInheritedSkills(this.workspace, this.options.rustSkills ?? []);
 		for (const extra of extras) {
 			if (rustSkills.some((skill) => skill.crateName === extra.name.replaceAll("-", "_"))) {
@@ -320,7 +363,7 @@ export class RustCellProvisioner {
 		}
 		if (rustSkills.length > 0 || existsSync(join(this.workspace, ".skills-hash"))) {
 			onProgress?.("Mounting rust skills...");
-			const sync = syncRustSkills(this.workspace, rustSkills, {
+			const sync = await syncRustSkillsAsync(this.workspace, rustSkills, context, {
 				cargoBin: this.toolchainInfo.cargoBin,
 				cargoSandbox: this.cargoSandbox,
 				processLimits: this.options.processLimits,
@@ -331,7 +374,9 @@ export class RustCellProvisioner {
 			}
 		}
 		const history = this.options.workspaceDir ? new WorkspaceHistory(this.workspace) : undefined;
+		context.check();
 		history?.ensure();
+		context.check();
 		if (!this.bridgeServer) {
 			this.bridgeServer = new BridgeServer({
 				handlers: {

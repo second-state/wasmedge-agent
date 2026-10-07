@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type CargoSandbox, cargoCommand } from "./cargo-sandbox.js";
 import type { ProcessResourceGroup } from "./process-group.js";
 import type { ProcessLimits } from "./process-limits.js";
+import type { ProvisioningContext } from "./provisioning.js";
 
 export interface PreludeExtra {
 	name: string;
@@ -114,14 +114,16 @@ export function preludeConfigurationHash(extras: PreludeExtra[]): string | undef
 	return extras.length ? createHash("sha256").update(JSON.stringify(extras)).digest("hex") : undefined;
 }
 
-export function configurePreludeExtra(
+export async function configurePreludeExtra(
 	workspace: string,
 	extras: PreludeExtra[],
 	cargoBin: string,
+	context: ProvisioningContext,
 	cargoSandbox?: CargoSandbox,
 	processLimits?: ProcessLimits | null,
 	processGroup?: ProcessResourceGroup | null,
-): void {
+): Promise<void> {
+	context.check();
 	writePreludeExtra(workspace, extras);
 	if (!extras.length) return;
 	// cargo vendor ignores source replacement by default, resolving new crates
@@ -133,10 +135,5 @@ export function configurePreludeExtra(
 		processGroup,
 		network: true,
 	});
-	execFileSync(command.bin, command.args, {
-		cwd: workspace,
-		env: command.env,
-		stdio: "pipe",
-		timeout: 300_000,
-	});
+	await context.exec(command, workspace);
 }
