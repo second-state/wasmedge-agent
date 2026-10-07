@@ -1,19 +1,9 @@
 import { createHash } from "node:crypto";
-import {
-	constants,
-	cpSync,
-	existsSync,
-	lstatSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { ProvisioningContext } from "./provisioning.js";
-import { ensureWorkspaceAt } from "./workspace.js";
+import { copyWorkspacePath, hashWorkspaceFile } from "./workspace-files.js";
 
 export const WORKSPACE_VERSION_FILE = ".workspace-version";
 const HOST_PATHS = [".cargo/config.toml", "Cargo.toml", "Cargo.lock", "agent_lib/Cargo.toml", "cell/Cargo.toml", "rlm"];
@@ -38,42 +28,42 @@ interface WorkspaceVersionOptions {
 	/** Identity of user-selected scaffold dependencies. */
 	configurationHash?: string;
 	/** Regenerate dependencies and skill mounts in the staged workspace. */
-	configure: (workspace: string) => void;
+	configure: (workspace: string) => void | Promise<void>;
 	/** Compile only; never execute the retained cell during an upgrade. */
-	validate: (workspace: string) => void;
+	validate: (workspace: string) => void | Promise<void>;
 	onProgress?: (message: string) => void;
 }
 
-type AsyncWorkspaceVersionOptions = Omit<WorkspaceVersionOptions, "configure" | "validate"> & {
-	configure: (workspace: string) => Promise<void>;
-	validate: (workspace: string) => Promise<void>;
-};
-
-function hashFile(path: string): string {
-	return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
-function fileHashes(root: string, paths: string[]): Record<string, string> {
+async function fileHashes(
+	root: string,
+	paths: string[],
+	context: ProvisioningContext,
+): Promise<Record<string, string>> {
 	const result: Record<string, string> = {};
-	function visit(path: string): void {
-		const stat = lstatSync(join(root, path), { throwIfNoEntry: false });
+	async function visit(path: string): Promise<void> {
+		context.check();
+		const fullPath = join(root, path);
+		const stat = await lstat(fullPath).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
 		if (!stat) return;
 		if (stat.isDirectory()) {
-			for (const name of readdirSync(join(root, path)).sort()) {
-				if (!["target", "vendor", ".git"].includes(name)) visit(`${path}/${name}`);
+			for (const name of (await readdir(fullPath)).sort()) {
+				if (!["target", "vendor", ".git"].includes(name)) await visit(`${path}/${name}`);
 			}
 		} else if (stat.isFile()) {
-			result[path] = hashFile(join(root, path));
+			result[path] = await hashWorkspaceFile(fullPath, context);
 		} else {
 			throw new Error(`Template scaffold must contain regular files: ${path}`);
 		}
 	}
-	for (const path of paths) visit(path);
+	for (const path of paths) await visit(path);
 	return result;
 }
 
-function versionFor(options: Omit<WorkspaceVersionOptions, "configure" | "validate">): WorkspaceVersion {
-	const files = fileHashes(options.templateDir, [...HOST_PATHS, "agent_lib/src", "cell/src"]);
+async function versionFor(options: WorkspaceVersionOptions, context: ProvisioningContext): Promise<WorkspaceVersion> {
+	const files = await fileHashes(options.templateDir, [...HOST_PATHS, "agent_lib/src", "cell/src"], context);
 	const digest = (entries: Record<string, string>) =>
 		createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 	return {
@@ -118,21 +108,12 @@ function readVersion(workspace: string): WorkspaceVersion | undefined {
 	}
 }
 
-function copy(source: string, destination: string): void {
-	cpSync(source, destination, {
-		recursive: true,
-		preserveTimestamps: true,
-		verbatimSymlinks: true,
-		mode: constants.COPYFILE_FICLONE,
-	});
-}
-
 function transactionDir(workspace: string): string {
 	return join(dirname(workspace), `.${basename(workspace)}.upgrade`);
 }
 
 /** Recover the two-rename publication if its owner exited between steps. */
-export function recoverWorkspaceUpgrade(workspace: string): void {
+export async function recoverWorkspaceUpgrade(workspace: string): Promise<void> {
 	const transaction = transactionDir(workspace);
 	if (!existsSync(transaction)) return;
 	const owner = JSON.parse(readFileSync(join(transaction, "owner.json"), "utf-8")) as { pid?: number };
@@ -149,7 +130,7 @@ export function recoverWorkspaceUpgrade(workspace: string): void {
 	}
 	const previous = join(transaction, "previous");
 	if (existsSync(previous) && !existsSync(workspace)) renameSync(previous, workspace);
-	rmSync(transaction, { recursive: true, force: true });
+	await rm(transaction, { recursive: true, force: true });
 }
 
 function writeVersion(workspace: string, version: WorkspaceVersion): void {
@@ -158,14 +139,16 @@ function writeVersion(workspace: string, version: WorkspaceVersion): void {
 	renameSync(`${path}.tmp`, path);
 }
 
-function updateSources(
+async function updateSources(
 	staged: string,
 	template: string,
 	previous: WorkspaceVersion | undefined,
 	next: WorkspaceVersion,
-): void {
+	context: ProvisioningContext,
+): Promise<void> {
 	const paths = new Set([...Object.keys(previous?.sourceHashes ?? {}), ...Object.keys(next.sourceHashes)]);
 	for (const path of paths) {
+		context.check();
 		const destination = join(staged, path);
 		let parent = dirname(destination);
 		let linked = false;
@@ -177,127 +160,120 @@ function updateSources(
 		const stat = lstatSync(destination, { throwIfNoEntry: false });
 		// Helpers are user-owned, and skills/mod.rs is regenerated by configure.
 		if (path.startsWith(`${SOURCE_DIR}helpers/`) || path.startsWith(`${SOURCE_DIR}skills/`)) continue;
-		if (stat && (!stat.isFile() || hashFile(destination) !== previous?.sourceHashes[path])) continue;
+		if (stat && (!stat.isFile() || (await hashWorkspaceFile(destination, context)) !== previous?.sourceHashes[path]))
+			continue;
 		if (!stat && previous?.sourceHashes[path]) continue; // Preserve user deletions.
-		rmSync(destination, { force: true });
-		if (next.sourceHashes[path]) copy(join(template, path), destination);
+		await rm(destination, { force: true });
+		if (next.sourceHashes[path]) await copyWorkspacePath(join(template, path), destination, context);
 	}
 }
 
-/** Refresh scaffold in a separate tree; the existing workspace stays intact
- * until its retained cell and library compile against the new runtime. */
-export function prepareVersionedWorkspace(dir: string, options: WorkspaceVersionOptions): void {
-	const upgrade = stageWorkspaceUpgrade(dir, options);
-	const staged = upgrade.next();
-	if (staged.done) return;
-	try {
-		options.configure(staged.value);
-		options.validate(staged.value);
-	} catch (error) {
-		upgrade.throw(error);
-	}
-	upgrade.next();
-}
-
-export async function prepareVersionedWorkspaceAsync(
-	dir: string,
-	options: AsyncWorkspaceVersionOptions,
-	context: ProvisioningContext,
-): Promise<void> {
-	context.check();
-	const upgrade = stageWorkspaceUpgrade(dir, options);
-	const staged = upgrade.next();
-	if (staged.done) {
-		context.check();
-		return;
-	}
-	try {
-		context.check();
-		await options.configure(staged.value);
-		context.check();
-		await options.validate(staged.value);
-		context.check();
-	} catch (error) {
-		upgrade.throw(error);
-	}
-	upgrade.next();
-}
-
-/** Yield the staged tree for validation, keeping publication and rollback
- * identical for synchronous maintenance and asynchronous runtime startup. */
-function* stageWorkspaceUpgrade(
-	dir: string,
-	options: Omit<WorkspaceVersionOptions, "configure" | "validate">,
-): Generator<string, void, void> {
-	const workspace = resolve(dir);
-	recoverWorkspaceUpgrade(workspace);
-	const fresh = !existsSync(join(workspace, "Cargo.toml")) && !options.initialWorkspaceDir;
-	ensureWorkspaceAt(workspace, options.initialWorkspaceDir ?? options.templateDir);
-	const next = versionFor(options);
-	const previous = readVersion(workspace);
-	if (
-		previous &&
+function matches(previous: WorkspaceVersion | undefined, next: WorkspaceVersion): boolean {
+	return (
+		!!previous &&
 		previous.templateHash === next.templateHash &&
 		previous.configurationHash === next.configurationHash &&
 		previous.rustcVersion === next.rustcVersion &&
 		previous.wasmedgeVersion === next.wasmedgeVersion
-	)
-		return;
-	if (fresh && !options.configurationHash) {
-		writeVersion(workspace, next);
-		return;
+	);
+}
+
+function assertScaffoldDirectories(staged: string): void {
+	for (const path of [
+		".cargo",
+		"agent_lib",
+		"agent_lib/src",
+		"agent_lib/src/skills",
+		"agent_lib/src/skills/mod.rs",
+		"agent_lib/src/prelude_extra.rs",
+		"agent_lib/src/lib.rs",
+		"agent_lib/src/prelude.rs",
+		"cell",
+		"skills",
+	]) {
+		if (lstatSync(join(staged, path), { throwIfNoEntry: false })?.isSymbolicLink()) {
+			throw new Error(`Cannot upgrade a symlinked scaffold directory: ${path}`);
+		}
 	}
-	options.onProgress?.("Upgrading the cell workspace scaffold...");
+}
+
+/** Prepare both initial clones and upgrades away from the live workspace. */
+export async function prepareVersionedWorkspaceAsync(
+	dir: string,
+	options: WorkspaceVersionOptions,
+	context: ProvisioningContext,
+): Promise<void> {
+	context.check();
+	const workspace = resolve(dir);
+	await recoverWorkspaceUpgrade(workspace);
+	context.check();
+	const root = lstatSync(workspace, { throwIfNoEntry: false });
+	if (root && (!root.isDirectory() || root.isSymbolicLink())) {
+		throw new Error(`Session workspace must be a directory, not a link: ${workspace}`);
+	}
+	const provisioned = existsSync(join(workspace, "Cargo.toml"));
+	let previous = provisioned ? readVersion(workspace) : undefined;
+	const next = await versionFor(options, context);
+	context.check();
+	if (provisioned && matches(previous, next)) return;
+
+	options.onProgress?.(provisioned ? "Upgrading the cell workspace scaffold..." : "Cloning the cell workspace...");
+	await mkdir(dirname(workspace), { recursive: true });
+	context.check();
 	const transaction = transactionDir(workspace);
 	mkdirSync(transaction);
 	writeFileSync(join(transaction, "owner.json"), JSON.stringify({ pid: process.pid }));
 	const staged = join(transaction, "next");
 	const backup = join(transaction, "previous");
 	try {
-		const retainedLock =
-			next.configurationHash &&
-			previous?.configurationHash === next.configurationHash &&
-			existsSync(join(workspace, "Cargo.lock"))
-				? readFileSync(join(workspace, "Cargo.lock"))
-				: undefined;
-		cpSync(workspace, staged, {
-			recursive: true,
-			preserveTimestamps: true,
-			verbatimSymlinks: true,
-			mode: constants.COPYFILE_FICLONE,
-			filter: (path) => !["target", "vendor"].includes(relative(workspace, path)),
-		});
-		for (const path of [
-			".cargo",
-			"agent_lib",
-			"agent_lib/src",
-			"agent_lib/src/skills",
-			"agent_lib/src/skills/mod.rs",
-			"agent_lib/src/prelude_extra.rs",
-			"agent_lib/src/lib.rs",
-			"agent_lib/src/prelude.rs",
-			"cell",
-			"skills",
-		]) {
-			if (lstatSync(join(staged, path), { throwIfNoEntry: false })?.isSymbolicLink()) {
-				throw new Error(`Cannot upgrade a symlinked scaffold directory: ${path}`);
+		if (root) {
+			await copyWorkspacePath(
+				workspace,
+				staged,
+				context,
+				(path) => !provisioned || !["target", "vendor"].includes(relative(workspace, path)),
+			);
+		}
+		if (!provisioned) {
+			if (root) assertScaffoldDirectories(staged);
+			const source = await realpath(options.initialWorkspaceDir ?? options.templateDir);
+			if (!existsSync(join(source, "Cargo.toml"))) throw new Error(`Workspace source has no Cargo.toml: ${source}`);
+			await copyWorkspacePath(source, staged, context);
+			previous = readVersion(staged);
+		}
+		const fresh = !provisioned && !options.initialWorkspaceDir;
+		if (!(fresh && !options.configurationHash) && !matches(previous, next)) {
+			const retainedLock =
+				next.configurationHash &&
+				previous?.configurationHash === next.configurationHash &&
+				existsSync(join(staged, "Cargo.lock"))
+					? await readFile(join(staged, "Cargo.lock"))
+					: undefined;
+			assertScaffoldDirectories(staged);
+			for (const path of [...HOST_PATHS, "vendor", "target"]) {
+				context.check();
+				await rm(join(staged, path), { recursive: true, force: true });
+				if (existsSync(join(options.templateDir, path))) {
+					await copyWorkspacePath(join(options.templateDir, path), join(staged, path), context);
+				}
 			}
+			await updateSources(staged, options.templateDir, previous, next, context);
+			if (retainedLock) await writeFile(join(staged, "Cargo.lock"), retainedLock);
+			await rm(join(staged, ".skills-hash"), { force: true });
+			context.check();
+			await options.configure(staged);
+			context.check();
+			await options.validate(staged);
 		}
-		for (const path of [...HOST_PATHS, "vendor", "target"]) {
-			rmSync(join(staged, path), { recursive: true, force: true });
-			if (existsSync(join(options.templateDir, path))) copy(join(options.templateDir, path), join(staged, path));
-		}
-		updateSources(staged, options.templateDir, previous, next);
-		if (retainedLock) writeFileSync(join(staged, "Cargo.lock"), retainedLock);
-		rmSync(join(staged, ".skills-hash"), { force: true });
-		yield staged;
+		context.check();
+		// Keep publication synchronous: no other host task observes the gap between renames.
 		writeVersion(staged, next);
-		renameSync(workspace, backup);
+		if (root) renameSync(workspace, backup);
 		renameSync(staged, workspace);
 	} catch (error) {
 		if (existsSync(backup) && !existsSync(workspace)) renameSync(backup, workspace);
 		throw new Error(
-			`Workspace upgrade failed; original workspace retained at ${workspace}: ${error instanceof Error ? error.message : String(error)}`,
+			`Workspace ${provisioned ? "upgrade failed; original workspace retained" : "creation failed; destination unchanged"} at ${workspace}: ${error instanceof Error ? error.message : String(error)}`,
 			{ cause: error },
 		);
 	} finally {
@@ -305,7 +281,9 @@ function* stageWorkspaceUpgrade(
 			// Leave a recoverable journal if restoring the original also failed.
 			writeFileSync(join(transaction, "owner.json"), JSON.stringify({ pid: 0 }));
 		} else {
-			rmSync(transaction, { recursive: true, force: true });
+			await rm(transaction, { recursive: true, force: true }).finally(() => {
+				if (existsSync(transaction)) writeFileSync(join(transaction, "owner.json"), JSON.stringify({ pid: 0 }));
+			});
 		}
 	}
 }

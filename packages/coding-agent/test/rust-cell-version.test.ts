@@ -13,13 +13,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ProvisioningContext } from "../src/core/rust-cell/provisioning.js";
 import { rustcVersion } from "../src/core/rust-cell/toolchain.js";
+import * as workspaceFiles from "../src/core/rust-cell/workspace-files.js";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
-import { prepareVersionedWorkspace, WORKSPACE_VERSION_FILE } from "../src/core/rust-cell/workspace-version.js";
+import { prepareVersionedWorkspaceAsync, WORKSPACE_VERSION_FILE } from "../src/core/rust-cell/workspace-version.js";
 
 describe("workspace scaffold upgrades", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
+		vi.restoreAllMocks();
 		vi.unstubAllEnvs();
 		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
@@ -58,7 +61,17 @@ describe("workspace scaffold upgrades", () => {
 			configure,
 			validate,
 		};
-		const prepare = () => prepareVersionedWorkspace(workspace, options);
+		const prepare = async (
+			overrides: Partial<Parameters<typeof prepareVersionedWorkspaceAsync>[1]> = {},
+			signal = new AbortController().signal,
+		) => {
+			const context = new ProvisioningContext(signal, 10_000);
+			try {
+				await prepareVersionedWorkspaceAsync(workspace, { ...options, ...overrides }, context);
+			} finally {
+				context.dispose();
+			}
+		};
 		const read = (path: string) => readFileSync(join(workspace, path), "utf-8");
 		const marker = () => JSON.parse(read(WORKSPACE_VERSION_FILE));
 		return {
@@ -74,12 +87,12 @@ describe("workspace scaffold upgrades", () => {
 		};
 	}
 
-	it("marks fresh workspaces and leaves matching versions untouched", () => {
+	it("marks fresh workspaces and leaves matching versions untouched", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		const marker = f.read(WORKSPACE_VERSION_FILE);
 		f.write(f.workspace, "agent_lib/src/helpers/custom.rs", "custom");
-		f.prepare();
+		await f.prepare();
 		expect(f.read(WORKSPACE_VERSION_FILE)).toBe(marker);
 		expect(f.marker()).toMatchObject({ schema: 1, rustcVersion: "rustc-v1", wasmedgeVersion: "wasmedge-v1" });
 		expect(f.options.validate).not.toHaveBeenCalled();
@@ -91,7 +104,7 @@ describe("workspace scaffold upgrades", () => {
 		f.write(f.template, "agent_lib/src/obsolete.rs", "obsolete");
 		f.write(f.template, "agent_lib/src/deleted.rs", "deleted by user");
 		f.write(f.template, "rlm/src/obsolete.rs", "old runtime file");
-		f.prepare();
+		await f.prepare();
 		const old = f.marker();
 		for (const path of [
 			"agent_lib/src/prelude.rs",
@@ -127,7 +140,7 @@ describe("workspace scaffold upgrades", () => {
 			expect(f.read("rlm/src/lib.rs")).toBe("runtime-v1");
 			expect(readFileSync(join(staged, "rlm/src/lib.rs"), "utf-8")).toBe("new rlm/src/lib.rs");
 		});
-		f.prepare();
+		await f.prepare();
 		expect(f.options.configure).toHaveBeenCalledOnce();
 		expect(f.options.validate).toHaveBeenCalledOnce();
 		expect(f.read("agent_lib/src/lib.rs")).toBe("new agent_lib/src/lib.rs");
@@ -152,56 +165,56 @@ describe("workspace scaffold upgrades", () => {
 		expect(existsSync(f.transaction)).toBe(false);
 	});
 
-	it.each(["rustcVersion", "wasmedgeVersion"] as const)("revalidates a changed %s", (field) => {
+	it.each(["rustcVersion", "wasmedgeVersion"] as const)("revalidates a changed %s", async (field) => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		f.options[field] = "v2";
-		f.prepare();
+		await f.prepare();
 		expect(f.options.validate).toHaveBeenCalledOnce();
 		expect(f.marker()[field]).toBe("v2");
 	});
 
-	it("migrates unmarked workspaces conservatively, retaining legacy library sources", () => {
+	it("migrates unmarked workspaces conservatively, retaining legacy library sources", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		rmSync(join(f.workspace, WORKSPACE_VERSION_FILE));
 		f.write(f.template, "agent_lib/src/prelude.rs", "new prelude");
 		f.write(f.template, "rlm/src/lib.rs", "new runtime");
-		f.prepare();
+		await f.prepare();
 		expect(f.read("agent_lib/src/prelude.rs")).toBe("prelude-v1");
 		expect(f.read("rlm/src/lib.rs")).toBe("new runtime");
 		expect(f.options.validate).toHaveBeenCalledOnce();
 	});
 
-	it("keeps the original tree and marker after a failed build, then permits retry", () => {
+	it("keeps the original tree and marker after a failed build, then permits retry", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		const marker = f.read(WORKSPACE_VERSION_FILE);
 		f.write(f.workspace, "state/state.json", "precious");
 		f.write(f.template, "rlm/src/lib.rs", "new runtime");
 		f.options.validate.mockImplementationOnce(() => {
 			throw new Error("compiler diagnostics");
 		});
-		expect(f.prepare).toThrow(/original workspace retained.*compiler diagnostics/);
+		await expect(f.prepare()).rejects.toThrow(/original workspace retained.*compiler diagnostics/);
 		expect(f.read(WORKSPACE_VERSION_FILE)).toBe(marker);
 		expect(f.read("rlm/src/lib.rs")).toBe("runtime-v1");
 		expect(f.read("state/state.json")).toBe("precious");
 		expect(existsSync(f.transaction)).toBe(false);
-		f.prepare();
+		await f.prepare();
 		expect(f.read("rlm/src/lib.rs")).toBe("new runtime");
 	});
 
-	it("rejects an invalid marker without replacing source", () => {
+	it("rejects an invalid marker without replacing source", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		f.write(f.workspace, WORKSPACE_VERSION_FILE, '{"schema":2}');
-		expect(f.prepare).toThrow(/Cannot read/);
+		await expect(f.prepare()).rejects.toThrow(/Cannot read/);
 		expect(f.read(WORKSPACE_VERSION_FILE)).toBe('{"schema":2}');
 	});
 
-	it.each([false, true])("recovers interrupted publication (new workspace published: %s)", (published) => {
+	it.each([false, true])("recovers interrupted publication (new workspace published: %s)", async (published) => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		mkdirSync(f.transaction);
 		f.write(f.transaction, "owner.json", JSON.stringify({ pid: 0 }));
 		renameSync(f.workspace, join(f.transaction, "previous"));
@@ -209,42 +222,42 @@ describe("workspace scaffold upgrades", () => {
 			cpSync(join(f.transaction, "previous"), f.workspace, { recursive: true });
 			f.write(f.workspace, "state/state.json", "new state");
 		}
-		f.prepare();
+		await f.prepare();
 		expect(f.read("rlm/src/lib.rs")).toBe("runtime-v1");
 		if (published) expect(f.read("state/state.json")).toBe("new state");
 		expect(existsSync(f.transaction)).toBe(false);
 	});
 
-	it("does not steal an active upgrade", () => {
+	it("does not steal an active upgrade", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		mkdirSync(f.transaction);
 		f.write(f.transaction, "owner.json", JSON.stringify({ pid: process.pid }));
-		expect(f.prepare).toThrow(/already running/);
+		await expect(f.prepare()).rejects.toThrow(/already running/);
 		expect(existsSync(f.transaction)).toBe(true);
 	});
 
-	it("carries an older inherited seed through the same upgrade", () => {
+	it("carries an older inherited seed through the same upgrade", async () => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		f.write(f.workspace, "agent_lib/src/helpers/custom.rs", "inherited helper");
 		renameSync(f.workspace, join(f.root, "seed"));
 		f.write(f.template, "rlm/src/lib.rs", "new runtime");
-		prepareVersionedWorkspace(f.workspace, { ...f.options, initialWorkspaceDir: join(f.root, "seed") });
+		await f.prepare({ initialWorkspaceDir: join(f.root, "seed") });
 		expect(f.read("agent_lib/src/helpers/custom.rs")).toBe("inherited helper");
 		expect(f.read("rlm/src/lib.rs")).toBe("new runtime");
 		expect(readFileSync(join(f.root, "seed/rlm/src/lib.rs"), "utf-8")).toBe("runtime-v1");
 	});
 
-	it.each(["agent_lib/src", "skills"])("does not write through symlinked %s into external data", (path) => {
+	it.each(["agent_lib/src", "skills"])("does not write through symlinked %s into external data", async (path) => {
 		const f = fixture();
-		f.prepare();
+		await f.prepare();
 		f.write(f.workspace, `${path}/keep.txt`, "external data");
 		const external = join(f.root, "external");
 		renameSync(join(f.workspace, path), external);
 		symlinkSync(external, join(f.workspace, path));
 		f.write(f.template, "agent_lib/src/lib.rs", "new library");
-		expect(f.prepare).toThrow(/symlinked scaffold/);
+		await expect(f.prepare()).rejects.toThrow(/symlinked scaffold/);
 		expect(readFileSync(join(external, "keep.txt"), "utf-8")).toBe("external data");
 	});
 
@@ -257,5 +270,114 @@ describe("workspace scaffold upgrades", () => {
 		vi.stubEnv("RUSTC", join(f.root, "override"));
 		writeFileSync(join(f.root, "override"), '#!/bin/sh\necho "override compiler"\n', { mode: 0o755 });
 		expect(rustcVersion(join(f.root, "cargo"), f.root)).toBe("override compiler");
+	});
+
+	it.each([false, true])(
+		"cancels initial copying without publishing a partial workspace (existing directory: %s)",
+		async (existing) => {
+			const f = fixture();
+			if (existing) f.write(f.workspace, "notes.txt", "keep me");
+			const controller = new AbortController();
+			const copy = workspaceFiles.copyWorkspacePath;
+			vi.spyOn(workspaceFiles, "copyWorkspacePath").mockImplementation(
+				async (source, destination, context, filter) => {
+					await copy(source, destination, context, (path) => {
+						if (path.endsWith("/target/cache")) controller.abort(new Error("copy cancelled"));
+						return filter?.(path) ?? true;
+					});
+				},
+			);
+			await expect(f.prepare({}, controller.signal)).rejects.toThrow(/destination unchanged.*copy cancelled/);
+			expect(existsSync(join(f.workspace, "Cargo.toml"))).toBe(false);
+			expect(existsSync(f.transaction)).toBe(false);
+			if (existing) expect(f.read("notes.txt")).toBe("keep me");
+			else expect(existsSync(f.workspace)).toBe(false);
+			vi.restoreAllMocks();
+			await f.prepare();
+			expect(f.read("target/cache")).toBe("cache-v1");
+			expect(f.marker().schema).toBe(1);
+		},
+	);
+
+	it("retains the original workspace and waits for copying to drain after cancellation", async () => {
+		const f = fixture();
+		await f.prepare();
+		const marker = f.read(WORKSPACE_VERSION_FILE);
+		f.write(f.workspace, "state/state.json", "precious");
+		f.write(f.template, "rlm/src/lib.rs", "new runtime");
+		const controller = new AbortController();
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const copy = workspaceFiles.copyWorkspacePath;
+		let copying = false;
+		vi.spyOn(workspaceFiles, "copyWorkspacePath").mockImplementationOnce(async (...args) => {
+			await copy(...args);
+			copying = true;
+			await draining;
+			args[2].check();
+		});
+		let settled = false;
+		const pending = f
+			.prepare({}, controller.signal)
+			.catch((error: unknown) => error)
+			.finally(() => {
+				settled = true;
+			});
+		try {
+			await vi.waitFor(() => expect(copying).toBe(true));
+			controller.abort(new Error("upgrade cancelled"));
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(settled).toBe(false);
+			expect(existsSync(f.transaction)).toBe(true);
+			expect(f.read(WORKSPACE_VERSION_FILE)).toBe(marker);
+		} finally {
+			release();
+		}
+		expect(String(await pending)).toMatch(/original workspace retained.*upgrade cancelled/);
+		expect(existsSync(f.transaction)).toBe(false);
+		expect(f.read("state/state.json")).toBe("precious");
+		expect(f.read("rlm/src/lib.rs")).toBe("runtime-v1");
+		await f.prepare();
+		expect(f.read("rlm/src/lib.rs")).toBe("new runtime");
+	});
+
+	it("leaves a fresh destination unchanged if configured dependency validation fails", async () => {
+		const f = fixture();
+		f.write(f.workspace, "notes.txt", "keep me");
+		await expect(
+			f.prepare({
+				configurationHash: "configured-deps",
+				validate: vi.fn(() => {
+					throw new Error("bad dependency");
+				}),
+			}),
+		).rejects.toThrow(/destination unchanged.*bad dependency/);
+		expect(f.read("notes.txt")).toBe("keep me");
+		expect(existsSync(join(f.workspace, "Cargo.toml"))).toBe(false);
+		expect(existsSync(f.transaction)).toBe(false);
+	});
+
+	it("reuses a matching inherited workspace including its cache", async () => {
+		const f = fixture();
+		await f.prepare();
+		const marker = f.read(WORKSPACE_VERSION_FILE);
+		f.write(f.workspace, "target/cache", "seed cache");
+		const seed = join(f.root, "seed");
+		renameSync(f.workspace, seed);
+		await f.prepare({ initialWorkspaceDir: seed });
+		expect(f.read(WORKSPACE_VERSION_FILE)).toBe(marker);
+		expect(f.read("target/cache")).toBe("seed cache");
+		expect(f.options.validate).not.toHaveBeenCalled();
+	});
+
+	it("recovers an abandoned initial clone before retrying", async () => {
+		const f = fixture();
+		f.write(f.transaction, "owner.json", JSON.stringify({ pid: 0 }));
+		f.write(f.transaction, "next/Cargo.toml", "incomplete");
+		await f.prepare();
+		expect(f.read("rlm/src/lib.rs")).toBe("runtime-v1");
+		expect(existsSync(f.transaction)).toBe(false);
 	});
 });

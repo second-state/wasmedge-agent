@@ -60,7 +60,7 @@ Optional `rustCell.cellGasLimit` and `rustCell.cellMemoryPageLimit` settings are
 
 ## Workspace Lifecycle
 
-The guest workspace is cloned per session from a prebuilt template (`wasmedge-agent-runtime/template`): a cargo workspace holding `agent_lib` (the model-extendable prelude), `cell` (the compilation target), and `rlm` (the host-bridge shim). The template is vendored (`vendor/` + a committed crates-io redirect) and warm-built once — at install time or on first use — so clones build cells offline in seconds; on macOS the clone uses clonefile and carries the compiled `target/` for free.
+The guest workspace is cloned per session from a prebuilt template (`wasmedge-agent-runtime/template`): a cargo workspace holding `agent_lib` (the model-extendable prelude), `cell` (the compilation target), and `rlm` (the host-bridge shim). The template is vendored (`vendor/` + a committed crates-io redirect) and warm-built once — at install time or on first use — so clones reuse vendored sources and the compiled `target/` for offline builds. Copying requests best-effort filesystem reflinks; support and cache reuse determine the actual cost.
 
 Users can extend this dependency set with [`rustCell.preludeExtra`](settings.md#rust-cells). The host adds exact-version crates.io dependencies to the session workspace and re-exports them as `agent_lib::prelude::extra::<crate>`. Preparation vendors and release-builds in the scaffold upgrade's staging tree; dependency or compilation errors retain the original workspace. Settings contribute to workspace identity, so unchanged sessions and child snapshots reuse their prepared dependencies without fetching. This does not change the shared template. The generated `agent_lib/src/prelude_extra.rs` module is host-managed and regenerated on scaffold upgrades.
 
@@ -440,10 +440,19 @@ publishes only on success. Successful template work remains cached if a later
 startup phase fails. There is no cross-process preparation lock; Cargo retains
 its own build locking.
 
-Host filesystem copying/hashing and systemd group setup remain synchronous.
-Cancellation/deadline checks surround those phases;
-they are not interrupted mid-call, so cleanup or a synchronous operation can
-extend elapsed time beyond the startup budget. Startup errors are reported by
+Initial workspace cloning and scaffold upgrades copy files asynchronously,
+checking cancellation between entries, and stream source hashes with an abort
+signal. Initial clones also stage beside the destination and publish only when
+complete; cancelled copies do not leave a partially provisioned workspace.
+Cancellation before publication retains the original workspace; cancellation
+during cleanup keeps the completed, published tree. Copying preserves file
+timestamps and literal symlinks and requests best-effort reflinks.
+
+Staging cleanup is asynchronous. Cancellation waits for the current filesystem
+call and open hash streams to finish before cleanup and retry; a single copy
+syscall cannot be interrupted. Small metadata operations, systemd group setup
+and other child/test/dependency snapshot paths still contain synchronous work.
+Cleanup and these operations can extend elapsed time beyond the startup budget. Startup errors are reported by
 the tool before a cell result exists. `doctor --fix` and installation keep their
 synchronous maintenance APIs.
 
