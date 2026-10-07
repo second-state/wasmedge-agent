@@ -155,7 +155,10 @@ process.exit(result.status ?? 1);
 			.map((line) => JSON.parse(line) as { args: string[]; cwd: string });
 		expect(calls).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ args: ["vendor", "--locked", join(coldTemplate, "vendor.tmp")] }),
+				expect.objectContaining({
+					args: ["vendor", "--locked", expect.stringContaining(join(coldTemplate, "vendor.tmp-"))],
+					cwd: coldTemplate,
+				}),
 				expect.objectContaining({ args: ["build", "--release", "-p", "cell"], cwd: coldTemplate }),
 				expect.objectContaining({ args: ["vendor", "vendor"] }),
 				expect.objectContaining({ args: ["metadata", "--offline", "--format-version", "1"] }),

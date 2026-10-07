@@ -130,7 +130,7 @@ describe("session runtime lifecycle", () => {
 			finish = resolve;
 		});
 		vi.spyOn(previous, "dispose").mockReturnValue(stopped);
-		const resolveToolchain = vi.spyOn(toolchain, "resolveToolchain").mockImplementation(() => {
+		const resolveToolchain = vi.spyOn(toolchain, "resolveToolchainAsync").mockImplementation(() => {
 			throw new Error("startup reached");
 		});
 		try {

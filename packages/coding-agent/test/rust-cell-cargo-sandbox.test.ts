@@ -97,6 +97,23 @@ describe.skipIf(!available)("Bubblewrap with real Cargo", () => {
 		return { root, workspace, secret, run };
 	}
 
+	it("supports unique template vendor directories without widening writable paths", async () => {
+		const { workspace } = fixture();
+		const options = { cwd: workspace, cargoSandbox: "bubblewrap" as const, network: true };
+		const command = cargoCommand(findCargoBin(), ["vendor", join(workspace, "vendor.tmp-Ab123Z")], options);
+		const result = await runProcess(command.bin, command.args, {
+			cwd: workspace,
+			env: command.env,
+			timeoutMs: 60_000,
+		});
+		expect(result.exitCode, result.stderr).toBe(0);
+		for (const path of ["../vendor.tmp-Ab123Z", "vendor.tmp-Ab123Z/nested", "state", "vendor.tmp-long-name"]) {
+			expect(() => cargoCommand(findCargoBin(), ["vendor", path], options)).toThrow("vendor directory");
+		}
+		symlinkSync(workspace, join(workspace, "vendor.tmp-Zy987X"));
+		expect(() => cargoCommand(findCargoBin(), ["vendor", "vendor.tmp-Zy987X"], options)).toThrow("vendor directory");
+	});
+
 	it("rejects include_str outside the workspace even with a matching unsandboxed artifact", async () => {
 		const { workspace, secret, run } = fixture();
 		writeFileSync(

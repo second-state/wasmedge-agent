@@ -396,6 +396,38 @@ Runtime-managed Cargo processes receive an environment allowlist, including temp
 
 This prevents unlisted parent environment values from reaching compilation through ordinary inheritance. Without `cargoSandbox`, it does not isolate compiler filesystem access: `include_str!`, build scripts, and proc macros still have host permissions, and Cargo configuration files can supply environment values or credentials. Existing artifacts are not scrubbed. Do not treat this policy as a guarantee that model-generated code cannot obtain provider credentials.
 
+### Startup cancellation
+
+Runtime toolchain probes, template vendoring/builds, configured dependency
+vendoring, scaffold validation and skill compile probes run asynchronously.
+The `rust` tool forwards its abort signal during startup; runtime disposal also
+cancels startup and waits for subprocess exit and staged-workspace cleanup.
+Cancelled scaffold validation retains the original workspace. Cancelled skill
+probes do not classify skills as broken or cache incomplete validation.
+
+Each startup attempt has a five-minute budget, separate from `cellTimeoutMs`.
+It includes the predecessor-runtime barrier, template queue, probes and Cargo
+work. Startup builds share the ordinary cell-build concurrency limit; waiting
+for a permit consumes the startup budget and can be cancelled. SDK callers can override it with `provisionTimeoutMs` on
+`RustCellProvisioner` or `createRustTool`, and pass an `AbortSignal` as the second
+argument to `ensure(onProgress, signal)`. Cancelling any caller waiting on the
+same provisioner cancels the shared attempt, including prewarm; all callers
+wait for cleanup before it can be retried. Cancelling a provisioner queued for
+a different provisioner's template preparation does not cancel that owner.
+
+Template preparation is serialized within one host process and rechecks caches
+after acquiring ownership. Vendoring uses a unique temporary directory and
+publishes only on success. Successful template work remains cached if a later
+startup phase fails. There is no cross-process preparation lock; Cargo retains
+its own build locking.
+
+Host filesystem copying/hashing, local Git initialization and systemd group
+setup remain synchronous. Cancellation/deadline checks surround those phases;
+they are not interrupted mid-call, so cleanup or a synchronous operation can
+extend elapsed time beyond the startup budget. Startup errors are reported by
+the tool before a cell result exists. `doctor --fix` and installation keep their
+synchronous maintenance APIs.
+
 ### Cargo sandbox
 
 `rustCell.cargoSandbox: "bubblewrap"` is an opt-in Linux process sandbox, using
@@ -417,8 +449,8 @@ ordinary cells, skill/library test compilation, dependency resolution/builds
 and rustdoc generation. Compilation has a separate network namespace, PID/IPC/
 UTS namespaces, no capabilities, disabled nested user namespaces and a new
 session. Cancelling an asynchronous command kills its Bubblewrap supervisor;
-the PID namespace also terminates detached build descendants. Existing
-synchronous provisioning calls still cannot be interrupted mid-call.
+the PID namespace also terminates detached build descendants. Runtime startup
+Cargo commands participate in the same cancellation path.
 
 The filesystem starts empty and exposes:
 
@@ -505,8 +537,7 @@ Coverage includes template warmup/vendoring, scaffold and skill probe builds,
 cell compilation/execution, skill/library test builds and each Wasm test module,
 dependency updates, rustdoc and the inert readonly-mount probe. The Node host, source copying, toolchain/version
 probes, `doctor --fix`, installation and host bash/handlers remain outside these
-limits. Synchronous provisioning retains its existing cancellation behavior.
-Disk quotas are not implemented.
+limits. Disk quotas are not implemented.
 
 The shared policy is immutable for the live root's lifetime. Runtime reload,
 inline/hosted children, and daemon child rehydration retain the same group.
