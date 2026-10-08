@@ -16,13 +16,13 @@ was measured.
   files, hashes the selected template separately, and checks both at the end.
 - Template vendoring/warming happened before the campaign. Each repetition
   started a fresh persisted workspace; all successful cells attempted Git
-  snapshots. The fixed scenario order is in the [driver](../poc/bench/runtime.ts).
+  snapshots. The fixed scenario order is in the [driver](../../poc/bench/runtime.ts).
 - Gas/page limits and rustdoc queries were disabled; only the final scenario
   enabled the library test gate. Builds were offline. No other repository
   tests/builds were run concurrently with this campaign; host background load
   was not controlled.
 
-[Raw JSON: all 50 samples and environment](runtime-microbenchmark-2026-10-07.json)
+[Raw JSON: all 50 samples and environment](../runtime-microbenchmark-2026-10-07.json)
 has SHA-256 `aa5a8924dea830d4dac0bef7b907512efd1e59ee084542ce7dd74734e446885e`.
 The measured-source SHA-256 is
 `40908972a83666a048558b155428c4714f74e43336a2986ccd0c88668dd5b54d`.
@@ -74,10 +74,10 @@ fingerprints remained unchanged. This validates these small scenarios only.
   with one passing test, and includes test snapshot/build/run/cleanup costs.
 - Tool time includes provisioning; runner time excludes provisioning and the
   per-runner queue. All phase definitions are in the
-  [runtime documentation](../packages/coding-agent/docs/rlm-runtime.md#cell-timing).
+  [runtime documentation](../../packages/coding-agent/docs/rlm-runtime.md#cell-timing).
   Neither total includes model latency or subsequent transcript/UI processing.
 
-Reproduce with the [offline driver instructions](../poc/bench/README.md#runtime-microbenchmark).
+Reproduce with the [offline driver instructions](../../poc/bench/README.md#runtime-microbenchmark).
 These fixed-order samples on one host do not establish broad performance,
 concurrency behavior, a runtime-versus-diagnostics causal split, or improved
 model correctness. The formal multi-model benchmark remains to be rerun.

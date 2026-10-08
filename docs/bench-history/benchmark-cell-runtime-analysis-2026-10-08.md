@@ -14,7 +14,7 @@
 
 Rust 的 `cell.execution` 不含 Cargo、workspace 初始化、readonly probe、import admission 檢查、snapshot 與 bridge cleanup。它包含 process 啟動、module 載入與 VM 初始化、guest、stdout/stdio bridge、process 結束。Python 的啟動另列，不會每 cell 重做。因此這張圖量到的是產品實際每次 cell 的成本，不是只量兩種語言的程式本體。
 
-來源：[Rust execution boundary](../packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](../packages/coding-agent/src/core/rust-cell/process.ts)、[固定 revision 的 Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts)、[固定 revision 的 Python Rust host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs)。
+來源：[Rust execution boundary](../../packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](../../packages/coding-agent/src/core/rust-cell/process.ts)、[固定 revision 的 Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts)、[固定 revision 的 Python Rust host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs)。
 
 ## 2. 每 cell 固定成本：接近空程式仍需約 10 ms
 
@@ -54,11 +54,11 @@ Python 的 0 ms 是整數毫秒解析度，並非零成本。新補測 15 次的
 
 這個控制直接支持 interpreter 是 JSON/regex 路徑的主要慢因。AOT 仍有新 process 的成本；近空程式沒有因此降到常駐 Python 的水準。AOT 前置編譯分別耗時約 1.407 / 1.505 / 1.822 / 10.810 秒，短命且程式常變的 cell 不會免費得到這個改善。
 
-目前強制 interpreter 是 [DESIGN §2.4/2.7](../DESIGN.md#24-執行管線) 的 import admission 政策，用來避免 guest 夾帶的 AOT native payload 繞過檢查。本次只在本機可信 fixture 做 AOT 診斷；沒有更改產品旗標。若採 AOT，必須設計由 host 從已驗證 Wasm 產生、按內容識別的 artifact，不能只移除旗標。
+目前強制 interpreter 是 [DESIGN §2.4/2.7](../../DESIGN.md#24-執行管線) 的 import admission 政策，用來避免 guest 夾帶的 AOT native payload 繞過檢查。本次只在本機可信 fixture 做 AOT 診斷；沒有更改產品旗標。若採 AOT，必須設計由 host 從已驗證 Wasm 產生、按內容識別的 artifact，不能只移除旗標。
 
 ## 4. Bridge 的 5 ms polling 是可重現的延遲
 
-[guest bridge](../wasmedge-agent-runtime/template/rlm/src/bridge.rs#L34) 在 stdin 暫無回覆時 sleep 5 ms，之後才再讀。初次使用另需 hello/hello_ok；diff 也需要 emit/ack。即使 host 很快回覆，也可能在 guest sleep 期間等待。
+[guest bridge](../../wasmedge-agent-runtime/template/rlm/src/bridge.rs#L34) 在 stdin 暫無回覆時 sleep 5 ms，之後才再讀。初次使用另需 hello/hello_ok；diff 也需要 emit/ack。即使 host 很快回覆，也可能在 guest sleep 期間等待。
 
 只在診斷 workspace 副本將 polling 從 5 ms 改成 1 ms。兩模式交替，各 15 次；相同 handler/payload/assertions，全數通過：
 
@@ -80,7 +80,7 @@ Python 的 0 ms 是整數毫秒解析度，並非零成本。新補測 15 次的
 | E09 helper/state | 29.964、30.873、11.765 | 前兩個新 process 都重新 `Regex::new`、比對 log、讀寫 state；第三個無 regex，只載入 state/格式化檔案，接近啟動 floor |
 | E11 join/report | 9.455、11.604 | fixture 很小，兩次新 process 成本明顯；不能拿放大的 10,000 筆 JSON 診斷數字回填這筆 run |
 
-E09 的 `rlm::state` 使用 [state.json 的檔案讀寫](../wasmedge-agent-runtime/template/rlm/src/state.rs)，**沒有走 host bridge**。在新 15 次等義診斷中，regex 建立 4.347 ms、首次 captures/比對 3.399 ms、state 寫入 0.640 ms、讀 log 0.101 ms；獨立 state 寫讀為 0.582 / 0.132 ms。這些 phases 不是完整 guest partition，尚未細分 module 載入、配置/析構、輸出與其餘成本，不能把剩餘時間全部歸給單一階段。原付費 source 沒有 guest timers，無法追溯出精確 partition。
+E09 的 `rlm::state` 使用 [state.json 的檔案讀寫](../../wasmedge-agent-runtime/template/rlm/src/state.rs)，**沒有走 host bridge**。在新 15 次等義診斷中，regex 建立 4.347 ms、首次 captures/比對 3.399 ms、state 寫入 0.640 ms、讀 log 0.101 ms；獨立 state 寫讀為 0.582 / 0.132 ms。這些 phases 不是完整 guest partition，尚未細分 module 載入、配置/析構、輸出與其餘成本，不能把剩餘時間全部歸給單一階段。原付費 source 沒有 guest timers，無法追溯出精確 partition。
 
 各版本的 paid cells 與次數不同；例如 E09 Python 有更多 cells、imports/cache/memory API 與失敗修正。因此既有圖能回答這輪產品 trajectory 的 cell 成本，固定程式的診斷則回答機制。不同資料不能相減冒充原 run 的啟動或 guest 時間。
 

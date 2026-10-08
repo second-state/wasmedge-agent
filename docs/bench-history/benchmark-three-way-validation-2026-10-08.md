@@ -4,7 +4,7 @@ Runner、trace collector、runtime adapters 與可篩選 HTML/CSV 已實作。�
 
 協定修正：首輪 `three-way-opus55-smoke-01` 允許 native tools，WasmEdge 的 E03/E08/E11 只走 bash；這些結果不能回答 Python cell/runtime 對 Rust cell/Wasm runtime 的問題。其原始資料保留，但整輪排除於 cell 對照。下方舊圖形與扣除驗證數字是修正前的歷史紀錄；目前重新生成的舊報表已顯示排除原因。新實驗改為每回合強制 cell、禁止 shell 委派，並把共同 checker 時間獨立列出。
 
-操作方式見 [runner README](../poc/bench/three-way/README.md)，完整設計見 [實驗設計](benchmark-three-way-design-2026-10-08.md)。結論、圖表與重要數據見 [單檔統整報告](rust-cell-report-2026-10-08.html)。歷史 dashboard、CSV、診斷、PNG、provider requests、SSE、sessions 與生成的任務產出保留於本機。
+操作方式見 [runner README](../../poc/bench/three-way/README.md)，完整設計見 [實驗設計](../benchmark-three-way-design-2026-10-08.md)。結論、圖表與重要數據見 [單檔統整報告](../rust-cell-report-2026-10-08.html)。歷史 dashboard、CSV、診斷、PNG、provider requests、SSE、sessions 與生成的任務產出保留於本機。
 
 ## 固定輸入
 

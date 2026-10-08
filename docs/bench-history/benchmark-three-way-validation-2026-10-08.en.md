@@ -4,7 +4,7 @@ The runner, trace collector, runtime adapters, and offline HTML/CSV reports are 
 
 The first paid campaign allowed native tools. WasmEdge E03/E08/E11 used only bash. Those runs cannot answer the Python-cell versus Rust/Wasm-cell question. Their raw records remain saved, but they are excluded from cell comparisons. Later tests require a successful cell in every task turn, prohibit shell delegation, and time the shared checker separately. Earlier chart and deduction checks below are historical records of earlier report versions.
 
-See the [runner instructions](../poc/bench/three-way/README.en.md), [protocol](benchmark-three-way-design-2026-10-08.en.md), and [current consolidated report](rust-cell-report-2026-10-08.en.md). The standalone report includes conclusions, charts, and key tables. Historical dashboards, CSV tables, diagnostics, PNG screenshots, provider requests, SSE, sessions, and generated task outputs remain local.
+See the [runner instructions](../../poc/bench/three-way/README.en.md), [protocol](../benchmark-three-way-design-2026-10-08.en.md), and [current consolidated report](../rust-cell-report-2026-10-08.en.md). The standalone report includes conclusions, charts, and key tables. Historical dashboards, CSV tables, diagnostics, PNG screenshots, provider requests, SSE, sessions, and generated task outputs remain local.
 
 ## Fixed inputs
 
@@ -158,4 +158,4 @@ Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. P
 
 Fixed-program controls used two warmups and 15 measured samples per group. The main diagnosis saved 272 Rust/process and 136 Python samples. Same-artifact interpreter/AOT controls saved 136 more. They identified new-process cost, interpreter JSON/regex cost, and bridge polling delay. E09 state used files, not the bridge. AOT and 1 ms polling were then diagnostic copies. [Full diagnosis](benchmark-cell-runtime-analysis-2026-10-08.en.md).
 
-Later, production readiness reads and trusted host AOT were added. Those four-way campaigns have separate evidence and test counts. See the [AOT/bridge report](benchmark-aot-bridge-2026-10-08.en.md) and [consolidated report](rust-cell-report-2026-10-08.en.md). Historical test counts above describe each stage; they are not combined into one suite count.
+Later, production readiness reads and trusted host AOT were added. Those four-way campaigns have separate evidence and test counts. See the [AOT/bridge report](../rust-cell-report-2026-10-08.en.md#bridge) and [consolidated report](../rust-cell-report-2026-10-08.en.md). Historical test counts above describe each stage; they are not combined into one suite count.

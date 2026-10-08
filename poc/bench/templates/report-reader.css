@@ -8,19 +8,19 @@ h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font
 h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
 code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
-.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg,.chart img{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
 .controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
 li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
 @media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
 @media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
-@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg,.chart img{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
 
 main{overflow-wrap:anywhere}main>p:nth-of-type(2){background:none;border:0;padding:0}
 .overview{border:1px solid #b2d4c3;border-radius:8px;padding:20px;background:#edf6f1;margin:20px 0}
 .overview table{min-width:0}.overview th{background:#dcefe4}.overview td{padding:12px}
 .cell-chart{display:grid;grid-template-columns:1fr 1fr;gap:24px}.cell-case{min-width:0}.cell-case h4{margin:0 0 8px}.cell-row{margin:12px 0}.cell-label{display:flex;justify-content:space-between;gap:10px;font-size:13px}.cell-track{background:#eef2f6;border-radius:3px;height:12px;margin-top:4px}.cell-bar{height:100%;border-radius:3px}
 details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:16px;background:#eef2f6}pre code{white-space:pre;overflow-wrap:normal}
-@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg{min-width:640px}}
+@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg,.chart img{min-width:640px}}
 @media print{details{display:block}.overview{break-inside:avoid}.cell-chart{grid-template-columns:1fr 1fr}}
 .overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
 @media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}

@@ -39,12 +39,12 @@ retains host permissions by default; host bash and handlers do so in either mode
 
 Evidence and design:
 
-- [English report set](docs/rust-cell-report-2026-10-08.en.html) ([Markdown](docs/rust-cell-report-2026-10-08.en.md)): simple technical English, with English analysis reports and offline benchmark dashboards. Rebuild with `uv run --with markdown==3.10.2 python poc/bench/english-report.py`.
-- [Download the English offline report package](docs/assets/rust-cell-report-2026-10-08/english-report-set.zip): extract it and open `docs/rust-cell-report-2026-10-08.en.html`. Includes all English readers, nine saved dashboards, charts, and linked CSV tables. Raw requests, SSE, and generated sources remain in the original local run directories.
-- [Rust cell security and efficiency report](docs/rust-cell-report-2026-10-08.html) ([editable Markdown](docs/rust-cell-report-2026-10-08.md)): current four-way Python/interpreter/AOT results, security controls and negative tests, bridge improvements, and separate Cargo/AOT costs. The report distinguishes implemented controls, measured outcomes, and remaining work.
-- [August 10 benchmark](docs/benchmark-comparison-2026-08-10.md): 12 distinct tasks, two models, three repetitions per group; fork 72/72 runs versus baseline 69/72, with higher wall time and output-token usage. All baseline failures were one Sonnet rename task; this does not isolate a compiler effect.
-- [M1 PoC report](docs/m1-measurement-report.md): a separate August 6 campaign with 146 runs including two smoke runs; treatment passed 73/73. Its recovery measurements are not from the August 10 benchmark.
-- [Feasibility study](REPORT.md), [design decisions](DESIGN.md), and [PoC source](poc/): historical measurements, planned work, and implementation notes.
+- **Current report:** [English](docs/rust-cell-report-2026-10-08.en.html) / [繁體中文](docs/rust-cell-report-2026-10-08.html). Download either HTML file and open it locally. Each file includes conclusions, charts, key tables, safety evidence, and separate Cargo/AOT costs.
+- **Methods:** [benchmark protocol](docs/benchmark-three-way-design-2026-10-08.en.md) and [runner instructions](poc/bench/three-way/README.en.md).
+- **Historical evidence:** [campaigns and diagnostic records](docs/bench-history/README.md). These use different controls and are kept separate from the current results.
+- **Project design:** [feasibility study](REPORT.md), [design decisions](DESIGN.md), and [runtime reference](packages/coding-agent/docs/rlm-runtime.md).
+
+Rebuild the primary reports with `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py`. The English exporter also regenerates the nine supporting HTML readers. It uses saved data and makes no model calls.
 
 ## Try it
 

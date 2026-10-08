@@ -52,6 +52,8 @@ def report_parts(data, english):
             [LABELS[i], *(f"{data['paidUsageTotals'][v][k]:,}" for k in ["requests", "prompt", "cached", "output"])] for i, v in enumerate(VARIANTS)]),
         "bridge": table(words(["Work", "Old polling (ms)", "Readiness interpreter ms", "Readiness AOT ms"], ["工作", "舊 polling ms", "Readiness interpreter ms", "Readiness AOT ms"]), [
             [words("One diff / ack", "一次 diff／ack") if case == "diff" else "100 echo × 1 KiB", *(f"{r['processMedianMs']:.3f}" for r in data["bridge"] if r["case"] == case)] for case in ["diff", "bridge"]]),
+        "bridge_body": table(words(["Work", "Old polling body ms", "Readiness interpreter body ms", "Readiness AOT body ms"], ["工作", "舊 polling body ms", "Readiness interpreter body ms", "Readiness AOT body ms"]), [
+            [words("One diff / ack", "一次 diff／ack") if case == "diff" else "100 echo × 1 KiB", *(f"{r['bodyMedianMs']:.3f}" for r in data["bridge"] if r["case"] == case)] for case in ["diff", "bridge"]]),
         "validation": table(words(["Test file", "Passed", "Platform skips"], ["測試檔", "通過", "平台條件略過"]), data["securityValidation"]["suites"] + [[words("Total", "合計"), data["securityValidation"]["passed"], data["securityValidation"]["skipped"]]]),
         "spans": data["spans"], "cargo_commands": data["commands"]["cargo.command"], "aot_commands": data["commands"]["aot.command"],
         "cell_calls": sum(r["cellCalls"] for r in cells.values()), "runtime_failures": sum(r["runtimeFailures"] for r in cells.values()), "cargo_failures": sum(r["compileFailures"] for r in cells.values()),
@@ -113,9 +115,15 @@ function updateChart(kind){const controls=Object.fromEntries([...document.queryS
 document.querySelectorAll('select[data-chart]').forEach(s=>s.addEventListener('change',()=>updateChart(s.dataset.chart)));
 </script>'''.replace("PAYLOAD", payload)
         rendered = re.sub(r'(<h2 id="[^"]+">(?:先看結論|Conclusions first)</h2>)(.*?)(?=<p><a id="runtime")', r'<div class="overview">\1\2</div>', rendered, flags=re.S)
+    else:
+        def static_figure(match):
+            return f'<figure class="panel"><div class="chart">{match[1]}</div><figcaption>{match[2]}</figcaption></figure>'
+        rendered = re.sub(rf'<p>(<img alt="([^"]*)" src="assets/{STEM}/[^"/]+\.svg"\s*/?>)</p>', static_figure, rendered)
     toc = "".join(f'<a href="#{anchor}">{heading}</a>' for anchor, heading in re.findall(r'<h2 id="([^"]+)">(.*?)</h2>', rendered))
     css = (TEMPLATES / "report-reader.css").read_text()
     footer = "Standalone report. All decision tables and charts are embedded; no model calls were made to build this reader." if english else "單檔報告：重要數據與圖表均嵌入；產生閱讀版未發出模型請求。"
+    if data is None:
+        footer = "Supporting reader. Measurements come from saved records; generating this reader makes no model calls." if english else "附屬閱讀版：量測來自保存紀錄，產生閱讀版不呼叫模型。"
     jump = ''
     if data is not None:
         labels = ["Conclusions", "Runtime", "Tasks", "Safety"] if english else ["結論", "Runtime", "任務", "安全性"]

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { checkReportLinks, standaloneErrors } from "./check-benchmark-report-links.mjs";
+import { checkReportLinks, reportDocuments, standaloneErrors } from "./check-benchmark-report-links.mjs";
 
 function fixture(t, files) {
 	const root = mkdtempSync(join(tmpdir(), "benchmark-report-links-"));
@@ -59,4 +59,19 @@ test("rejects missing tracked targets and paths outside the checkout", (t) => {
 	const errors = checkReportLinks(input).errors.join("\n");
 	assert.match(errors, /target is missing/);
 	assert.match(errors, /leaves the repository/);
+});
+
+test("checks the root report entry point even when an old ZIP still exists locally", (t) => {
+	const zip = "docs/assets/rust-cell-report-2026-10-08/english-report-set.zip";
+	const input = fixture(t, { "README.md": `[Download](${zip})`, [zip]: "retained local archive" });
+	input.tracked.delete(zip);
+	input.documents = reportDocuments(input.tracked);
+	assert.match(checkReportLinks(input).errors.join("\n"), /README.md.*target is not in Git/);
+});
+
+test("checks archived evidence and rejects links to a removed duplicate", (t) => {
+	const source = "docs/bench-history/runtime-microbenchmark-2026-10-07.md";
+	const input = fixture(t, { [source]: "[Old duplicate](../runtime-microbenchmark-2026-10-07.en.md)" });
+	input.documents = reportDocuments(input.tracked);
+	assert.match(checkReportLinks(input).errors.join("\n"), /target is not in Git: docs\/runtime-microbenchmark-2026-10-07.en.md/);
 });

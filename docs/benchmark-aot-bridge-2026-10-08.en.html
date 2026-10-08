@@ -9,127 +9,174 @@ h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font
 h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
 code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
-.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg,.chart img{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
 .controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
 li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
 @media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
 @media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
-@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg,.chart img{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
 
 main{overflow-wrap:anywhere}main>p:nth-of-type(2){background:none;border:0;padding:0}
 .overview{border:1px solid #b2d4c3;border-radius:8px;padding:20px;background:#edf6f1;margin:20px 0}
 .overview table{min-width:0}.overview th{background:#dcefe4}.overview td{padding:12px}
 .cell-chart{display:grid;grid-template-columns:1fr 1fr;gap:24px}.cell-case{min-width:0}.cell-case h4{margin:0 0 8px}.cell-row{margin:12px 0}.cell-label{display:flex;justify-content:space-between;gap:10px;font-size:13px}.cell-track{background:#eef2f6;border-radius:3px;height:12px;margin-top:4px}.cell-bar{height:100%;border-radius:3px}
 details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:16px;background:#eef2f6}pre code{white-space:pre;overflow-wrap:normal}
-@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg{min-width:640px}}
+@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg,.chart img{min-width:640px}}
 @media print{details{display:block}.overview{break-inside:avoid}.cell-chart{grid-template-columns:1fr 1fr}}
 .overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
 @media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
 @media(max-width:560px){.overview thead{display:none}.overview tr{display:block;border-bottom:1px solid var(--line)}.overview tr:last-child{border:0}.overview td{display:block;border:0;padding:6px 0}.overview td:first-child{font-weight:700;padding-top:12px}.overview td:last-child{padding-bottom:14px;color:var(--muted)}}
-</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">Print</button></div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#fixed-program-cell-execution">Fixed-program cell execution</a><a href="#controlled-bridge-comparison">Controlled bridge comparison</a><a href="#aot-and-deduction-rules">AOT and deduction rules</a><a href="#validation-and-limits">Validation and limits</a></nav><main><h1 id="aot-and-bridge-readiness-tests-october-8-2026">AOT and Bridge Readiness Tests — October 8, 2026</h1>
-<p><code>wasmedge-aot</code> is a fourth group. The existing <code>wasmedge</code> group remains in interpreter mode. Both use the updated bridge. Earlier three-way campaigns and raw files are preserved.</p>
-<ul>
-<li><a href="rust-cell-report-2026-10-08.en.html#runtime">Fixed-program summary</a>: 6 cases × 4 variants × 3 repetitions; 72/72 passed; no paid requests.</li>
-<li><a href="rust-cell-report-2026-10-08.en.html#tasks">Opus task summary</a>: 4 tasks × 4 variants × 1 repetition; 16/16 passed; 70 model requests. Responses, SSE, tools, code, and checker records are saved.</li>
-<li>Alternating bridge measurements (retained local evidence) and median CSV (retained local evidence).</li>
-</ul>
-<h2 id="fixed-program-cell-execution">Fixed-program cell execution</h2>
-<p>Each value is the median of three per-run cell execution totals, in ms. Cargo and AOT compilation are excluded. Rust includes a new WasmEdge process, module load, VM, guest, bridge, and output drain. Python reuses a resident kernel. A Python 0 ms value is below its integer-millisecond resolution. R04 has two cells; it is not a single parser-body measurement. The dashboard can also show the successful-cell average.</p>
+</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">Print</button></div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#1-fixed-program-execution">1. Fixed-program execution</a><a href="#2-controlled-bridge-comparison">2. Controlled bridge comparison</a></nav><main><h1 id="aot-and-bridge-readiness-tests-october-8-2026">AOT and Bridge Readiness Tests — October 8, 2026</h1>
+<p>This reader uses sections from the <a href="rust-cell-report-2026-10-08.en.html">current report</a>. See its <a href="rust-cell-report-2026-10-08.en.html#tasks">Opus task results</a> for full task and compiler costs.</p>
+<p><a id="runtime"></a></p>
+<h2 id="1-fixed-program-execution">1. Fixed-program execution</h2>
+<p>The latest test has 6 cases × 4 variants × 3 repetitions. Both Wasm modes use identical Rust reference source. Python performs equivalent operations under the same output contract. This removes model-generation variance. It still includes differences between languages and libraries.</p>
+<p>Values below are the median of three per-run cell execution totals, in milliseconds. <strong>They exclude Cargo, AOT compilation, initialization, and snapshots.</strong> Rust execution includes the new process, module load, VM, guest, bridge, and output drain. Python uses an existing kernel. A reported 0 ms is below its integer-millisecond resolution. R01 and R04 each have two cells.</p>
+<figure class="panel"><div class="chart"><img alt="Four-way fixed-program cell execution" src="assets/rust-cell-report-2026-10-08/runtime-linear.svg" /></div><figcaption>Four-way fixed-program cell execution</figcaption></figure>
 <div class="table-scroll"><table>
 <thead>
 <tr>
 <th>Case</th>
-<th style="text-align: right;">Prime TS / Python</th>
-<th style="text-align: right;">Prime Rust / Python</th>
-<th style="text-align: right;">Rust / interpreter</th>
-<th style="text-align: right;">Rust / AOT</th>
+<th>Prime TS / Python</th>
+<th>Prime Rust / Python</th>
+<th>Rust / interpreter</th>
+<th>Rust / AOT</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>R01-noop</td>
-<td style="text-align: right;">1.000</td>
-<td style="text-align: right;">0.000</td>
-<td style="text-align: right;">18.162</td>
-<td style="text-align: right;">15.922</td>
+<td>1.000</td>
+<td>0.000</td>
+<td>18.162</td>
+<td>15.922</td>
 </tr>
 <tr>
 <td>R03-cpu</td>
-<td style="text-align: right;">5.000</td>
-<td style="text-align: right;">5.000</td>
-<td style="text-align: right;">10.306</td>
-<td style="text-align: right;">8.224</td>
+<td>5.000</td>
+<td>5.000</td>
+<td>10.306</td>
+<td>8.224</td>
 </tr>
 <tr>
 <td>R04-data-join</td>
-<td style="text-align: right;">8.000</td>
-<td style="text-align: right;">6.000</td>
-<td style="text-align: right;">293.578</td>
-<td style="text-align: right;">21.266</td>
+<td>8.000</td>
+<td>6.000</td>
+<td>293.578</td>
+<td>21.266</td>
 </tr>
 <tr>
 <td>R05-repository-scan</td>
-<td style="text-align: right;">3.000</td>
-<td style="text-align: right;">2.000</td>
-<td style="text-align: right;">37.079</td>
-<td style="text-align: right;">11.805</td>
+<td>3.000</td>
+<td>2.000</td>
+<td>37.079</td>
+<td>11.805</td>
 </tr>
 <tr>
 <td>R09-bridge</td>
-<td style="text-align: right;">8.000</td>
-<td style="text-align: right;">6.000</td>
-<td style="text-align: right;">64.415</td>
-<td style="text-align: right;">15.182</td>
+<td>8.000</td>
+<td>6.000</td>
+<td>64.415</td>
+<td>15.182</td>
 </tr>
 <tr>
 <td>R12-error-repair</td>
-<td style="text-align: right;">1.000</td>
-<td style="text-align: right;">0.000</td>
-<td style="text-align: right;">9.120</td>
-<td style="text-align: right;">8.154</td>
+<td>1.000</td>
+<td>0.000</td>
+<td>9.120</td>
+<td>8.154</td>
 </tr>
 </tbody>
 </table></div>
-<p>AOT reduces interpreter costs for computation, JSON, and regex. It does not remove process and VM startup. The short CPU case is still slower than Python here. The no-op successful-cell average is about 8 ms. This shows a substantial fixed cost for short cells; it does not isolate OS process-launch time.</p>
-<h2 id="controlled-bridge-comparison">Controlled bridge comparison</h2>
-<p>The test reused identical <code>diff.rs</code> and <code>bridge.rs</code> source bytes from the earlier diagnosis. It alternated the three modes. Each mode and case had two warmups and 15 measured repetitions. All 102 samples, source/artifact hashes, and AOT provenance are saved. These medians use only this test. They are not pooled with earlier diagnostic medians.</p>
+<p>Data join fell from 293.578 ms in interpreter mode to 21.266 ms in AOT mode, a 92.8% reduction. Repository scan and bridge execution also improved. The short CPU case still took 8.224 ms in AOT, versus 5.000 ms in each Python kernel. A new process and VM impose a fixed cost on every Rust cell. The results support choosing a mode for the workload.</p>
+<p>Earlier diagnostics confirmed that Python JSON uses the <code>_json</code> C accelerator. Rust <code>serde_json</code> runs as interpreted Wasm in interpreter mode. A near-empty process took about 8–10 ms. Guest work can be short while cell time remains limited by launch and load costs. The earlier runtime analysis contains CPU, JSON, regex, and state body timers. Its AOT and 1 ms polling tests were diagnostic controls before the product update. The implemented AOT path and readiness update are described below.</p>
+<p><a id="bridge"></a></p>
+<h2 id="2-controlled-bridge-comparison">2. Controlled bridge comparison</h2>
+<p>The test used identical <code>diff.rs</code> and <code>bridge.rs</code> source bytes, the same handlers, and a 1 KiB payload. It alternated old polling, readiness-based interpreter, and readiness-based AOT execution. Each mode and case had two warmups and 15 measured samples. All 102 samples were saved. The chart and table use only measured-sample medians.</p>
+<figure class="panel"><div class="chart"><img alt="Alternating bridge comparison" src="assets/rust-cell-report-2026-10-08/bridge.svg" /></div><figcaption>Alternating bridge comparison</figcaption></figure>
 <div class="table-scroll"><table>
 <thead>
 <tr>
-<th>Cell</th>
-<th style="text-align: right;">Old polling (ms)</th>
-<th style="text-align: right;">Readiness / interpreter (ms)</th>
-<th style="text-align: right;">Readiness / AOT (ms)</th>
+<th>Work</th>
+<th>Old polling (ms)</th>
+<th>Readiness interpreter ms</th>
+<th>Readiness AOT ms</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>One diff / ack</td>
-<td style="text-align: right;">23.041</td>
-<td style="text-align: right;">11.030</td>
-<td style="text-align: right;">8.106</td>
+<td>23.041</td>
+<td>11.030</td>
+<td>8.106</td>
 </tr>
 <tr>
-<td>100 echoes × 1 KiB</td>
-<td style="text-align: right;">652.714</td>
-<td style="text-align: right;">65.795</td>
-<td style="text-align: right;">11.224</td>
+<td>100 echo × 1 KiB</td>
+<td>652.714</td>
+<td>65.795</td>
+<td>11.224</td>
 </tr>
 </tbody>
 </table></div>
-<p>Guest-body medians were 12.211 → 0.410 → 0.160 ms for diff, and 639.344 → 53.548 → 3.207 ms for 100 echoes. <code>poll_oneoff</code> now waits for stdin readiness or the request deadline. Normal WASI reply reads wake when data arrives, without a fixed 5 ms sleep. Native TCP tests and rare write retries retain their polling.</p>
-<p>AOT further reduces guest execution and JSON framing/serialization costs. Compilation took another 2.74/2.76 seconds, excluded from this table.</p>
-<h2 id="aot-and-deduction-rules">AOT and deduction rules</h2>
-<p><code>rustCell.runtimeMode</code> defaults to <code>interpreter</code>; it can also be <code>aot</code>. AOT first checks the import policy, strips all guest custom sections, and asks the host compiler to create a native payload. The compiler uses <code>--interruptible</code>, plus gas instrumentation when a gas limit is set. Core Wasm must match the inspected input. A missing native payload fails closed. There is no silent fallback and no AOT cache. Skill/library tests still use interpreter mode.</p>
-<ul>
-<li><code>cargo.command</code>: all captured Cargo commands, including initialization, cells, library gates, retries, and common checkers. A <code>cargo test</code> deduction includes the whole command.</li>
-<li><code>aot.command</code>: WasmEdge compiler spawn-to-close wall time in a separate ledger and phase. It excludes the Node wrapper's own startup.</li>
-<li><code>cell.aot_compile</code>: host stripping, compilation, output verification, and provenance. It does not overlap the runner's <code>cell.execution</code> phase.</li>
-<li>Cell charts use runtime execution only. Deduction charts can show all Cargo, or all Cargo plus AOT. Combined deductions merge overlapping intervals so time is counted once.</li>
-</ul>
-<p>AOT output, stripped input, and SHA-256 provenance stay in the host-only <code>.aot/</code> directory. The guest cannot mount it. Compilation and execution share timeout, cancellation, and process-limit settings. See the <a href="https://wasmedge.org/docs/start/build-and-run/aot/">official AOT guide</a> for the payload format and instrumentation. The pinned WasmEdge 0.14.1 CLI loads AOT automatically. Saved command records verify the flags used. No newer run-mode flag was used.</p>
-<h2 id="validation-and-limits">Validation and limits</h2>
-<p>At implementation time, <code>npm run check</code> and the full workspace build passed. Tests cover AOT stripping, provenance, failure handling, phase separation, Cargo/AOT overlap, clocks, capture, and four-way reference coverage. Real WasmEdge interpreter/AOT integration passed 15 tests: large UTF-8 messages, forbidden socket imports, fresh handshake after timeout, gas exhaustion, and memory-growth caps. Native bridge release tests passed 12/12. Other related suites passed 86 tests and skipped three environment-specific tests. These are the recorded implementation checks, not new tests run for this English edition.</p>
-<p>The fixed campaign has 3,822 schema-valid spans, 54 Cargo commands, and 24 AOT commands. Both deduction modes can be calculated for all 72 runs. Wrappers add overhead. Three fixed repetitions and one paid repetition do not provide confidence intervals or a general ranking. Read each result with its workload, cell count, compilation cost, and source.</p>
-<p>The paid campaign has 1,600 schema-valid spans, 32 Cargo commands, and eight AOT commands. All 16 runs have complete compiler deductions and meet the cell rules. Its 46 cells include six runtime errors and three Cargo errors. All repair costs are saved. There were no AOT compiler failures. Inspection of generated sources and library edits found no shell/subprocess delegation.</p>
-<p>E09's three regex-related AOT commands took 29.31 seconds. This increased total task time. After all compiler deductions, agent time was 25.14 seconds, versus 30.46 seconds for interpreter mode. Programs and cell counts differed. Fixed-source tests provide stronger evidence about runtime mechanisms.</p></main></div><footer>Standalone report. All decision tables and charts are embedded; no model calls were made to build this reader.</footer></body></html>
+<p>For 100 echoes, process wall time fell from 652.714 ms to 65.795 ms after the readiness update, a 89.9% reduction. Normal WASI reply reads now use <code>poll_oneoff</code> to wait for stdin readiness or a monotonic deadline. They wake when data arrives. Native TCP and rare write retries keep their existing polling.</p>
+<p>AOT reduced the total further to 11.224 ms. Guest-body medians are shown below; they exclude process launch and module/VM setup. After removing polling waits, interpreter execution and JSON framing still have measurable costs. We do not pool these results with earlier bridge tests under different scheduling conditions.</p>
+<p>AOT compilation took another 2.74/2.76 seconds before execution. If a future trusted artifact cache allowed reuse, this fixed 100-echo workload would need about <strong>51 executions</strong> to recover one 2.76-second compile cost at a saving of about 54.57 ms per execution. This is an arithmetic estimate under a reuse assumption. The current product recompiles every cell and does not receive this benefit.</p>
+<h3 id="guest-body-timing">Guest-body timing</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Work</th>
+<th>Old polling body ms</th>
+<th>Readiness interpreter body ms</th>
+<th>Readiness AOT body ms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One diff / ack</td>
+<td>12.211</td>
+<td>0.410</td>
+<td>0.160</td>
+</tr>
+<tr>
+<td>100 echo × 1 KiB</td>
+<td>639.344</td>
+<td>53.548</td>
+<td>3.207</td>
+</tr>
+</tbody>
+</table></div>
+<p>These are the same alternating control samples as the process table. Body and process medians describe different boundaries; do not subtract them to reconstruct individual phases.</p>
+<p><a id="aot-details"></a></p>
+<h3 id="implemented-aot-path">Implemented AOT path</h3>
+<p><code>rustCell.runtimeMode</code> defaults to <code>interpreter</code>; <code>aot</code> adds a fourth comparison group. AOT checks imports, strips all guest custom sections, and compiles on the host with <code>--interruptible</code> and gas instrumentation when configured. The core Wasm must match the inspected input and a native payload must be present. Verification failure stops execution, without a silent interpreter fallback. Each cell compiles again; there is no AOT cache. Skill/library tests still use interpreter mode.</p>
+<p>Stripped input, AOT output, and SHA-256 provenance stay in host-only <code>.aot/</code>, outside guest mounts. Compilation and execution share timeout, cancellation, and process-limit settings. The pinned WasmEdge 0.14.1 CLI loads AOT automatically; saved command records identify the flags. No newer run-mode flag was used.</p>
+<p><code>aot.command</code> measures compiler spawn-to-close time and excludes the Node wrapper's own startup. <code>cell.aot_compile</code> also includes stripping, verification, and provenance. It does not overlap runner <code>cell.execution</code>. All-Cargo capture includes initialization, cells, library gates, retries, and checkers; deductions are clipped to the selected task interval and count overlapping commands once.</p>
+<p><a id="aot-validation"></a></p>
+<h3 id="recorded-aot-implementation-checks">Recorded AOT implementation checks</h3>
+<p>At implementation time, root checks and the full workspace build passed. Real interpreter/AOT integration passed 15 tests for large UTF-8 bridge messages, forbidden socket imports, fresh handshake after timeout, gas exhaustion, and memory-growth caps. Native bridge release tests passed 12/12; other related suites passed 86 tests with three environment-specific skips. These are earlier implementation checks, separate from the 65-pass/14-skip safety recheck above. Their counts must not be added together. No runtime tests were rerun to edit this report.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Latest campaign</th>
+<th>Schema-valid spans</th>
+<th>Captured Cargo commands</th>
+<th>Captured AOT commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fixed-program: 72 runs</td>
+<td>3,822</td>
+<td>54</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Opus tasks: 16 runs</td>
+<td>1,600</td>
+<td>32</td>
+<td>8</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both Cargo-only and Cargo-plus-AOT deductions are available for all 88 runs. Paid sources and library edits were inspected for shell/subprocess delegation. All repair costs remain recorded; all AOT compiler failure counts were zero. Wrappers and small sample counts still limit performance claims.</p></main></div><footer>Supporting reader. Measurements come from saved records; generating this reader makes no model calls.</footer></body></html>

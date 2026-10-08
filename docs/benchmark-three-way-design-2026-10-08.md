@@ -379,7 +379,7 @@ D20/D21 仍依原 12 tasks、完整 evidence、成功率/output-token 的既有�
 - [cell-timing.ts](../packages/coding-agent/src/core/rust-cell/cell-timing.ts)：v1 runner 有 prepare、skillValidation、libraryTests、buildQueue、cargo、rollback、importPolicy、probe、execution、bridgeCleanup、snapshot、other；同 runner queue 另外列。
 - [Rust tool wrapper](../packages/coding-agent/src/core/tools/rust.ts)：已有 provisionMs、totalMs。
 - [request-timing.ts](../packages/coding-agent/src/core/request-timing.ts)：已有 dispatch→prompt、payload handoff→headers、first content、stream done、usage。`PI_REQUEST_TIMING=1` 或 settings `requestTiming: true` 可開啟；上游兩個 pinned hosts 也有同類 hooks，但必須逐欄驗語意。
-- [runtime.ts](../poc/bench/runtime.ts)：既有無模型十 scenario runner、來源指紋、逐 sample 保存；[歷史 microbenchmark](runtime-microbenchmark-2026-10-07.md) 的每 scenario 僅 5 reps，不能作本次三方排名。
+- [runtime.ts](../poc/bench/runtime.ts)：既有無模型十 scenario runner、來源指紋、逐 sample 保存；[歷史 microbenchmark](bench-history/runtime-microbenchmark-2026-10-07.md) 的每 scenario 僅 5 reps，不能作本次三方排名。
 - [舊 driver/analyzer](../poc/bench/README.md)：task/provider/launcher snapshots、plan inventory、resume、offline checks 可以重用設計；目前 A/B/F、協議及 transcript 假設不代表已支援 Rust upstream。
 
 ### 8.2 必須新增或校正

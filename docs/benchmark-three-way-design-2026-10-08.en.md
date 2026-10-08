@@ -1,6 +1,6 @@
 # Agent Performance Benchmark Protocol
 
-Date: October 8, 2026. This is the English reading edition of the original three-way design. The original was written before the runner and formal tests existed. Later implementation added cell-only rules, all-Cargo capture, and a fourth AOT group. Design requirements below are not claims that every hook or workload is implemented. See the [runner coverage](../poc/bench/three-way/README.en.md) and [validation history](benchmark-three-way-validation-2026-10-08.en.md).
+Date: October 8, 2026. This is the English reading edition of the original three-way design. The original was written before the runner and formal tests existed. Later implementation added cell-only rules, all-Cargo capture, and a fourth AOT group. Design requirements below are not claims that every hook or workload is implemented. See the [runner coverage](../poc/bench/three-way/README.en.md) and [validation history](bench-history/benchmark-three-way-validation-2026-10-08.en.md).
 
 Inputs: [case catalog](benchmark-three-way-plan.json), [trace schema](benchmark-trace.schema.json). The catalog keeps `executionReady: false`. The CLI creates an immutable executable manifest with actual source, build, and environment hashes. The requested model route is `anthropic/claude-opus-5-5`. Its backend revision is not independently verified. The experiment does not change the older D20/D21 acceptance rules or reuse historical measurements as new results.
 
@@ -246,7 +246,7 @@ A single speed ratio, if needed, uses equal-task-weight geometric means of penal
 
 ## 8. Implementation sequence and coverage
 
-Reusable components are the [cell timing code](../packages/coding-agent/src/core/rust-cell/cell-timing.ts), [Rust tool](../packages/coding-agent/src/core/tools/rust.ts), [request timing](../packages/coding-agent/src/core/request-timing.ts), [offline microbenchmark](runtime-microbenchmark-2026-10-07.en.md), and [older harness](../poc/bench/README.md).
+Reusable components are the [cell timing code](../packages/coding-agent/src/core/rust-cell/cell-timing.ts), [Rust tool](../packages/coding-agent/src/core/tools/rust.ts), [request timing](../packages/coding-agent/src/core/request-timing.ts), [offline microbenchmark](bench-history/runtime-microbenchmark-2026-10-07.md), and [older harness](../poc/bench/README.md).
 
 Required work includes release adapters and readiness/parity checks; normalized traces and clocks; Python/Rust runtime hooks; source-field SSE mapping; process accounting; and explicit missing-phase coverage. Legacy `compileMs` includes build-queue work and sometimes rollback. Legacy `runMs` includes cleanup. They cannot be added to their child phases or called pure compiler/guest time. Arbitrary unmarked model code gets observable totals, not invented body partitions.
 
@@ -271,4 +271,4 @@ The later all-Cargo wrapper captures initialization, skill probes, cells, gates,
 
 Cell views use `cell.python_execute` and `cell.execution`, not buffered client tool-event windows. They show calls, success/runtime/compile failures, totals, successful-cell averages, and failed execution. Compile failures have no runtime duration. Runtime failures remain in successful task trajectories. Parallel totals measure work. Python 0 ms is below resolution. Boundaries include each runtime's launch/I/O/bridge costs.
 
-The AOT addition keeps interpreter as a separate group and compiles verified, stripped Wasm on the host for every cell. Capture `cargo.command` and `aot.command` separately. Combined deductions use interval union. Missing AOT capture is not zero. The current product has no AOT cache. See the [AOT/bridge report](benchmark-aot-bridge-2026-10-08.en.md) for the measured implementation.
+The AOT addition keeps interpreter as a separate group and compiles verified, stripped Wasm on the host for every cell. Capture `cargo.command` and `aot.command` separately. Combined deductions use interval union. Missing AOT capture is not zero. The current product has no AOT cache. See the [AOT/bridge report](rust-cell-report-2026-10-08.en.md#bridge) for the measured implementation.
