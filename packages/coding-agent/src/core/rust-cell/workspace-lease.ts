@@ -9,6 +9,13 @@ import {
 } from "../session-lease.js";
 import type { ProvisioningContext } from "./provisioning.js";
 
+export class WorkspaceInUseError extends Error {
+	constructor(workspace: string) {
+		super(`Workspace is in use; stop its runtime before pruning the cache: ${workspace}`);
+		this.name = "WorkspaceInUseError";
+	}
+}
+
 async function canonicalWorkspace(path: string): Promise<string> {
 	const workspace = resolve(path);
 	try {
@@ -35,7 +42,7 @@ export async function acquireWorkspaceLease(
 			})!;
 		} catch (error) {
 			if (!(error instanceof SessionAlreadyActiveError)) throw error;
-			if (!wait) throw new Error(`Workspace is in use; stop its runtime before pruning the cache: ${workspace}`);
+			if (!wait) throw new WorkspaceInUseError(workspace);
 		}
 		try {
 			await delay(50, undefined, { signal: context.signal });

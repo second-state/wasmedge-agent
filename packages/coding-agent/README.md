@@ -512,6 +512,12 @@ state, vendored dependencies and Git history are retained. Reported sizes are
 logical file sizes, not allocated or reclaimable disk space. See
 [workspace storage](docs/rlm-runtime.md#workspace-storage) for scope and limits.
 
+Use `storage --artifacts <session-artifacts-dir>` to discover and report parent
+and child workspaces together. The same `--prune-cache`, `--apply` and `--json`
+flags work in batch mode. Busy workspaces are skipped during pruning; any skip
+or error produces a partial report and exit status 1. Cleanup only removes
+build caches within the selected artifact layout.
+
 ### Scheduled Prompts
 
 ```bash

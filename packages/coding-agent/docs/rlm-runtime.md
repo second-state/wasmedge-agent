@@ -228,6 +228,36 @@ wasmedge-agent storage /path/to/session-artifacts/session-id/workspace --prune-c
 wasmedge-agent storage /path/to/session-artifacts/session-id/workspace --prune-cache --apply
 ```
 
+To discover workspaces beneath one explicit session-artifacts root, use
+`--artifacts` instead of a workspace path:
+
+```bash
+wasmedge-agent storage --artifacts /path/to/session-artifacts --json
+wasmedge-agent storage --artifacts /path/to/session-artifacts --prune-cache
+wasmedge-agent storage --artifacts /path/to/session-artifacts --prune-cache --apply
+```
+
+Discovery follows the managed layout: immediate session containers, their
+`session-artifacts/<session-id>/` children, and recursive child transcript
+containers named `sub-<8 hex digits>` or identified by a regular
+`rlm-subagent.json` file. Inline SDK children do not need daemon metadata. It includes
+retained child workspaces even when their session is inactive. It does not
+traverse workspace contents, hidden directories (including seeds), arbitrary
+attachment trees or symlinked directories. Discovered workspace symlinks are
+reported as errors. The explicitly selected root is resolved to its real path.
+Custom layouts outside this structure require the single-workspace command.
+
+The complete discovery pass runs before any pruning; a discovery error or
+cancellation leaves caches unchanged. Each discovered workspace is then
+validated and processed separately. Busy workspaces are skipped during prune
+preview and apply; invalid or unreadable workspaces report an error. Other
+workspaces continue. JSON includes per-workspace status and `complete`; totals
+include successful reports only, and any skipped or failed entry makes the
+command exit with status 1. The operation has one five-minute deadline. On
+cancellation or timeout after discovery, completed removals remain applied,
+remaining workspaces are skipped, and an in-progress removal may have completed
+even if its entry reports an error. Batch cleanup is not atomic.
+
 The report groups files into build cache (`target/`), dependencies (`vendor/`),
 state, Git history, sources, scratch and other files. Sizes are logical bytes
 per path: hard links count separately, symlinks contribute their own size and
@@ -257,8 +287,9 @@ or filesystem edits. Dead host leases can be reclaimed, so after a host crash
 also stop orphaned build processes before maintenance. This is not protection
 against hostile concurrent filesystem changes or a distributed lock.
 
-There is no automatic retention policy, workspace discovery or disk quota.
-This command does not clean the shared template or other workspaces.
+There is no automatic retention policy, machine-wide discovery or disk quota.
+This command does not clean the shared template, session transcripts, seeds or
+workspaces outside the selected path/layout.
 
 ## Delegation Flow
 

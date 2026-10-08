@@ -108,21 +108,21 @@ async function measure(
 	return { workspace, logicalBytes: categories.reduce((total, usage) => total + usage.logicalBytes, 0), categories };
 }
 
-/** Explicit maintenance of one managed workspace; no model or toolchain startup. */
-export async function inspectWorkspaceStorage(
-	path: string,
-	options: WorkspaceStorageOptions = {},
-): Promise<WorkspaceStorageReport> {
+export function createStorageContext(options: WorkspaceStorageOptions): ProvisioningContext {
 	if (options.apply && !options.pruneCache) throw new Error("--apply requires --prune-cache");
 	const timeoutMs = options.timeoutMs ?? 300_000;
 	if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
 		throw new Error("Storage timeoutMs must be an integer between 1 and 2147483647");
 	}
-	const context = new ProvisioningContext(
-		options.signal ?? new AbortController().signal,
-		timeoutMs,
-		"Workspace storage",
-	);
+	return new ProvisioningContext(options.signal ?? new AbortController().signal, timeoutMs, "Workspace storage");
+}
+
+/** Explicit maintenance of one managed workspace; no model or toolchain startup. */
+export async function inspectWorkspaceStorage(
+	path: string,
+	options: WorkspaceStorageOptions = {},
+): Promise<WorkspaceStorageReport> {
+	const context = createStorageContext(options);
 	let lease: SessionLease | undefined;
 	try {
 		context.check();
