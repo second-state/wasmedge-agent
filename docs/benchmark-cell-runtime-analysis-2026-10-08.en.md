@@ -14,7 +14,7 @@ The diagnosis used saved paid sources/traces and local fixed-program controls. I
 
 Rust `cell.execution` excludes Cargo, workspace initialization, the read-only probe, import inspection, snapshots, and bridge cleanup. It includes process startup, module load, VM setup, guest work, stdout/stdio bridge, and process exit. Python startup is separate and is reused. The chart measures actual per-cell product costs, not language-body execution alone.
 
-Relevant source is in the [cell runner](../packages/coding-agent/src/core/rust-cell/cell-runner.ts), [process runner](../packages/coding-agent/src/core/rust-cell/process.ts), and the saved pinned upstream kernels under `poc/bench/results/three-way-inputs/`.
+Relevant source is in the [cell runner](../packages/coding-agent/src/core/rust-cell/cell-runner.ts), [process runner](../packages/coding-agent/src/core/rust-cell/process.ts), pinned [Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts), and pinned [Python Rust-host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs).
 
 ## 2. Fixed cost for a near-empty cell
 
@@ -91,7 +91,7 @@ These timers do not partition the full guest. Load, allocation, destruction, out
 3. Test trusted AOT/reuse for JSON and regex, or native host services. Report compilation and amortization separately. Host services still incur bridge and serialization costs.
 4. Define lifetimes for reusable helpers, data, and compiled regex. Persistent Python and new Wasm processes have different cache behavior.
 
-Evidence: [main measurements](../poc/bench/results/cell-runtime-diagnostic-20261008-02/measurements.json), [reproducible source](../poc/bench/results/cell-runtime-diagnostic-20261008-02/diagnostic-source.mjs), [same-artifact AOT control](../poc/bench/results/cell-runtime-diagnostic-20261008-02/aot-control/measurements.json), and [original paid dashboard](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html).
+Evidence: main measurements (retained local evidence), reproducible source (retained local evidence), same-artifact AOT control (retained local evidence), and original paid dashboard (retained local evidence).
 
 The main diagnosis saved 272 Rust/process and 136 Python samples, including warmups. The AOT control saved 136 samples. Each comparison excludes two warmups and uses the median of 15 measured samples.
 

@@ -14,7 +14,7 @@
 
 Rust 的 `cell.execution` 不含 Cargo、workspace 初始化、readonly probe、import admission 檢查、snapshot 與 bridge cleanup。它包含 process 啟動、module 載入與 VM 初始化、guest、stdout/stdio bridge、process 結束。Python 的啟動另列，不會每 cell 重做。因此這張圖量到的是產品實際每次 cell 的成本，不是只量兩種語言的程式本體。
 
-來源：[Rust execution boundary](../packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](../packages/coding-agent/src/core/rust-cell/process.ts)、[Python TS kernel](../poc/bench/results/three-way-inputs/prime-ts/packages/coding-agent/src/core/kernel/repl-manager.ts)、[Python Rust host kernel](../poc/bench/results/three-way-inputs/prime-rust/crates/pa-core/src/kernel/manager/requests.rs)。
+來源：[Rust execution boundary](../packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](../packages/coding-agent/src/core/rust-cell/process.ts)、[固定 revision 的 Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts)、[固定 revision 的 Python Rust host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs)。
 
 ## 2. 每 cell 固定成本：接近空程式仍需約 10 ms
 
@@ -91,6 +91,6 @@ E09 的 `rlm::state` 使用 [state.json 的檔案讀寫](../wasmedge-agent-runti
 3. Interpreter/library：以 JSON/regex 等固定重工作驗證可信 AOT/cache，或評估 host 原生服務；AOT 另報 compilation/amortization，host 服務仍列 bridge/序列化成本。
 4. 跨 cell state/cache：評估可重用 helper/compiled regex 的生命週期；目前常駐 Python 與新 Wasm process 的 cache 行為不同。
 
-資料：[主診斷 JSON](../poc/bench/results/cell-runtime-diagnostic-20261008-02/measurements.json)、[主診斷可重現 source](../poc/bench/results/cell-runtime-diagnostic-20261008-02/diagnostic-source.mjs)、[同 artifact AOT 控制](../poc/bench/results/cell-runtime-diagnostic-20261008-02/aot-control/measurements.json)、[原 paid report](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.html)。主診斷保存 272 個 Rust/process 與 136 個 Python samples（包含 warmups），AOT 控制保存 136 samples（包含 warmups），每個比較組排除 2 次 warmup 後採 15 次的 median。
+資料：主診斷 JSON（本機保存的證據）、主診斷可重現 source（本機保存的證據）、同 artifact AOT 控制（本機保存的證據）、原 paid report（本機保存的證據）。主診斷保存 272 個 Rust/process 與 136 個 Python samples（包含 warmups），AOT 控制保存 136 samples（包含 warmups），每個比較組排除 2 次 warmup 後採 15 次的 median。
 
 `cell-runtime-diagnostic-20261008-01` 是早先診斷 script 的 regex escape 錯誤而中止的紀錄，已保留、不列入任何比較。有效控制來自 `-02`，source/artifact hashes、stdout/assertions 與 completion marker 均有保存。本次控制沒有做 profiler overhead audit 或跨機器驗證；它支持這台機器、WasmEdge 0.14.1、這些固定程式的慢因與改進方向，沒有將數字推廣到所有 Rust/Wasm workloads。

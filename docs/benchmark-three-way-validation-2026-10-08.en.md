@@ -4,7 +4,7 @@ The runner, trace collector, runtime adapters, and offline HTML/CSV reports are 
 
 The first paid campaign allowed native tools. WasmEdge E03/E08/E11 used only bash. Those runs cannot answer the Python-cell versus Rust/Wasm-cell question. Their raw records remain saved, but they are excluded from cell comparisons. Later tests require a successful cell in every task turn, prohibit shell delegation, and time the shared checker separately. Earlier chart and deduction checks below are historical records of earlier report versions.
 
-See the [runner instructions](../poc/bench/three-way/README.en.md), [protocol](benchmark-three-way-design-2026-10-08.en.md), and [current consolidated report](rust-cell-report-2026-10-08.en.md). Raw data and paid outputs are in gitignored `poc/bench/results/`. Links point to saved local artifacts.
+See the [runner instructions](../poc/bench/three-way/README.en.md), [protocol](benchmark-three-way-design-2026-10-08.en.md), and [current consolidated report](rust-cell-report-2026-10-08.en.md). The standalone report includes conclusions, charts, and key tables. Historical dashboards, CSV tables, diagnostics, PNG screenshots, provider requests, SSE, sessions, and generated task outputs remain local.
 
 ## Fixed inputs
 
@@ -24,11 +24,11 @@ Paid tests use `anthropic/claude-opus-5-5` with reasoning off. The service catal
 
 | Campaign | Slots | Result | Paid requests | Report |
 |---|---:|---|---:|---|
-| `three-way-local-02` | 57 | R 48/48; H 6 passed, 2 failed, 1 not applicable | 0 | [Host/runtime](../poc/bench/results/three-way-local-02/report.en.html) |
-| `three-way-opus55-smoke-01` | 12 | Four tasks × three variants; all checkers passed; native-tool policy | 54 | [Native-tool observation](../poc/bench/results/three-way-opus55-smoke-01/report.en.html) |
-| `three-way-opus55-cell-smoke-01` | 12 | Checker and per-turn cell rules passed 12/12 | 50 | [Cell comparison](../poc/bench/results/three-way-opus55-cell-smoke-01/report.en.html) |
-| `three-way-command-profile-check` | 1 | Fork R01 passed; 48 Cargo/rustc command spans saved | 0 | [Command profile](../poc/bench/results/three-way-command-profile-check/report.en.html) |
-| `three-way-edit-phase-check` | 3 | R06 passed in all variants; read/transform/write/verify measured | 0 | [Edit phases](../poc/bench/results/three-way-edit-phase-check/report.en.html) |
+| `three-way-local-02` | 57 | R 48/48; H 6 passed, 2 failed, 1 not applicable | 0 | Host/runtime (retained local evidence) |
+| `three-way-opus55-smoke-01` | 12 | Four tasks × three variants; all checkers passed; native-tool policy | 54 | Native-tool observation (retained local evidence) |
+| `three-way-opus55-cell-smoke-01` | 12 | Checker and per-turn cell rules passed 12/12 | 50 | Cell comparison (retained local evidence) |
+| `three-way-command-profile-check` | 1 | Fork R01 passed; 48 Cargo/rustc command spans saved | 0 | Command profile (retained local evidence) |
+| `three-way-edit-phase-check` | 3 | R06 passed in all variants; read/transform/write/verify measured | 0 | Edit phases (retained local evidence) |
 
 Paid tasks were E03 fix-bug, E08 rust-rename, E09 helper-accumulation, and E11 join-report. Twelve passing runs do not mean all 12 task types were tested.
 
@@ -38,10 +38,10 @@ Recorded checks at that stage:
 - Collector tests passed 15/15 using faux HTTP/SSE, without paid calls.
 - The initial 73 slots had 6,187 schema-valid spans and zero cross-record integrity errors. The later cell campaign is reported separately below.
 - R06 read/transform/write/verify durations fit inside the edit transaction. Write time covered write/close, not read, matching, verification, or an fsync guarantee.
-- Browser filters worked. A [filtered screenshot](../poc/bench/results/three-way-opus55-smoke-01/report-filtered.png) is saved.
+- Browser filters worked. A filtered screenshot is saved.
 - A scoped scan of 675 paid artifacts found zero occurrences of the actual API key. Build outputs were skipped. Credentials were not written to config, child environment, manifest, or command line.
 
-[Trace/stream/edit audit](../poc/bench/results/three-way-validation-2026-10-08.json) and [credential audit](../poc/bench/results/three-way-opus55-smoke-01/credential-artifact-audit.json) record these checks. Runs retain SSE, decoded arguments, session logs, project outputs, checker logs, and failures.
+Trace/stream/edit audit (retained local evidence) and credential audit (retained local evidence) record these checks. Runs retain SSE, decoded arguments, session logs, project outputs, checker logs, and failures.
 
 ## Observed failures and limits
 
@@ -61,7 +61,7 @@ Four initial campaigns were reanalyzed offline, without paid calls. Reports gain
 
 The 12 paid latency bars matched recorded successful medians. H02 failures retained null success medians and a 90,000 ms penalized mean each. H03 Rust remained not applicable. At 390/320 px, pages had no horizontal overflow; wide charts scrolled internally. Heatmap/timeline navigation and SVG download worked. Collector tests then passed 18/18.
 
-[Desktop](../poc/bench/results/three-way-opus55-smoke-01/report-charts-desktop.png), [heatmap](../poc/bench/results/three-way-opus55-smoke-01/report-phase-heatmap.png), [mobile](../poc/bench/results/three-way-opus55-smoke-01/report-charts-mobile.png), and [visual audit](../poc/bench/results/three-way-opus55-smoke-01/report-visual-audit.json) are saved. These screenshots show the historical Chinese reports.
+Desktop, heatmap, mobile, and visual audit (retained local evidence) are saved. These screenshots show the historical Chinese reports.
 
 ## Earlier cell-compilation deduction
 
@@ -69,7 +69,7 @@ The first deduction section removed measured Rust-to-Wasm `cell.compile` time fr
 
 All 73 JSON/CSV deductions matched: 18 runs deducted Cargo; 46 upstream runs had no corresponding phase; five had no Rust cell; three were excluded from successful medians; one was unavailable. R15 parallel compile durations lacked a shared origin and could not be safely deducted. Historical Opus E09 had 689.717917 ms of cell Cargo, 29,427.396583 ms agent time, and 28,737.678666 ms adjusted time. This native-policy run is now excluded from cell comparisons.
 
-Collector tests passed 25/25. Tests covered paired medians, failures, parent/child overlap, missing/duplicate observations, clocks, negative values, and export. Browser checks passed at desktop and 390/320 px. No paid calls were added. See [deduction CSV](../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-runs.csv) and [audit](../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-audit.json).
+Collector tests passed 25/25. Tests covered paired medians, failures, parent/child overlap, missing/duplicate observations, clocks, negative values, and export. Browser checks passed at desktop and 390/320 px. No paid calls were added. See deduction CSV (retained local evidence) and audit (retained local evidence).
 
 ## Corrected cell-only test
 
@@ -88,13 +88,13 @@ Single-run agent values below are descriptive. Cell Cargo includes failed builds
 
 The revised table separates raw time, deduction, adjusted time, and reason. No Rust-to-Wasm phase does not mean all Python preparation is free. Missing data mean cannot calculate; failed or non-compliant runs mean excluded. Earlier native records retain their phases and checker results but are excluded from cell bars.
 
-Collector tests passed 29/29. All 1,008 new spans passed schema/integrity checks. JSON/CSV arithmetic and checker boundaries matched. A scan of 5,354 non-build/cache files found no actual API key. Desktop, mobile, filters, trace links, and SVG export passed. See [cell audit](../poc/bench/results/three-way-opus55-cell-smoke-01/cell-runtime-audit.json) and [visual audit](../poc/bench/results/three-way-opus55-cell-smoke-01/report-visual-audit.json).
+Collector tests passed 29/29. All 1,008 new spans passed schema/integrity checks. JSON/CSV arithmetic and checker boundaries matched. A scan of 5,354 non-build/cache files found no actual API key. Desktop, mobile, filters, trace links, and SVG export passed. See cell audit (retained local evidence) and visual audit (retained local evidence).
 
 ## Startup and model-trajectory diagnosis
 
 Before the first gateway request, the four Rust runs took 5.195–5.916 s; Prime TS took 0.510–0.538 s; Prime Rust took 0.032–0.037 s. This initialization was inside agent elapsed but outside cell compilation. Synchronous workspace/toolchain/skill work blocked the Node event loop despite fire-and-forget prewarming.
 
-The prepared template lacked websearch, but real sessions mounted it. `syncRustSkills` then ran an `agent_lib` probe build. A separate six-workspace test alternated three no-skill and three websearch cases. Initialization took 0.346–0.389 s without the skill and 4.612–5.048 s with it. Probe Cargo took 4.241–4.650 s. Dependencies rebuilt despite template warming. Reopening the three saved skill workspaces took 0.049–0.055 s without another probe. Wrappers were present and overhead was not audited. Those diagnostic values cannot be subtracted from original paid runs. [Startup measurements](../poc/bench/results/startup-diagnostic-20261008-01/startup-profile.json).
+The prepared template lacked websearch, but real sessions mounted it. `syncRustSkills` then ran an `agent_lib` probe build. A separate six-workspace test alternated three no-skill and three websearch cases. Initialization took 0.346–0.389 s without the skill and 4.612–5.048 s with it. Probe Cargo took 4.241–4.650 s. Dependencies rebuilt despite template warming. Reopening the three saved skill workspaces took 0.049–0.055 s without another probe. Wrappers were present and overhead was not audited. Those diagnostic values cannot be subtracted from original paid runs. Startup measurements (retained local evidence).
 
 E11 used the following clipped agent intervals. HTTP intervals were merged. Tool windows excluded HTTP overlap. Nested cells/compiler time were not added again:
 
@@ -110,7 +110,7 @@ Inside the Rust tool window, Cargo totaled 0.353 s, execution 0.021 s, and snaps
 
 Both variants made three E11 HTTP calls. Rust cell-request output was 774 tokens, versus 341 for Python; whole-task output was 876/439. First prompts were 9,241/11,520 tokens. The slower Rust model path cannot be explained as simply a longer prompt. Server queue, cache, prefill, and generation were not independently timed.
 
-E08 Rust first referenced unavailable `walkdir::WalkDir`, then repaired with `std::fs`: three calls versus two Python calls. E09 Rust used three successful cells and six HTTP calls; Prime TS used eight cells, two API errors, and 11 HTTP calls. Rust took 27.863 s versus 38.656 s. See [full attribution](../poc/bench/results/three-way-opus55-cell-smoke-01/latency-attribution.json).
+E08 Rust first referenced unavailable `walkdir::WalkDir`, then repaired with `std::fs`: three calls versus two Python calls. E09 Rust used three successful cells and six HTTP calls; Prime TS used eight cells, two API errors, and 11 HTTP calls. Rust took 27.863 s versus 38.656 s. See full attribution (retained local evidence).
 
 Twelve smoke runs mean four cases × three variants × one observation. They identify local costs and failures, but cannot estimate model variance or stable win rates. With n=1, a median is the single value. Formal comparison needs more paired runs, confidence intervals, overhead checks, and initialization Cargo coverage.
 
@@ -150,9 +150,9 @@ Cell totals below are ms, including runtime failures. Counts are success/runtime
 
 Thirty benchmark tests and root checks passed. Tests cover concurrent command unions, boundary clipping, missing/duplicate commands, clock proof, legacy missing data, Python resolution, and runtime/compile failures. One repetition and unaudited overhead prevent a general winner claim.
 
-[Dashboard](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html), [Cargo/cell audit](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/all-cargo-cell-audit.json), [deductions CSV](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/compilation-adjusted-runs.csv), and [cell CSV](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-runs.csv) are saved.
+Dashboard (retained local evidence), Cargo/cell audit (retained local evidence), deductions CSV (retained local evidence), and cell CSV (retained local evidence) are saved.
 
-Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. Period switching, outside-period checker reasons, and execution trace links matched. Added cell bars show per-run totals or successful-cell averages, with linear/log scales and SVG export. Both metrics matched all 12 groups. See the [cell-chart audit](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-chart-visual-audit.json). These report updates made no paid calls.
+Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. Period switching, outside-period checker reasons, and execution trace links matched. Added cell bars show per-run totals or successful-cell averages, with linear/log scales and SVG export. Both metrics matched all 12 groups. See the cell-chart audit (retained local evidence). These report updates made no paid calls.
 
 ## Runtime diagnosis and later updates
 

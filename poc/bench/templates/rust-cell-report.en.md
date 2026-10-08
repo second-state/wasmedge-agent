@@ -2,13 +2,101 @@
 
 Date: October 8, 2026. This report compares Prime Agent with a TypeScript host and Python cells, Prime Agent with a Rust host and Python cells, and wasmedge-agent with Rust cells in WasmEdge interpreter and AOT modes. It separates the latest four-way tests from earlier diagnostic tests.
 
-[Download the offline English report package](assets/rust-cell-report-2026-10-08/english-report-set.zip). Extract it and open `docs/rust-cell-report-2026-10-08.en.html`. It includes the English readers, saved dashboards, charts, and linked CSV tables. Raw request, SSE, and source links require the original local run directories, which are not committed.
+**Share this HTML file.** Text, charts, key tables, and timing definitions are included. It opens offline and needs no other files. Optional source citations use the web.
 
-**Rust cells let us check generated code before execution, run it with explicit guest permissions, and save reusable code and state as files.** AOT and the bridge update reduce some execution costs. Total task time still depends on compilation, startup, model output, retries, and the workload.
+<a id="conclusions"></a>
 
-The latest fixed-program test passed 72/72 runs. The latest Opus 5.5 test passed 16/16 runs. Each run passed its output checks and cell-use rules. These results include the cost of retries, compile errors, and runtime errors. Safety claims come from the implemented controls and negative tests. Task pass rate is not a safety score.
+## Conclusions first
 
-## 1. Value and evidence
+| Question | Finding | What it means |
+|---|---|---|
+| Why use Rust cells? | Compile checks, explicit guest permissions, saved source and state | The main value is controlled, inspectable execution. Host and compiler permissions still need separate controls. |
+| Does AOT help? | Data join: {{join_before}} → {{join_after}} ms; **{{join_reduction}}% less execution time** | AOT helps this fixed workload. Its compilation cost is separate and remains in full task time. |
+| Does the bridge update help? | 100 echoes: {{bridge_before}} → {{bridge_after}} ms; **{{bridge_reduction}}% less process time** | Readiness removes polling waits. AOT reduces this further to {{bridge_aot}} ms. |
+| Is Rust faster than Python here? | All six measured Rust/AOT cell totals remain above both resident Python kernels | Short cells still pay for a new process and VM. There is no general Rust speed win in this matrix. |
+| Can we trust the scope? | **72/72 fixed runs; 16/16 tasks; 65 safety tests passed** | Fixed n=3; tasks n=1; 14 Linux tests skipped. These are local results, not a broad performance ranking. |
+
+<a id="runtime"></a>
+
+## 1. Fixed-program execution
+
+The latest test has 6 cases × 4 variants × 3 repetitions. Both Wasm modes use identical Rust reference source. Python performs equivalent operations under the same output contract. This removes model-generation variance. It still includes differences between languages and libraries.
+
+Values below are the median of three per-run cell execution totals, in milliseconds. **They exclude Cargo, AOT compilation, initialization, and snapshots.** Rust execution includes the new process, module load, VM, guest, bridge, and output drain. Python uses an existing kernel. A reported 0 ms is below its integer-millisecond resolution. R01 and R04 each have two cells.
+
+![Four-way fixed-program cell execution](assets/rust-cell-report-2026-10-08/runtime-linear.svg)
+
+{{runtime}}
+
+Data join fell from {{join_before}} ms in interpreter mode to {{join_after}} ms in AOT mode, a {{join_reduction}}% reduction. Repository scan and bridge execution also improved. The short CPU case still took {{cpu_aot}} ms in AOT, versus {{cpu_python}} ms in each Python kernel. A new process and VM impose a fixed cost on every Rust cell. The results support choosing a mode for the workload.
+
+Earlier diagnostics confirmed that Python JSON uses the `_json` C accelerator. Rust `serde_json` runs as interpreted Wasm in interpreter mode. A near-empty process took about 8–10 ms. Guest work can be short while cell time remains limited by launch and load costs. The earlier runtime analysis contains CPU, JSON, regex, and state body timers. Its AOT and 1 ms polling tests were diagnostic controls before the product update. See the AOT and bridge report for the implemented update.
+
+<a id="bridge"></a>
+
+## 2. Controlled bridge comparison
+
+The test used identical `diff.rs` and `bridge.rs` source bytes, the same handlers, and a 1 KiB payload. It alternated old polling, readiness-based interpreter, and readiness-based AOT execution. Each mode and case had two warmups and 15 measured samples. All 102 samples were saved. The chart and table use only measured-sample medians.
+
+![Alternating bridge comparison](assets/rust-cell-report-2026-10-08/bridge.svg)
+
+{{bridge}}
+
+For 100 echoes, process wall time fell from {{bridge_before}} ms to {{bridge_after}} ms after the readiness update, a {{bridge_reduction}}% reduction. Normal WASI reply reads now use `poll_oneoff` to wait for stdin readiness or a monotonic deadline. They wake when data arrives. Native TCP and rare write retries keep their existing polling.
+
+AOT reduced the total further to {{bridge_aot}} ms. Guest-body medians for 100 echoes were 639.344 → 53.548 → 3.207 ms. After removing polling waits, interpreter execution and JSON framing still have measurable costs. We do not pool these results with earlier bridge tests under different scheduling conditions.
+
+AOT compilation took another 2.74/2.76 seconds before execution. If a future trusted artifact cache allowed reuse, this fixed 100-echo workload would need about **51 executions** to recover one 2.76-second compile cost at a saving of about 54.57 ms per execution. This is an arithmetic estimate under a reuse assumption. The current product recompiles every cell and does not receive this benefit.
+
+<a id="tasks"></a>
+
+## 3. Opus 5.5 task results
+
+The test has 4 tasks × 4 variants × 1 repetition. All 16 runs passed the common checker and per-turn cell rules. There were 70 paid model requests. The route was `anthropic/claude-opus-5-5`, with reasoning off. The advertised model ID was saved. Its immutable backend revision was not independently verified.
+
+Every task turn required at least one successful Python or Rust cell. Cells performed file reads, calculation, edits, and writes. All generated sources and library edits were inspected. They did not delegate the work to shell or subprocess calls. Common Node and Cargo checks ran after agent completion and were timed separately. This is a controlled cell test, with different rules from a product loop that permits native commands.
+
+### Raw agent time
+
+Values are seconds. They include workspace initialization, model requests, tool work, and repairs. They exclude daemon startup and the final external checker. Each value is one observation.
+
+![Opus task time and compiler commands](assets/rust-cell-report-2026-10-08/paid-agent-all.svg)
+
+{{paid_raw}}
+
+### All Cargo and AOT costs shown separately
+
+The table uses the same **agent interval**, in seconds. Cargo includes all managed Cargo commands in that interval: initialization, library gates, and failed retries. A `cargo test` command includes test execution. It is not pure compiler CPU time. AOT is the WasmEdge compiler command's wall time. Overlapping commands count once, and their intervals are clipped to the agent interval. Later checker commands are not subtracted from agent time.
+
+{{paid_compilation}}
+
+All Python agent intervals have zero Cargo/AOT deductions. Their adjusted values equal the raw values above. E08 checker Cargo appears only in the interval that includes validation. The chart above lets readers select all Cargo or all Cargo plus AOT, and agent, user, or validation time. This is an arithmetic breakdown of recorded execution. No compile-free rerun took place.
+
+In E09 AOT, three regex-related AOT commands took **29.31 seconds**. Raw agent time was 59.57 seconds. After all Cargo and AOT deductions, the remainder was about 25.14 seconds, versus 30.46 seconds for interpreter mode. Sources and cell counts differed. These adjusted task values are not a pure runtime speed ratio.
+
+### Cell execution and repairs
+
+
+
+<!-- paid-cell-chart -->
+
+{{paid_cells}}
+
+The count column shows successful cells, runtime failures, and Cargo failures. All AOT compiler failure counts were zero. The {{cell_calls}} calls included {{runtime_failures}} runtime errors and {{cargo_failures}} Cargo errors. Each error was repaired within a successful task. All costs remain in the results.
+
+In E09, Prime TS, Prime Rust, interpreter, and AOT used 11, 5, 5, and 3 cells. Python retained imports and caches. Rust used new processes. The saved runs show reusable helpers in use. They do not measure long-term token or money savings across tasks.
+
+### Model requests and tokens
+
+These totals cover all requests in the four tasks, including repairs and later turns. Prompt tokens include cached tokens. The cached column is a subset and must not be added again. These are task-trajectory measures.
+
+{{usage}}
+
+AOT used two fewer requests and 578 fewer output tokens than interpreter in this test. Generated code and repair paths differed. The result does not prove that AOT reduces model tokens. Rust output usage was not consistently below both Python variants. Complete billing records were unavailable, so token counts were not converted into actual charges.
+
+<a id="value"></a>
+
+## 4. Value and evidence
 
 | Value | Supported claim | Evidence and limits |
 |---|---|---|
@@ -21,17 +109,9 @@ The latest fixed-program test passed 72/72 runs. The latest Opus 5.5 test passed
 
 The supported product claim is: **Rust cells are inspectable execution units with explicit guest permissions and saved code and data. WasmEdge AOT provides a way to reduce compute-heavy execution costs. The bridge update has reduced request/reply delays.** These tests do not show that all Rust tasks are faster, use less memory, or cost less in model fees than Python tasks.
 
-## 2. Four architectures
+<a id="safety"></a>
 
-{{variants}}
-
-The Prime Rust port changes the host language. It still runs Python cells. wasmedge-agent still has a TypeScript host. The main runtime comparison is a persistent Python kernel versus Rust/Wasm cells. The latest interpreter and AOT groups use the same fork build and updated bridge. Only the runtime mode differs.
-
-Python reuses its kernel and in-memory objects. Each Rust cell is a complete program in a new WasmEdge process and VM. Helpers, state, and project files persist on disk. This makes saved content explicit. It can also require each cell to reload data or rebuild JSON and regex structures.
-
-![Guest permissions and trust boundary](assets/rust-cell-report-2026-10-08/boundary.svg)
-
-## 3. Safety controls
+## 5. Safety controls
 
 ### Default and optional controls
 
@@ -58,75 +138,21 @@ Rust ownership checks reject some errors at compile time. See the [Rust ownershi
 
 On macOS, real WasmEdge tests passed for socket-import rejection, gas exhaustion, memory growth limits, large UTF-8 bridge messages, and a fresh handshake after timeout in both modes. The read-only project test used interpreter mode. Unit tests also cover environment rules, import rules, mount aliases, AOT stripping, provenance, and failure handling.
 
-Real Linux Bubblewrap and cgroup tests were skipped because the platform requirements were absent. The macOS results do not prove Linux enforcement. See the [runtime trust boundary](../packages/coding-agent/docs/rlm-runtime.md#trust-boundary) for full settings and excluded host paths.
+Real Linux Bubblewrap and cgroup tests were skipped because the platform requirements were absent. The macOS results do not prove Linux enforcement. See the runtime trust boundary for full settings and excluded host paths.
 
-## 4. Fixed-program execution
+<a id="architecture"></a>
 
-The latest test has 6 cases × 4 variants × 3 repetitions. Both Wasm modes use identical Rust reference source. Python performs equivalent operations under the same output contract. This removes model-generation variance. It still includes differences between languages and libraries.
+## 6. Four architectures
 
-Values below are the median of three per-run cell execution totals, in milliseconds. **They exclude Cargo, AOT compilation, initialization, and snapshots.** Rust execution includes the new process, module load, VM, guest, bridge, and output drain. Python uses an existing kernel. A reported 0 ms is below its integer-millisecond resolution. R01 and R04 each have two cells.
+{{variants}}
 
-![Four-way fixed-program cell execution](assets/rust-cell-report-2026-10-08/runtime-linear.svg)
+The Prime Rust port changes the host language. It still runs Python cells. wasmedge-agent still has a TypeScript host. The main runtime comparison is a persistent Python kernel versus Rust/Wasm cells. The latest interpreter and AOT groups use the same fork build and updated bridge. Only the runtime mode differs.
 
-{{runtime}}
+Python reuses its kernel and in-memory objects. Each Rust cell is a complete program in a new WasmEdge process and VM. Helpers, state, and project files persist on disk. This makes saved content explicit. It can also require each cell to reload data or rebuild JSON and regex structures.
 
-Data join fell from {{join_before}} ms in interpreter mode to {{join_after}} ms in AOT mode, a {{join_reduction}}% reduction. Repository scan and bridge execution also improved. The short CPU case still took {{cpu_aot}} ms in AOT, versus {{cpu_python}} ms in each Python kernel. A new process and VM impose a fixed cost on every Rust cell. The results support choosing a mode for the workload.
+![Guest permissions and trust boundary](assets/rust-cell-report-2026-10-08/boundary.svg)
 
-Earlier diagnostics confirmed that Python JSON uses the `_json` C accelerator. Rust `serde_json` runs as interpreted Wasm in interpreter mode. A near-empty process took about 8–10 ms. Guest work can be short while cell time remains limited by launch and load costs. The [earlier runtime analysis](benchmark-cell-runtime-analysis-2026-10-08.en.md) contains CPU, JSON, regex, and state body timers. Its AOT and 1 ms polling tests were diagnostic controls before the product update. See the [AOT and bridge report](benchmark-aot-bridge-2026-10-08.en.md) for the implemented update.
-
-## 5. Controlled bridge comparison
-
-The test used identical `diff.rs` and `bridge.rs` source bytes, the same handlers, and a 1 KiB payload. It alternated old polling, readiness-based interpreter, and readiness-based AOT execution. Each mode and case had two warmups and 15 measured samples. All 102 samples were saved. The chart and table use only measured-sample medians.
-
-![Alternating bridge comparison](assets/rust-cell-report-2026-10-08/bridge.svg)
-
-{{bridge}}
-
-For 100 echoes, process wall time fell from {{bridge_before}} ms to {{bridge_after}} ms after the readiness update, a {{bridge_reduction}}% reduction. Normal WASI reply reads now use `poll_oneoff` to wait for stdin readiness or a monotonic deadline. They wake when data arrives. Native TCP and rare write retries keep their existing polling.
-
-AOT reduced the total further to {{bridge_aot}} ms. Guest-body medians for 100 echoes were 639.344 → 53.548 → 3.207 ms. After removing polling waits, interpreter execution and JSON framing still have measurable costs. We do not pool these results with earlier bridge tests under different scheduling conditions.
-
-AOT compilation took another 2.74/2.76 seconds before execution. If a future trusted artifact cache allowed reuse, this fixed 100-echo workload would need about **51 executions** to recover one 2.76-second compile cost at a saving of about 54.57 ms per execution. This is an arithmetic estimate under a reuse assumption. The current product recompiles every cell and does not receive this benefit.
-
-## 6. Opus 5.5 task results
-
-The test has 4 tasks × 4 variants × 1 repetition. All 16 runs passed the common checker and per-turn cell rules. There were 70 paid model requests. The route was `anthropic/claude-opus-5-5`, with reasoning off. The advertised model ID was saved. Its immutable backend revision was not independently verified.
-
-Every task turn required at least one successful Python or Rust cell. Cells performed file reads, calculation, edits, and writes. All generated sources and library edits were inspected. They did not delegate the work to shell or subprocess calls. Common Node and Cargo checks ran after agent completion and were timed separately. This is a controlled cell test, with different rules from a product loop that permits native commands.
-
-### Raw agent time
-
-Values are seconds. They include workspace initialization, model requests, tool work, and repairs. They exclude daemon startup and the final external checker. Each value is one observation.
-
-![Opus task time and compiler commands](assets/rust-cell-report-2026-10-08/paid-agent-all.svg)
-
-{{paid_raw}}
-
-### All Cargo and AOT costs shown separately
-
-The table uses the same **agent interval**, in seconds. Cargo includes all managed Cargo commands in that interval: initialization, library gates, and failed retries. A `cargo test` command includes test execution. It is not pure compiler CPU time. AOT is the WasmEdge compiler command's wall time. Overlapping commands count once, and their intervals are clipped to the agent interval. Later checker commands are not subtracted from agent time.
-
-{{paid_compilation}}
-
-All Python agent intervals have zero Cargo/AOT deductions. Their adjusted values equal the raw values above. E08 checker Cargo appears only in the interval that includes validation. The dashboard lets readers select all Cargo or all Cargo plus AOT, and agent, user, or validation time. This is an arithmetic breakdown of recorded execution. No compile-free rerun took place.
-
-In E09 AOT, three regex-related AOT commands took **29.31 seconds**. Raw agent time was 59.57 seconds. After all Cargo and AOT deductions, the remainder was about 25.14 seconds, versus 30.46 seconds for interpreter mode. Sources and cell counts differed. These adjusted task values are not a pure runtime speed ratio.
-
-### Cell execution and repairs
-
-{{paid_cells}}
-
-The count column shows successful cells, runtime failures, and Cargo failures. All AOT compiler failure counts were zero. The {{cell_calls}} calls included {{runtime_failures}} runtime errors and {{cargo_failures}} Cargo errors. Each error was repaired within a successful task. All costs remain in the results.
-
-In E09, Prime TS, Prime Rust, interpreter, and AOT used 11, 5, 5, and 3 cells. Python retained imports and caches. Rust used new processes. The saved runs show reusable helpers in use. They do not measure long-term token or money savings across tasks.
-
-### Model requests and tokens
-
-These totals cover all requests in the four tasks, including repairs and later turns. Prompt tokens include cached tokens. The cached column is a subset and must not be added again. These are task-trajectory measures.
-
-{{usage}}
-
-AOT used two fewer requests and 578 fewer output tokens than interpreter in this test. Generated code and repair paths differed. The result does not prove that AOT reduces model tokens. Rust output usage was not consistently below both Python variants. Complete billing records were unavailable, so token counts were not converted into actual charges.
+<a id="diagnosis"></a>
 
 ## 7. Why Rust cells were slower
 
@@ -138,6 +164,21 @@ AOT used two fewer requests and 578 fewer output tokens than interpreter in this
 | Fixed 5 ms bridge polling | Alternating tests and lower guest wait times | Normal WASI reply reads now wait for readiness and deadline. |
 | Rebuild data and regex per cell | E09 sources and body timers. State uses files, without the host bridge. | Saved state can store processed results. A resident data service and cross-cell compiled-regex cache are not implemented. |
 | Model output and repairs | Earlier E11 used more Rust output tokens. Latest E08 had compile errors; E09 cell counts differed. | These are task costs. Keep model requests, diagnostics, and failed attempts in the report. They cannot all be attributed to Wasm. |
+
+### Earlier controls: guest work versus cell time
+
+These controls predate the readiness update. Each runtime median uses 15 measured samples after two warmups. Interpreter and AOT execute the same artifact. Body timers run inside the guest; they exclude launch/load time. Do not pool these values with the latest six-case matrix.
+
+| Fixed work | Interpreter cell ms | AOT cell ms | Interpreter body ms | AOT body ms |
+|---|---|---|---|---|
+| Near-empty program | 8.361 | 7.026 | Not instrumented | Not instrumented |
+| 100,000 CPU operations | 10.690 | 6.616 | 2.022 | 0.023 |
+| 10,000-record JSON parse | 223.773 | 9.009 | 211.703 | 1.220 |
+| Regex and saved state | 31.237 | 10.308 | Regex 4.574; match 3.484 | Regex 0.161; match 0.048 |
+
+The related AOT compiler commands took 1.407, 1.505, 1.822, and 10.810 seconds. These costs are excluded from the cell columns above. Fast guest work does not remove process/VM overhead. Python JSON uses its native `_json` accelerator; Rust JSON runs as Wasm. These paths do not have the same library implementation.
+
+<a id="timing"></a>
 
 ## 8. Timing definitions
 
@@ -157,21 +198,25 @@ Cell totals include successful and failed runtime execution. Compile failures ha
 
 Labels have distinct meanings. **Complete measurement, deduction 0** means a complete ledger confirms no compiler command in that interval. **No AOT phase** means the phase is not applicable. **Cannot calculate** means data are insufficient. **Excluded from comparison** means output checks or cell rules failed. Missing values are not replaced with zero. Python 0 ms means below reporting resolution.
 
+<a id="method"></a>
+
 ## 9. Environment and test history
 
 The host was Darwin 25.6.0 arm64, Apple M5 Max, 18 logical CPUs, and 128 GiB RAM. Tools were Node 24.13.1, Cargo/rustc 1.98.1, and WasmEdge 0.14.1. Rust host, adapter, and guest builds used release mode.
 
 The latest fork used baseline `48d6312570f7d39809703db2c69a43f342fb7424` plus a saved uncommitted runtime patch. The commit alone cannot reproduce it. Prepared inputs, launchers, templates, collectors, hashes, and original outputs are saved.
 
-{{history}}
+Earlier campaigns used host replay, native tools, or different Cargo capture rules. They are retained locally for diagnosis and are excluded from the latest comparison.
 
 Host replay, native-tool observation, cell-only tests, all-Cargo capture, and AOT tests have different controls. They are not pooled. Early bridge and native-command adapter failures remain saved. The latest fixed matrix covers six cases, not all 16 designed runtime cases.
 
-The [August feasibility study](../REPORT.en.md), [August 12-task benchmark](benchmark-comparison-2026-08-10.en.md), and [October 7 microbenchmark](runtime-microbenchmark-2026-10-07.en.md) are historical context. Different models, runtimes, and environments prevent pooling them with this test.
+The August feasibility study, August 12-task benchmark, and October 7 microbenchmark are historical context. Different models, runtimes, and environments prevent pooling them with this test.
 
 The latest two campaigns contain {{spans}} spans, with no schema or integrity errors. Capture is complete for {{cargo_commands}} Cargo and {{aot_commands}} AOT commands. Paid responses, generated code, repairs, sessions, outputs, checkers, and failed attempts are saved. Earlier scans found no actual API key in the selected text artifacts. That is a scoped artifact check, not whole-system secret detection.
 
 Fixed cases have n=3 per group. Paid tasks have n=1. No confidence intervals, cross-platform repetition, or complete instrumentation-overhead audit were produced. The results explain local workload costs and the tested changes. They do not estimate a stable cross-task win rate. An advertised model ID does not independently verify a backend revision.
+
+<a id="next"></a>
 
 ## 10. Adoption and next work
 
@@ -185,15 +230,16 @@ Priorities are:
 4. Run more tasks and paired repetitions. Complete the instrumentation-overhead audit and report confidence intervals before a general speed verdict.
 5. Repeat relevant safety tests on Linux with the optional compiler and process-tree controls enabled. Measure CPU and memory use separately from configured limits.
 
-## 11. Reports and evidence
+<a id="sources"></a>
 
-- [Latest four-way fixed-program dashboard](../poc/bench/results/four-way-aot-bridge-runtime-01/report.en.html): filters, cell totals/averages, Cargo/AOT, phases, traces, and CSV/SVG export.
-- [Latest four-way Opus 5.5 dashboard](../poc/bench/results/four-way-opus55-aot-bridge-01/report.en.html): 16 runs, model output, full tasks, repairs, and compiler views.
-- [AOT and bridge implementation](benchmark-aot-bridge-2026-10-08.en.md) and [earlier runtime diagnosis](benchmark-cell-runtime-analysis-2026-10-08.en.md).
-- [Benchmark protocol](benchmark-three-way-design-2026-10-08.en.md), [validation history](benchmark-three-way-validation-2026-10-08.en.md), [trace schema](benchmark-trace.schema.json), and [runner instructions](../poc/bench/three-way/README.en.md).
-- [Raw safety-test results](../poc/bench/results/consolidated-report-20261008-01/security-validation.json) and [aggregate data and source hashes](assets/rust-cell-report-2026-10-08/data.json).
-- [Runtime settings and trust boundary](../packages/coding-agent/docs/rlm-runtime.md), [English design decision guide](../DESIGN.en.md), and [official WasmEdge AOT guide](https://wasmedge.org/docs/start/build-and-run/aot/).
+## Source records and reproducibility
 
-The HTML file embeds its text, tables, and charts and opens offline. Evidence links use repository-relative paths. The English share package preserves those paths for the included reports. Raw traces and generated code remain in their original language.
+All decision data are included above: the six-case runtime matrix, bridge controls, full task time, all Cargo and AOT deductions, cell failures, model usage, safety tests, and timing definitions. Raw traces, generated programs, and historical dashboards remain local; reading this report does not require them.
 
-Rebuild the English set with `uv run --with markdown==3.10.2 python poc/bench/english-report.py`. It reads saved results, validates links and data preservation, and makes no model calls. The [Chinese report](rust-cell-report-2026-10-08.html) remains available separately.
+The report uses saved aggregates and source SHA-256 records. These identify the retained evidence; hashes alone are not a reproduction package. The baseline plus runtime patch is required to reproduce the experiment. Rebuilding this reader does not rerun benchmarks or call a model.
+
+`uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py` rebuilds both standalone readers from tracked aggregate data, templates, and SVGs. Add `--refresh-evidence` with Matplotlib 3.10.8 only when the original local evidence is available. This option audits saved data; it does not make model requests.
+
+{{provenance}}
+
+Optional primary reference: [WasmEdge AOT guide](https://wasmedge.org/docs/start/build-and-run/aot/).

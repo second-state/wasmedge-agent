@@ -1,6 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Benchmark Validation History — October 8, 2026</title><style>
-:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Benchmark Validation History — October 8, 2026</title><style>:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
 *{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
 a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
 .layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
@@ -17,12 +16,20 @@ li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color
 @media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
 @media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
 
-main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
-<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
-<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#fixed-inputs">Fixed inputs</a><a href="#initial-tests">Initial tests</a><a href="#observed-failures-and-limits">Observed failures and limits</a><a href="#first-graphical-reports">First graphical reports</a><a href="#earlier-cell-compilation-deduction">Earlier cell-compilation deduction</a><a href="#corrected-cell-only-test">Corrected cell-only test</a><a href="#startup-and-model-trajectory-diagnosis">Startup and model-trajectory diagnosis</a><a href="#all-cargo-capture-and-cell-execution">All-Cargo capture and cell execution</a><a href="#runtime-diagnosis-and-later-updates">Runtime diagnosis and later updates</a></nav><main><h1 id="benchmark-validation-history-october-8-2026">Benchmark Validation History — October 8, 2026</h1>
+main{overflow-wrap:anywhere}main>p:nth-of-type(2){background:none;border:0;padding:0}
+.overview{border:1px solid #b2d4c3;border-radius:8px;padding:20px;background:#edf6f1;margin:20px 0}
+.overview table{min-width:0}.overview th{background:#dcefe4}.overview td{padding:12px}
+.cell-chart{display:grid;grid-template-columns:1fr 1fr;gap:24px}.cell-case{min-width:0}.cell-case h4{margin:0 0 8px}.cell-row{margin:12px 0}.cell-label{display:flex;justify-content:space-between;gap:10px;font-size:13px}.cell-track{background:#eef2f6;border-radius:3px;height:12px;margin-top:4px}.cell-bar{height:100%;border-radius:3px}
+details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:16px;background:#eef2f6}pre code{white-space:pre;overflow-wrap:normal}
+@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg{min-width:640px}}
+@media print{details{display:block}.overview{break-inside:avoid}.cell-chart{grid-template-columns:1fr 1fr}}
+.overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
+@media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
+@media(max-width:560px){.overview thead{display:none}.overview tr{display:block;border-bottom:1px solid var(--line)}.overview tr:last-child{border:0}.overview td{display:block;border:0;padding:6px 0}.overview td:first-child{font-weight:700;padding-top:12px}.overview td:last-child{padding-bottom:14px;color:var(--muted)}}
+</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">Print</button></div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#fixed-inputs">Fixed inputs</a><a href="#initial-tests">Initial tests</a><a href="#observed-failures-and-limits">Observed failures and limits</a><a href="#first-graphical-reports">First graphical reports</a><a href="#earlier-cell-compilation-deduction">Earlier cell-compilation deduction</a><a href="#corrected-cell-only-test">Corrected cell-only test</a><a href="#startup-and-model-trajectory-diagnosis">Startup and model-trajectory diagnosis</a><a href="#all-cargo-capture-and-cell-execution">All-Cargo capture and cell execution</a><a href="#runtime-diagnosis-and-later-updates">Runtime diagnosis and later updates</a></nav><main><h1 id="benchmark-validation-history-october-8-2026">Benchmark Validation History — October 8, 2026</h1>
 <p>The runner, trace collector, runtime adapters, and offline HTML/CSV reports are implemented. The catalog has three host cases, 16 direct-runtime cases, and 12 task cases. The first tests covered all H/R cases and four E tasks. This validates the harness, outputs, and measurement coverage. It does not establish a general speed ranking.</p>
 <p>The first paid campaign allowed native tools. WasmEdge E03/E08/E11 used only bash. Those runs cannot answer the Python-cell versus Rust/Wasm-cell question. Their raw records remain saved, but they are excluded from cell comparisons. Later tests require a successful cell in every task turn, prohibit shell delegation, and time the shared checker separately. Earlier chart and deduction checks below are historical records of earlier report versions.</p>
-<p>See the <a href="../poc/bench/three-way/README.en.html">runner instructions</a>, <a href="benchmark-three-way-design-2026-10-08.en.html">protocol</a>, and <a href="rust-cell-report-2026-10-08.en.html">current consolidated report</a>. Raw data and paid outputs are in gitignored <code>poc/bench/results/</code>. Links point to saved local artifacts.</p>
+<p>See the <a href="../poc/bench/three-way/README.en.html">runner instructions</a>, <a href="benchmark-three-way-design-2026-10-08.en.html">protocol</a>, and <a href="rust-cell-report-2026-10-08.en.html">current consolidated report</a>. The standalone report includes conclusions, charts, and key tables. Historical dashboards, CSV tables, diagnostics, PNG screenshots, provider requests, SSE, sessions, and generated task outputs remain local.</p>
 <h2 id="fixed-inputs">Fixed inputs</h2>
 <div class="table-scroll"><table>
 <thead>
@@ -70,35 +77,35 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 <td style="text-align: right;">57</td>
 <td>R 48/48; H 6 passed, 2 failed, 1 not applicable</td>
 <td style="text-align: right;">0</td>
-<td><a href="../poc/bench/results/three-way-local-02/report.en.html">Host/runtime</a></td>
+<td>Host/runtime (retained local evidence)</td>
 </tr>
 <tr>
 <td><code>three-way-opus55-smoke-01</code></td>
 <td style="text-align: right;">12</td>
 <td>Four tasks × three variants; all checkers passed; native-tool policy</td>
 <td style="text-align: right;">54</td>
-<td><a href="../poc/bench/results/three-way-opus55-smoke-01/report.en.html">Native-tool observation</a></td>
+<td>Native-tool observation (retained local evidence)</td>
 </tr>
 <tr>
 <td><code>three-way-opus55-cell-smoke-01</code></td>
 <td style="text-align: right;">12</td>
 <td>Checker and per-turn cell rules passed 12/12</td>
 <td style="text-align: right;">50</td>
-<td><a href="../poc/bench/results/three-way-opus55-cell-smoke-01/report.en.html">Cell comparison</a></td>
+<td>Cell comparison (retained local evidence)</td>
 </tr>
 <tr>
 <td><code>three-way-command-profile-check</code></td>
 <td style="text-align: right;">1</td>
 <td>Fork R01 passed; 48 Cargo/rustc command spans saved</td>
 <td style="text-align: right;">0</td>
-<td><a href="../poc/bench/results/three-way-command-profile-check/report.en.html">Command profile</a></td>
+<td>Command profile (retained local evidence)</td>
 </tr>
 <tr>
 <td><code>three-way-edit-phase-check</code></td>
 <td style="text-align: right;">3</td>
 <td>R06 passed in all variants; read/transform/write/verify measured</td>
 <td style="text-align: right;">0</td>
-<td><a href="../poc/bench/results/three-way-edit-phase-check/report.en.html">Edit phases</a></td>
+<td>Edit phases (retained local evidence)</td>
 </tr>
 </tbody>
 </table></div>
@@ -109,10 +116,10 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 <li>Collector tests passed 15/15 using faux HTTP/SSE, without paid calls.</li>
 <li>The initial 73 slots had 6,187 schema-valid spans and zero cross-record integrity errors. The later cell campaign is reported separately below.</li>
 <li>R06 read/transform/write/verify durations fit inside the edit transaction. Write time covered write/close, not read, matching, verification, or an fsync guarantee.</li>
-<li>Browser filters worked. A <a href="../poc/bench/results/three-way-opus55-smoke-01/report-filtered.png">filtered screenshot</a> is saved.</li>
+<li>Browser filters worked. A filtered screenshot is saved.</li>
 <li>A scoped scan of 675 paid artifacts found zero occurrences of the actual API key. Build outputs were skipped. Credentials were not written to config, child environment, manifest, or command line.</li>
 </ul>
-<p><a href="../poc/bench/results/three-way-validation-2026-10-08.json">Trace/stream/edit audit</a> and <a href="../poc/bench/results/three-way-opus55-smoke-01/credential-artifact-audit.json">credential audit</a> record these checks. Runs retain SSE, decoded arguments, session logs, project outputs, checker logs, and failures.</p>
+<p>Trace/stream/edit audit (retained local evidence) and credential audit (retained local evidence) record these checks. Runs retain SSE, decoded arguments, session logs, project outputs, checker logs, and failures.</p>
 <h2 id="observed-failures-and-limits">Observed failures and limits</h2>
 <p>H02 replay used 8 KiB context, 64 KiB UTF-8 output, and 64 code points per chunk in a zero-delay burst. Prime TS and the fork exited zero but omitted the final assistant <code>message_end</code> in JSON output. Both sessions retained all 65,536 bytes and the marker. Prime Rust delivered and saved the complete result. The two correctness failures remain recorded. Their client root cause was not fixed in this work.</p>
 <p>H03 is not applicable to the Rust CLI. It has no separate bash model tool or equivalent tool-filter flags. A shell call inside a runtime was not substituted for host-only dispatch. R10 separately uses the real bridge with a common <code>/bin/sh</code> handler.</p>
@@ -122,11 +129,11 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 <h2 id="first-graphical-reports">First graphical reports</h2>
 <p>Four initial campaigns were reanalyzed offline, without paid calls. Reports gained case bars, correctness, coverage, phase heatmaps, a single-clock timeline, trace links, and SVG export.</p>
 <p>The 12 paid latency bars matched recorded successful medians. H02 failures retained null success medians and a 90,000 ms penalized mean each. H03 Rust remained not applicable. At 390/320 px, pages had no horizontal overflow; wide charts scrolled internally. Heatmap/timeline navigation and SVG download worked. Collector tests then passed 18/18.</p>
-<p><a href="../poc/bench/results/three-way-opus55-smoke-01/report-charts-desktop.png">Desktop</a>, <a href="../poc/bench/results/three-way-opus55-smoke-01/report-phase-heatmap.png">heatmap</a>, <a href="../poc/bench/results/three-way-opus55-smoke-01/report-charts-mobile.png">mobile</a>, and <a href="../poc/bench/results/three-way-opus55-smoke-01/report-visual-audit.json">visual audit</a> are saved. These screenshots show the historical Chinese reports.</p>
+<p>Desktop, heatmap, mobile, and visual audit (retained local evidence) are saved. These screenshots show the historical Chinese reports.</p>
 <h2 id="earlier-cell-compilation-deduction">Earlier cell-compilation deduction</h2>
 <p>The first deduction section removed measured Rust-to-Wasm <code>cell.compile</code> time from each successful run, then took the median. Raw bars used the same samples. Other Cargo work was still in the remainder. These adjusted values also retained model and other tool time.</p>
 <p>All 73 JSON/CSV deductions matched: 18 runs deducted Cargo; 46 upstream runs had no corresponding phase; five had no Rust cell; three were excluded from successful medians; one was unavailable. R15 parallel compile durations lacked a shared origin and could not be safely deducted. Historical Opus E09 had 689.717917 ms of cell Cargo, 29,427.396583 ms agent time, and 28,737.678666 ms adjusted time. This native-policy run is now excluded from cell comparisons.</p>
-<p>Collector tests passed 25/25. Tests covered paired medians, failures, parent/child overlap, missing/duplicate observations, clocks, negative values, and export. Browser checks passed at desktop and 390/320 px. No paid calls were added. See <a href="../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-runs.csv">deduction CSV</a> and <a href="../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-audit.json">audit</a>.</p>
+<p>Collector tests passed 25/25. Tests covered paired medians, failures, parent/child overlap, missing/duplicate observations, clocks, negative values, and export. Browser checks passed at desktop and 390/320 px. No paid calls were added. See deduction CSV (retained local evidence) and audit (retained local evidence).</p>
 <h2 id="corrected-cell-only-test">Corrected cell-only test</h2>
 <p><code>three-way-opus55-cell-smoke-01</code> is a new immutable plan. It ran E03/E08/E09/E11 once per variant, with the same model route and reasoning off. All 50 requests exposed only the appropriate Python or Rust cell tool. All 12 runs passed the checker and per-turn rules. The checker ran after agent completion and is outside agent elapsed time.</p>
 <p>There were 32 calls: 28 successful and four repaired failures. All costs remain. Inspection of 34 generated Python/Rust files, including library sources, found no shell/subprocess delegation. E03 Rust used <code>edit_exact</code>; other Rust file work used <code>std::fs</code>. E09 used the products' real helper/state APIs. Automated source screening is not a proof about arbitrary code.</p>
@@ -178,10 +185,10 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 </tbody>
 </table></div>
 <p>The revised table separates raw time, deduction, adjusted time, and reason. No Rust-to-Wasm phase does not mean all Python preparation is free. Missing data mean cannot calculate; failed or non-compliant runs mean excluded. Earlier native records retain their phases and checker results but are excluded from cell bars.</p>
-<p>Collector tests passed 29/29. All 1,008 new spans passed schema/integrity checks. JSON/CSV arithmetic and checker boundaries matched. A scan of 5,354 non-build/cache files found no actual API key. Desktop, mobile, filters, trace links, and SVG export passed. See <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/cell-runtime-audit.json">cell audit</a> and <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/report-visual-audit.json">visual audit</a>.</p>
+<p>Collector tests passed 29/29. All 1,008 new spans passed schema/integrity checks. JSON/CSV arithmetic and checker boundaries matched. A scan of 5,354 non-build/cache files found no actual API key. Desktop, mobile, filters, trace links, and SVG export passed. See cell audit (retained local evidence) and visual audit (retained local evidence).</p>
 <h2 id="startup-and-model-trajectory-diagnosis">Startup and model-trajectory diagnosis</h2>
 <p>Before the first gateway request, the four Rust runs took 5.195–5.916 s; Prime TS took 0.510–0.538 s; Prime Rust took 0.032–0.037 s. This initialization was inside agent elapsed but outside cell compilation. Synchronous workspace/toolchain/skill work blocked the Node event loop despite fire-and-forget prewarming.</p>
-<p>The prepared template lacked websearch, but real sessions mounted it. <code>syncRustSkills</code> then ran an <code>agent_lib</code> probe build. A separate six-workspace test alternated three no-skill and three websearch cases. Initialization took 0.346–0.389 s without the skill and 4.612–5.048 s with it. Probe Cargo took 4.241–4.650 s. Dependencies rebuilt despite template warming. Reopening the three saved skill workspaces took 0.049–0.055 s without another probe. Wrappers were present and overhead was not audited. Those diagnostic values cannot be subtracted from original paid runs. <a href="../poc/bench/results/startup-diagnostic-20261008-01/startup-profile.json">Startup measurements</a>.</p>
+<p>The prepared template lacked websearch, but real sessions mounted it. <code>syncRustSkills</code> then ran an <code>agent_lib</code> probe build. A separate six-workspace test alternated three no-skill and three websearch cases. Initialization took 0.346–0.389 s without the skill and 4.612–5.048 s with it. Probe Cargo took 4.241–4.650 s. Dependencies rebuilt despite template warming. Reopening the three saved skill workspaces took 0.049–0.055 s without another probe. Wrappers were present and overhead was not audited. Those diagnostic values cannot be subtracted from original paid runs. Startup measurements (retained local evidence).</p>
 <p>E11 used the following clipped agent intervals. HTTP intervals were merged. Tool windows excluded HTTP overlap. Nested cells/compiler time were not added again:</p>
 <div class="table-scroll"><table>
 <thead>
@@ -221,7 +228,7 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 </table></div>
 <p>Inside the Rust tool window, Cargo totaled 0.353 s, execution 0.021 s, and snapshots 0.076 s. Python execute summaries totaled 4 ms under a different boundary. Wasm execution does not explain the 8.663 s total gap.</p>
 <p>Both variants made three E11 HTTP calls. Rust cell-request output was 774 tokens, versus 341 for Python; whole-task output was 876/439. First prompts were 9,241/11,520 tokens. The slower Rust model path cannot be explained as simply a longer prompt. Server queue, cache, prefill, and generation were not independently timed.</p>
-<p>E08 Rust first referenced unavailable <code>walkdir::WalkDir</code>, then repaired with <code>std::fs</code>: three calls versus two Python calls. E09 Rust used three successful cells and six HTTP calls; Prime TS used eight cells, two API errors, and 11 HTTP calls. Rust took 27.863 s versus 38.656 s. See <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/latency-attribution.json">full attribution</a>.</p>
+<p>E08 Rust first referenced unavailable <code>walkdir::WalkDir</code>, then repaired with <code>std::fs</code>: three calls versus two Python calls. E09 Rust used three successful cells and six HTTP calls; Prime TS used eight cells, two API errors, and 11 HTTP calls. Rust took 27.863 s versus 38.656 s. See full attribution (retained local evidence).</p>
 <p>Twelve smoke runs mean four cases × three variants × one observation. They identify local costs and failures, but cannot estimate model variance or stable win rates. With n=1, a median is the single value. Formal comparison needs more paired runs, confidence intervals, overhead checks, and initialization Cargo coverage.</p>
 <h2 id="all-cargo-capture-and-cell-execution">All-Cargo capture and cell execution</h2>
 <p><code>three-way-opus55-all-cargo-smoke-01</code> is another separate cell-only campaign with the same four cases. It passed 12/12, used 52 paid requests, and made 34 calls: 28 successes, five Python runtime API errors, and one Rust compile error. Inspection of all 36 generated source files found no shell delegation. E09 persistence/helper methods still differ, so this is a product task comparison, not a fixed-program CPU test.</p>
@@ -363,10 +370,8 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 </tbody>
 </table></div>
 <p>Thirty benchmark tests and root checks passed. Tests cover concurrent command unions, boundary clipping, missing/duplicate commands, clock proof, legacy missing data, Python resolution, and runtime/compile failures. One repetition and unaudited overhead prevent a general winner claim.</p>
-<p><a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html">Dashboard</a>, <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/all-cargo-cell-audit.json">Cargo/cell audit</a>, <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/compilation-adjusted-runs.csv">deductions CSV</a>, and <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-runs.csv">cell CSV</a> are saved.</p>
-<p>Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. Period switching, outside-period checker reasons, and execution trace links matched. Added cell bars show per-run totals or successful-cell averages, with linear/log scales and SVG export. Both metrics matched all 12 groups. See the <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-chart-visual-audit.json">cell-chart audit</a>. These report updates made no paid calls.</p>
+<p>Dashboard (retained local evidence), Cargo/cell audit (retained local evidence), deductions CSV (retained local evidence), and cell CSV (retained local evidence) are saved.</p>
+<p>Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. Period switching, outside-period checker reasons, and execution trace links matched. Added cell bars show per-run totals or successful-cell averages, with linear/log scales and SVG export. Both metrics matched all 12 groups. See the cell-chart audit (retained local evidence). These report updates made no paid calls.</p>
 <h2 id="runtime-diagnosis-and-later-updates">Runtime diagnosis and later updates</h2>
 <p>Fixed-program controls used two warmups and 15 measured samples per group. The main diagnosis saved 272 Rust/process and 136 Python samples. Same-artifact interpreter/AOT controls saved 136 more. They identified new-process cost, interpreter JSON/regex cost, and bridge polling delay. E09 state used files, not the bridge. AOT and 1 ms polling were then diagnostic copies. <a href="benchmark-cell-runtime-analysis-2026-10-08.en.html">Full diagnosis</a>.</p>
-<p>Later, production readiness reads and trusted host AOT were added. Those four-way campaigns have separate evidence and test counts. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">AOT/bridge report</a> and <a href="rust-cell-report-2026-10-08.en.html">consolidated report</a>. Historical test counts above describe each stage; they are not combined into one suite count.</p></main></div>
-<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
-</body></html>
+<p>Later, production readiness reads and trusted host AOT were added. Those four-way campaigns have separate evidence and test counts. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">AOT/bridge report</a> and <a href="rust-cell-report-2026-10-08.en.html">consolidated report</a>. Historical test counts above describe each stage; they are not combined into one suite count.</p></main></div><footer>Standalone report. All decision tables and charts are embedded; no model calls were made to build this reader.</footer></body></html>

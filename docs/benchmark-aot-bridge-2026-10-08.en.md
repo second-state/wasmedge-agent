@@ -2,9 +2,9 @@
 
 `wasmedge-aot` is a fourth group. The existing `wasmedge` group remains in interpreter mode. Both use the updated bridge. Earlier three-way campaigns and raw files are preserved.
 
-- [Four-way fixed-program dashboard](../poc/bench/results/four-way-aot-bridge-runtime-01/report.en.html): 6 cases × 4 variants × 3 repetitions; 72/72 passed; no paid requests.
-- [Four-way Opus 5.5 dashboard](../poc/bench/results/four-way-opus55-aot-bridge-01/report.en.html): 4 tasks × 4 variants × 1 repetition; 16/16 passed; 70 model requests. Responses, SSE, tools, code, and checker records are saved.
-- [Alternating bridge measurements](../poc/bench/results/bridge-readiness-diagnostic-20261008-01/measurements.json) and [median CSV](../poc/bench/results/bridge-readiness-diagnostic-20261008-01/summary.csv).
+- [Fixed-program summary](rust-cell-report-2026-10-08.en.md#runtime): 6 cases × 4 variants × 3 repetitions; 72/72 passed; no paid requests.
+- [Opus task summary](rust-cell-report-2026-10-08.en.md#tasks): 4 tasks × 4 variants × 1 repetition; 16/16 passed; 70 model requests. Responses, SSE, tools, code, and checker records are saved.
+- Alternating bridge measurements (retained local evidence) and median CSV (retained local evidence).
 
 ## Fixed-program cell execution
 
