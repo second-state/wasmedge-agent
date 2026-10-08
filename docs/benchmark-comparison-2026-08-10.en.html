@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prime Agent vs WasmEdge Agent benchmark — 2026-08-10</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#executive-summary">Executive summary</a><a href="#1-compared-revisions-and-environment">1. Compared revisions and environment</a><a href="#2-command-and-isolation">2. Command and isolation</a><a href="#3-aggregate-results">3. Aggregate results</a><a href="#4-per-task-results">4. Per-task results</a><a href="#5-failure-analysis">5. Failure analysis</a><a href="#6-acceptance-gate">6. Acceptance gate</a><a href="#7-interpretation-and-next-work">7. Interpretation and next work</a><a href="#8-reproducibility-and-retained-artifacts">8. Reproducibility and retained artifacts</a><a href="#9-limitations">9. Limitations</a></nav><main><h1 id="prime-agent-vs-wasmedge-agent-benchmark-2026-08-10">Prime Agent vs WasmEdge Agent benchmark — 2026-08-10</h1>
+<h2 id="executive-summary">Executive summary</h2>
+<p>A 144-run campaign compared stock Prime Agent's IPython runtime (A), pinned at the revision below, with this fork's built-in Rust/WasmEdge runtime (F): <strong>12 distinct tasks × two models × three repetitions × two groups</strong>. Each group has 72 runs, not 72 distinct tasks. These are August 10 revisions, not the current upstream or fork.</p>
+<ul>
+<li>F passed <strong>72/72 (100%)</strong>; A passed <strong>69/72 (95.8%)</strong>.</li>
+<li>F's overall median wall time was <strong>33.47s</strong>, versus <strong>19.12s</strong> for A: <strong>1.75×</strong>.</li>
+<li>On per-model medians, F was <strong>1.98×</strong> A for Opus 5 and <strong>1.74×</strong> A for Sonnet 4.6.</li>
+<li>F used <strong>1.76×</strong> A's reported output-token p50 on Opus and <strong>1.55×</strong> on Sonnet (the historical analyzer used an upper-middle convention; see §3.1).</li>
+<li>F used fewer model-facing cells (median 2 versus A's 3–4), but its cell p50 was about <strong>15–16×</strong> A's IPython cell p50.</li>
+<li>F passed the recorded D20 acceptance gate for both models: pass rate was at least A minus 15 percentage points and the analyzer's output-token p50 stayed below 2.0× A.</li>
+</ul>
+<p>All three baseline failures were Sonnet repetitions of <code>08-rust-rename</code>; Opus passed all runs in both groups. The result is a sample-specific pass-count difference with higher time and output-token usage. Language, tool semantics, prompts, and execution environment changed together, so the difference cannot be attributed to the Rust compiler alone. The data do not establish that extra time or tokens caused improved correctness.</p>
+<h2 id="1-compared-revisions-and-environment">1. Compared revisions and environment</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Campaign window</td>
+<td>2026-08-10 15:58:17Z–17:41:18Z</td>
+</tr>
+<tr>
+<td>Upstream A</td>
+<td><code>PrimeIntellect-ai/prime-agent</code> clean detached worktree at <code>c22549a37b73cc603c6f0d202517cb0ca856c7d3</code></td>
+</tr>
+<tr>
+<td>Fork F</td>
+<td>local <code>main</code> at <code>ceea1cdcfdbd16c72cc728fb722be6dc40ddbaf4</code></td>
+</tr>
+<tr>
+<td>A runtime</td>
+<td>stock built-in IPython tool</td>
+</tr>
+<tr>
+<td>F runtime</td>
+<td>built-in Rust cells compiled to <code>wasm32-wasip1</code> and run in WasmEdge</td>
+</tr>
+<tr>
+<td>Host harness</td>
+<td>TypeScript in both pinned revisions; the fork adapts tool registration, session wiring, prompts, and persistence</td>
+</tr>
+<tr>
+<td>WasmEdge</td>
+<td>0.14.1, repository-local <code>.wasmedge/</code> installation</td>
+</tr>
+<tr>
+<td>Rust</td>
+<td>rustc/cargo 1.97.0; <code>wasm32-wasip1</code> installed</td>
+</tr>
+<tr>
+<td>Node.js</td>
+<td>24.13.1</td>
+</tr>
+<tr>
+<td>Bun</td>
+<td>1.2.21 (not part of measured agent execution)</td>
+</tr>
+<tr>
+<td>Host</td>
+<td>macOS arm64</td>
+</tr>
+<tr>
+<td>Models</td>
+<td><code>gateway/anthropic/claude-sonnet-4-6</code>, <code>gateway/anthropic/claude-opus-5</code></td>
+</tr>
+<tr>
+<td>Repetitions</td>
+<td>3 per task/group/model combination</td>
+</tr>
+<tr>
+<td>Raw campaign size</td>
+<td>144 runs, about 20 GB locally</td>
+</tr>
+<tr>
+<td>Timeouts</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>A used a separate clean worktree so the sibling checkout's uncommitted <code>packages/ai/src/models.generated.ts</code> change could not affect the baseline. F ran from this repository's merged <code>main</code>. Both groups used the same user <code>models.json</code>, provider endpoint, task fixtures, prompts, offline checks, serial scheduler, and per-run isolated agent directory.</p>
+<p>Here, shared prompts means the benchmark's task prompts; the agents' system prompts and tool instructions differ. The baseline's <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/c22549a37b73cc603c6f0d202517cb0ca856c7d3/packages/coding-agent/package.json">package manifest at the pinned revision</a> identifies its TypeScript build and IPython-backed CLI. Host implementation language and model-generated cell language are separate dimensions.</p>
+<h2 id="2-command-and-isolation">2. Command and isolation</h2>
+<p>The campaign was launched from this repository with:</p>
+<pre><code class="language-bash">WASMEDGE_AGENT_WASMEDGE=&quot;$PWD/.wasmedge/bin/wasmedge&quot; \
+BENCH_PRIME_AGENT=/Users/hydai/workspace/ss/prime-agent-clean-bench/prime-agent.sh \
+node poc/bench/run.ts \
+  --groups A,F \
+  --reps 3 \
+  --models gateway/anthropic/claude-sonnet-4-6,gateway/anthropic/claude-opus-5
+
+node poc/bench/analyze.ts
+</code></pre>
+<p>The harness ran serially because all runs share a per-user daemon socket. Each run received a fresh fixture copy, a fresh <code>PRIME_AGENT_CODING_AGENT_DIR</code>, and its task's offline <code>check.sh</code>. Multi-turn tasks resumed the same session explicitly.</p>
+<p>Before the campaign:</p>
+<ul>
+<li>218 older M1/M5 and development runs (about 31 GB) were moved out of <code>poc/bench/results/</code> so the analyzer could not mix them with this campaign.</li>
+<li>A two-run smoke using an incorrectly unprefixed model name failed before model invocation and was archived separately; it is not in the results.</li>
+<li>A second two-run A/F smoke with the full gateway model name passed and was also archived separately.</li>
+<li>The final <code>poc/bench/results/</code> directory contained exactly the 144 formal runs.</li>
+</ul>
+<h2 id="3-aggregate-results">3. Aggregate results</h2>
+<h3 id="3-1-analyzer-output">3.1 Analyzer output</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Group</th>
+<th style="text-align: right;">Runs</th>
+<th style="text-align: right;">Pass</th>
+<th style="text-align: right;">Output tokens p50</th>
+<th style="text-align: right;">Input tokens p50</th>
+<th style="text-align: right;">Cells p50</th>
+<th style="text-align: right;">Compile-error share</th>
+<th style="text-align: right;">Cell p50</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 5</td>
+<td>A</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">100%</td>
+<td style="text-align: right;">443</td>
+<td style="text-align: right;">0*</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0%</td>
+<td style="text-align: right;">15ms</td>
+</tr>
+<tr>
+<td>Opus 5</td>
+<td>F</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">100%</td>
+<td style="text-align: right;">781</td>
+<td style="text-align: right;">0*</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">23%</td>
+<td style="text-align: right;">226ms</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>A</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">91.7%</td>
+<td style="text-align: right;">781</td>
+<td style="text-align: right;">0*</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0%</td>
+<td style="text-align: right;">13ms</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>F</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">100%</td>
+<td style="text-align: right;">1,213</td>
+<td style="text-align: right;">0*</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">33%</td>
+<td style="text-align: right;">212ms</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>0*</code> means unavailable: the gateway's streaming responses did not provide input-token usage.</p>
+<p><strong>Statistic definition (corrected 2026-10-02):</strong> the historical analyzer sorted values and selected index <code>floor(n × p / 100)</code> (zero-based). Its function named <code>median</code> called this p50 operation: for an even sample it selected the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. The <a href="../poc/bench/analyze.ts">current analyzer</a> averages the middle pair for token and cell-count medians; cell-duration p50/p95 retain the historical convention. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.</p>
+<p>The conventional sample medians below are recomputed from the unchanged <a href="benchmark-comparison-2026-08-10.csv">144-row CSV</a>. Wall-time medians in §3.2 already use this definition. Per-task medians use three repetitions, so the definitions agree there.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">A output-token median</th>
+<th style="text-align: right;">F output-token median</th>
+<th style="text-align: right;">F/A</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 5</td>
+<td style="text-align: right;">427.5</td>
+<td style="text-align: right;">755.5</td>
+<td style="text-align: right;">1.77×</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td style="text-align: right;">767.5</td>
+<td style="text-align: right;">1,186</td>
+<td style="text-align: right;">1.55×</td>
+</tr>
+</tbody>
+</table></div>
+<p>These corrected labels and additional statistics do not change the raw runs or the historical GO decision; both conventional median ratios also remain below 2.0×.</p>
+<h3 id="3-2-wall-clock-distribution">3.2 Wall-clock distribution</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Group</th>
+<th style="text-align: right;">Median</th>
+<th style="text-align: right;">Mean</th>
+<th style="text-align: right;">p95</th>
+<th style="text-align: right;">Total over 36 runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 5</td>
+<td>A</td>
+<td style="text-align: right;">14.20s</td>
+<td style="text-align: right;">18.84s</td>
+<td style="text-align: right;">43.79s</td>
+<td style="text-align: right;">678.07s</td>
+</tr>
+<tr>
+<td>Opus 5</td>
+<td>F</td>
+<td style="text-align: right;">28.09s</td>
+<td style="text-align: right;">30.50s</td>
+<td style="text-align: right;">65.97s</td>
+<td style="text-align: right;">1,098.01s</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>A</td>
+<td style="text-align: right;">21.69s</td>
+<td style="text-align: right;">23.31s</td>
+<td style="text-align: right;">46.81s</td>
+<td style="text-align: right;">839.20s</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>F</td>
+<td style="text-align: right;">37.77s</td>
+<td style="text-align: right;">38.02s</td>
+<td style="text-align: right;">55.48s</td>
+<td style="text-align: right;">1,368.55s</td>
+</tr>
+<tr>
+<td><strong>Both models</strong></td>
+<td><strong>A</strong></td>
+<td style="text-align: right;"><strong>19.12s</strong></td>
+<td style="text-align: right;"><strong>21.07s</strong></td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;"><strong>1,517.26s</strong></td>
+</tr>
+<tr>
+<td><strong>Both models</strong></td>
+<td><strong>F</strong></td>
+<td style="text-align: right;"><strong>33.47s</strong></td>
+<td style="text-align: right;"><strong>34.26s</strong></td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;"><strong>2,466.56s</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>Ratios:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align: right;">Opus F/A</th>
+<th style="text-align: right;">Sonnet F/A</th>
+<th style="text-align: right;">Overall F/A</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Median wall time</td>
+<td style="text-align: right;">1.98×</td>
+<td style="text-align: right;">1.74×</td>
+<td style="text-align: right;">1.75×</td>
+</tr>
+<tr>
+<td>Mean wall time</td>
+<td style="text-align: right;">1.62×</td>
+<td style="text-align: right;">1.63×</td>
+<td style="text-align: right;">1.63×</td>
+</tr>
+<tr>
+<td>Output-token p50 (historical analyzer)</td>
+<td style="text-align: right;">1.76×</td>
+<td style="text-align: right;">1.55×</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td>Cell p50</td>
+<td style="text-align: right;">15.1×</td>
+<td style="text-align: right;">16.3×</td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table></div>
+<p>The sum of measured run wall times was 3,983.82s. The campaign occupied about 103 minutes of wall-clock time because the driver also settles and tears down the shared daemon between runs.</p>
+<h3 id="3-3-interaction-shape">3.3 Interaction shape</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Group</th>
+<th style="text-align: right;">Assistant turns median</th>
+<th style="text-align: right;">Cells median</th>
+<th style="text-align: right;">Cells total</th>
+<th style="text-align: right;">Compile-error cells</th>
+<th style="text-align: right;">Error tool results</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 5</td>
+<td>A</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">124</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Opus 5</td>
+<td>F</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">97</td>
+<td style="text-align: right;">22</td>
+<td style="text-align: right;">26</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>A</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">133</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>F</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">93</td>
+<td style="text-align: right;">31</td>
+<td style="text-align: right;">35</td>
+</tr>
+</tbody>
+</table></div>
+<p>F issued fewer cells but needed more assistant turns. Rust compiler diagnostics are part of its intended feedback loop: 53 of 190 Rust cells were compile-error cells, after which the model repaired the program. A's Python cells had no comparable compile phase.</p>
+<h2 id="4-per-task-results">4. Per-task results</h2>
+<p>Each table entry is the median of three repetitions. <code>Pass</code> is the number of offline checks passed out of three.</p>
+<h3 id="4-1-opus-5">4.1 Opus 5</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Task</th>
+<th style="text-align: right;">A pass</th>
+<th style="text-align: right;">F pass</th>
+<th style="text-align: right;">A wall</th>
+<th style="text-align: right;">F wall</th>
+<th style="text-align: right;">Wall F/A</th>
+<th style="text-align: right;">A tokens</th>
+<th style="text-align: right;">F tokens</th>
+<th style="text-align: right;">Token F/A</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01-log-stats</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">11.99s</td>
+<td style="text-align: right;">20.60s</td>
+<td style="text-align: right;">1.72×</td>
+<td style="text-align: right;">377</td>
+<td style="text-align: right;">725</td>
+<td style="text-align: right;">1.92×</td>
+</tr>
+<tr>
+<td>02-csv-normalize</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">10.63s</td>
+<td style="text-align: right;">21.94s</td>
+<td style="text-align: right;">2.06×</td>
+<td style="text-align: right;">309</td>
+<td style="text-align: right;">485</td>
+<td style="text-align: right;">1.57×</td>
+</tr>
+<tr>
+<td>03-fix-bug</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">13.78s</td>
+<td style="text-align: right;">20.89s</td>
+<td style="text-align: right;">1.52×</td>
+<td style="text-align: right;">404</td>
+<td style="text-align: right;">421</td>
+<td style="text-align: right;">1.04×</td>
+</tr>
+<tr>
+<td>04-multi-turn-state</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">26.49s</td>
+<td style="text-align: right;">43.46s</td>
+<td style="text-align: right;">1.64×</td>
+<td style="text-align: right;">1,087</td>
+<td style="text-align: right;">1,284</td>
+<td style="text-align: right;">1.18×</td>
+</tr>
+<tr>
+<td>05-toolchain-loop</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">17.44s</td>
+<td style="text-align: right;">29.35s</td>
+<td style="text-align: right;">1.68×</td>
+<td style="text-align: right;">605</td>
+<td style="text-align: right;">971</td>
+<td style="text-align: right;">1.60×</td>
+</tr>
+<tr>
+<td>06-build-cli</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">20.87s</td>
+<td style="text-align: right;">45.43s</td>
+<td style="text-align: right;">2.18×</td>
+<td style="text-align: right;">759</td>
+<td style="text-align: right;">1,473</td>
+<td style="text-align: right;">1.94×</td>
+</tr>
+<tr>
+<td>07-todo-scan</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">13.82s</td>
+<td style="text-align: right;">28.00s</td>
+<td style="text-align: right;">2.03×</td>
+<td style="text-align: right;">453</td>
+<td style="text-align: right;">1,343</td>
+<td style="text-align: right;">2.96×</td>
+</tr>
+<tr>
+<td>08-rust-rename</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">13.67s</td>
+<td style="text-align: right;">31.57s</td>
+<td style="text-align: right;">2.31×</td>
+<td style="text-align: right;">359</td>
+<td style="text-align: right;">664</td>
+<td style="text-align: right;">1.85×</td>
+</tr>
+<tr>
+<td>09-helper-accumulation</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">43.79s</td>
+<td style="text-align: right;">65.97s</td>
+<td style="text-align: right;">1.51×</td>
+<td style="text-align: right;">1,342</td>
+<td style="text-align: right;">1,847</td>
+<td style="text-align: right;">1.38×</td>
+</tr>
+<tr>
+<td>10-lint-fix</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">28.48s</td>
+<td style="text-align: right;">33.85s</td>
+<td style="text-align: right;">1.19×</td>
+<td style="text-align: right;">1,257</td>
+<td style="text-align: right;">1,026</td>
+<td style="text-align: right;">0.82×</td>
+</tr>
+<tr>
+<td>11-join-report</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">10.27s</td>
+<td style="text-align: right;">17.88s</td>
+<td style="text-align: right;">1.74×</td>
+<td style="text-align: right;">303</td>
+<td style="text-align: right;">382</td>
+<td style="text-align: right;">1.26×</td>
+</tr>
+<tr>
+<td>12-repair-config</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">11.97s</td>
+<td style="text-align: right;">19.51s</td>
+<td style="text-align: right;">1.63×</td>
+<td style="text-align: right;">249</td>
+<td style="text-align: right;">320</td>
+<td style="text-align: right;">1.29×</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="4-2-sonnet-4-6">4.2 Sonnet 4.6</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Task</th>
+<th style="text-align: right;">A pass</th>
+<th style="text-align: right;">F pass</th>
+<th style="text-align: right;">A wall</th>
+<th style="text-align: right;">F wall</th>
+<th style="text-align: right;">Wall F/A</th>
+<th style="text-align: right;">A tokens</th>
+<th style="text-align: right;">F tokens</th>
+<th style="text-align: right;">Token F/A</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01-log-stats</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">9.91s</td>
+<td style="text-align: right;">17.60s</td>
+<td style="text-align: right;">1.78×</td>
+<td style="text-align: right;">263</td>
+<td style="text-align: right;">396</td>
+<td style="text-align: right;">1.51×</td>
+</tr>
+<tr>
+<td>02-csv-normalize</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">20.63s</td>
+<td style="text-align: right;">21.41s</td>
+<td style="text-align: right;">1.04×</td>
+<td style="text-align: right;">784</td>
+<td style="text-align: right;">573</td>
+<td style="text-align: right;">0.73×</td>
+</tr>
+<tr>
+<td>03-fix-bug</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">20.14s</td>
+<td style="text-align: right;">41.51s</td>
+<td style="text-align: right;">2.06×</td>
+<td style="text-align: right;">618</td>
+<td style="text-align: right;">1,154</td>
+<td style="text-align: right;">1.87×</td>
+</tr>
+<tr>
+<td>04-multi-turn-state</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">29.77s</td>
+<td style="text-align: right;">46.69s</td>
+<td style="text-align: right;">1.57×</td>
+<td style="text-align: right;">1,095</td>
+<td style="text-align: right;">1,704</td>
+<td style="text-align: right;">1.56×</td>
+</tr>
+<tr>
+<td>05-toolchain-loop</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">26.00s</td>
+<td style="text-align: right;">46.49s</td>
+<td style="text-align: right;">1.79×</td>
+<td style="text-align: right;">969</td>
+<td style="text-align: right;">1,705</td>
+<td style="text-align: right;">1.76×</td>
+</tr>
+<tr>
+<td>06-build-cli</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">32.06s</td>
+<td style="text-align: right;">40.83s</td>
+<td style="text-align: right;">1.27×</td>
+<td style="text-align: right;">1,204</td>
+<td style="text-align: right;">1,295</td>
+<td style="text-align: right;">1.08×</td>
+</tr>
+<tr>
+<td>07-todo-scan</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">11.06s</td>
+<td style="text-align: right;">46.83s</td>
+<td style="text-align: right;">4.23×</td>
+<td style="text-align: right;">367</td>
+<td style="text-align: right;">2,914</td>
+<td style="text-align: right;">7.94×</td>
+</tr>
+<tr>
+<td>08-rust-rename</td>
+<td style="text-align: right;">0/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">16.78s</td>
+<td style="text-align: right;">36.20s</td>
+<td style="text-align: right;">2.16×</td>
+<td style="text-align: right;">476</td>
+<td style="text-align: right;">897</td>
+<td style="text-align: right;">1.88×</td>
+</tr>
+<tr>
+<td>09-helper-accumulation</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">36.09s</td>
+<td style="text-align: right;">49.27s</td>
+<td style="text-align: right;">1.37×</td>
+<td style="text-align: right;">1,016</td>
+<td style="text-align: right;">1,540</td>
+<td style="text-align: right;">1.52×</td>
+</tr>
+<tr>
+<td>10-lint-fix</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">26.24s</td>
+<td style="text-align: right;">48.62s</td>
+<td style="text-align: right;">1.85×</td>
+<td style="text-align: right;">1,027</td>
+<td style="text-align: right;">1,694</td>
+<td style="text-align: right;">1.65×</td>
+</tr>
+<tr>
+<td>11-join-report</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">14.35s</td>
+<td style="text-align: right;">32.39s</td>
+<td style="text-align: right;">2.26×</td>
+<td style="text-align: right;">456</td>
+<td style="text-align: right;">1,293</td>
+<td style="text-align: right;">2.84×</td>
+</tr>
+<tr>
+<td>12-repair-config</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">3/3</td>
+<td style="text-align: right;">21.81s</td>
+<td style="text-align: right;">32.44s</td>
+<td style="text-align: right;">1.49×</td>
+<td style="text-align: right;">672</td>
+<td style="text-align: right;">960</td>
+<td style="text-align: right;">1.43×</td>
+</tr>
+</tbody>
+</table></div>
+<p>The largest outlier was Sonnet on <code>07-todo-scan</code>: F used 4.23× the wall time and 7.94× the output tokens. This task is the clearest target for prompt/runtime-loop profiling. Conversely, Sonnet F nearly matched A's wall time and used fewer tokens on <code>02-csv-normalize</code>; Opus F also used fewer tokens on <code>10-lint-fix</code>.</p>
+<h2 id="5-failure-analysis">5. Failure analysis</h2>
+<p>All three formal failures were repetitions of the same task/model/group combination:</p>
+<pre><code class="language-text">08-rust-rename | A | gateway/anthropic/claude-sonnet-4-6 | reps 1–3
+</code></pre>
+<p>The agent process exited zero each time in 16.1–17.9s and did not time out. Each transcript contained three IPython calls, but the project remained unchanged. The offline check found <code>calc_total</code> in:</p>
+<pre><code class="language-text">src/lib.rs
+src/report.rs
+tests/integration.rs
+</code></pre>
+<p>and reported <code>old name still present</code>. Thus these are model/task failures, not daemon, provider, timeout, or checker failures. F passed all three equivalent runs.</p>
+<p>No run in either group timed out. No F run failed its offline check.</p>
+<h2 id="6-acceptance-gate">6. Acceptance gate</h2>
+<p>D20 requires, per model:</p>
+<ol>
+<li>pass rate at least A minus 15 percentage points;</li>
+<li>output-token p50 no more than 2.0× A (the analyzer convention used for this campaign; §3.1);</li>
+<li>both models pass.</li>
+</ol>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Pass comparison</th>
+<th>Token comparison</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 5</td>
+<td>F 100% vs A 100%</td>
+<td>781 / 443 = 1.76×</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>Sonnet 4.6</td>
+<td>F 100% vs A 91.7%</td>
+<td>1,213 / 781 = 1.55×</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Campaign verdict: GO.</strong></p>
+<p>These are the report's historical comparisons. The analyzer previously printed D20 verdicts only for the PoC group B; it now also evaluates the built-in fork group F, using conventional sample medians. Both models still meet the token threshold with the corrected medians in §3.1.</p>
+<p>Compared with the 2026-08-07 M5 report, F retained 100% pass rate. Its Sonnet output-token ratio against A moved from 1.99× to 1.55×, creating more headroom under the 2.0× ceiling. Absolute comparisons across campaigns remain approximate because model service behavior and upstream revision can change.</p>
+<h2 id="7-interpretation-and-next-work">7. Interpretation and next work</h2>
+<ol>
+<li><strong>Observed task outcomes:</strong> F passed 72/72 runs versus A's 69/72 over 12 distinct tasks. The entire pass-count difference was Sonnet on one rename task; both Opus groups passed 36/36. This is not evidence of a general correctness improvement or a compiler-only effect.</li>
+<li><strong>End-to-end latency:</strong> F's mean wall time was 1.63× A for both models. This is the primary user-visible performance cost.</li>
+<li><strong>Cell latency:</strong> F's measured cell p50 was about 15–16× A's. F cells include compilation and WasmEdge startup, and the groups perform different work per cell. These measurements do not isolate VM speed or provide a full breakdown of the end-to-end time difference.</li>
+<li><strong>Token cost:</strong> F used more assistant turns and 1.55–1.76× the historical output-token p50 (or 1.55–1.77× conventional medians). The gap varies by task. The report does not measure how much extra time was spent reading compiler diagnostics.</li>
+<li><strong>Priority investigation:</strong> profile Sonnet <code>07-todo-scan</code>, then <code>11-join-report</code>; inspect why the agent emits extra code/repair turns and whether system-prompt guidance or helper APIs can shorten the loop.</li>
+<li><strong>Secondary optimization:</strong> reduce cold Rust-cell startup/compile cost. Even a 100–150ms reduction per cell will not erase model latency, but it improves interactive feedback and tool-heavy tasks.</li>
+</ol>
+<h2 id="8-reproducibility-and-retained-artifacts">8. Reproducibility and retained artifacts</h2>
+<p>Committed alongside this report:</p>
+<ul>
+<li><code>docs/benchmark-comparison-2026-08-10.csv</code> — the 144-row analyzer output, SHA-256 <code>0f18e5078a8cebba639612a65fe911ea99e0bf3e635637d99bb571c773ab7230</code>.</li>
+</ul>
+<p>Retained locally but intentionally not committed:</p>
+<ul>
+<li><code>poc/bench/results/runs/</code> — raw formal transcripts and fixtures (about 20 GB).</li>
+<li><code>poc/bench/results/full-campaign.log</code> — serial driver log.</li>
+<li><code>poc/bench/results-pre-comparison-20260810/</code> — 218 older runs (about 31 GB).</li>
+<li><code>poc/bench/results-smoke-invalid-model-20260810/</code> — two pre-model configuration failures.</li>
+<li><code>poc/bench/results-smoke-valid-20260810/</code> — the successful two-run smoke.</li>
+<li><code>.wasmedge/</code> — local WasmEdge 0.14.1 installation.</li>
+</ul>
+<p>The CSV is regenerable from the raw formal runs with <code>node poc/bench/analyze.ts</code>. Raw runs are excluded from Git because of their size and because transcripts may contain provider/model interaction data.</p>
+<h2 id="9-limitations">9. Limitations</h2>
+<ul>
+<li>There are 12 distinct tasks; repeated runs of the same task/model are not 72 independent task types per group. Three repetitions do not establish broad reliability or eliminate hosted-model variance.</li>
+<li>The provider omitted streamed input-token usage and complete monetary cost, so this report compares output tokens rather than total billed tokens or currency.</li>
+<li>Language, tool semantics, system prompts, and execution environment change together; there is no ablation isolating the compiler's contribution. The result measures end-to-end task completion, not isolated VM throughput.</li>
+<li>Wall time includes model latency, daemon/session work, compilation, tool execution, and retries. Cell p50 isolates only model-facing cell tool duration.</li>
+<li>The campaign ran on one macOS arm64 host and one provider endpoint; it is not a cross-platform runtime microbenchmark.</li>
+<li>The benchmark's serial execution avoids daemon-socket interference but makes the campaign sensitive to service conditions over its 103-minute window.</li>
+<li>The August 6 PoC's recovery-cell counts and WasmEdge 0.17.1 feasibility microbenchmark are separate measurements. This campaign used WasmEdge 0.14.1 and predates the October runtime fixes; it does not measure their performance or effectiveness.</li>
+</ul></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

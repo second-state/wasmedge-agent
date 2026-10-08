@@ -10,6 +10,7 @@ import type {
 	CellInput,
 	CellResult,
 	RuntimeResourceLimits,
+	RustCellRuntimeMode,
 	WorkspaceWritePolicy,
 } from "../rust-cell/index.js";
 import { composeToolText, RustCellProvisioner } from "../rust-cell/index.js";
@@ -45,6 +46,7 @@ export type RustToolInput = CellInput;
 export type RustToolDetails = CellResult | { status: "starting" };
 
 export interface RustToolOptions extends RuntimeResourceLimits {
+	runtimeMode?: RustCellRuntimeMode;
 	cargoSandbox?: CargoSandbox;
 	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
 	rustdocToolchain?: string | null;
@@ -79,6 +81,7 @@ export function createRustToolDefinition(
 		options?.provisioner ??
 		new RustCellProvisioner({
 			cwd,
+			runtimeMode: options?.runtimeMode,
 			cargoSandbox: options?.cargoSandbox,
 			rustdocToolchain: options?.rustdocToolchain,
 			libraryTestGate: options?.libraryTestGate,

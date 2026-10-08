@@ -11,6 +11,7 @@ import { normalizeLibraryTestGate } from "./rust-cell/library-tests.js";
 import { normalizePreludeExtra, type PreludeExtra } from "./rust-cell/prelude-extra.js";
 import { type ProcessLimits, runtimeProcessLimits } from "./rust-cell/process-limits.js";
 import { type CellResourceLimits, validateCellResourceLimits } from "./rust-cell/resource-limits.js";
+import { normalizeRustCellRuntimeMode, type RustCellRuntimeMode } from "./rust-cell/runtime-mode.js";
 import { normalizeRustdocToolchain } from "./rust-cell/rustdoc-cache.js";
 import { normalizeWorkspaceWritePolicy, type WorkspaceWritePolicy } from "./rust-cell/workspace-policy.js";
 
@@ -132,6 +133,7 @@ export interface BundledSkillsSettings {
 }
 
 export interface RustCellSettings extends CellResourceLimits {
+	runtimeMode?: RustCellRuntimeMode; // host-generated AOT is opt-in; default: interpreter
 	/** Shared Linux runtime budget for a root session and its live subagents. */
 	treeProcessLimits?: ProcessLimits | null;
 	cargoSandbox?: CargoSandbox; // Linux Bubblewrap for runtime Cargo; default: off
@@ -1204,6 +1206,10 @@ export class SettingsManager {
 
 	getRustCellWorkspaceWritePolicy(): WorkspaceWritePolicy {
 		return normalizeWorkspaceWritePolicy(this.settings.rustCell?.workspaceWritePolicy);
+	}
+
+	getRustCellRuntimeMode(): RustCellRuntimeMode {
+		return normalizeRustCellRuntimeMode(this.settings.rustCell?.runtimeMode);
 	}
 
 	getRustCellCargoSandbox(): CargoSandbox {

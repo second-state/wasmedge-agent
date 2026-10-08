@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Why Rust/Wasm Cells Took Longer</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#1-execution-boundaries">1. Execution boundaries</a><a href="#2-fixed-cost-for-a-near-empty-cell">2. Fixed cost for a near-empty cell</a><a href="#3-interpreter-costs-inside-the-program">3. Interpreter costs inside the program</a><a href="#4-reproducible-bridge-polling-delay">4. Reproducible bridge polling delay</a><a href="#5-explanation-of-the-paid-cases">5. Explanation of the paid cases</a><a href="#6-priorities-and-saved-evidence">6. Priorities and saved evidence</a></nav><main><h1 id="why-rust-wasm-cells-took-longer">Why Rust/Wasm Cells Took Longer</h1>
+<p>This is the diagnosis <strong>before</strong> the AOT and readiness update. In its four paid cases, Rust/Wasm cell execution took longer. The main causes were a new WasmEdge CLI process per cell, forced interpreter mode, and bridge polling in some operations. Cargo was already excluded from the cell chart.</p>
+<p>The diagnosis used saved paid sources/traces and local fixed-program controls. It made <strong>zero new paid requests</strong> and did not change the product runtime or original paid records. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">later AOT and bridge report</a> for the implemented changes.</p>
+<h2 id="1-execution-boundaries">1. Execution boundaries</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Measured execution interval</th>
+<th>Program and state lifetime</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prime TS / Python</td>
+<td>Execute request to completion in a running kernel</td>
+<td>Imports, objects, and regex caches can remain in memory.</td>
+</tr>
+<tr>
+<td>Prime Rust / Python</td>
+<td>Kernel execute request to completion</td>
+<td>Persistent Python kernel. Rust is the host language.</td>
+</tr>
+<tr>
+<td>WasmEdge / Rust</td>
+<td>Before <code>runProcess</code> to child-process close</td>
+<td>New process, VM, and module per cell. State persists in files.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rust <code>cell.execution</code> excludes Cargo, workspace initialization, the read-only probe, import inspection, snapshots, and bridge cleanup. It includes process startup, module load, VM setup, guest work, stdout/stdio bridge, and process exit. Python startup is separate and is reused. The chart measures actual per-cell product costs, not language-body execution alone.</p>
+<p>Relevant source is in the <a href="../packages/coding-agent/src/core/rust-cell/cell-runner.ts">cell runner</a>, <a href="../packages/coding-agent/src/core/rust-cell/process.ts">process runner</a>, and the saved pinned upstream kernels under <code>poc/bench/results/three-way-inputs/</code>.</p>
+<h2 id="2-fixed-cost-for-a-near-empty-cell">2. Fixed cost for a near-empty cell</h2>
+<p>R16 ran 100 marker-only cells in each variant without a model:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Runtime</th>
+<th style="text-align: right;">Median execution per cell</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prime TS / Python</td>
+<td style="text-align: right;">0 ms</td>
+<td>Integer reporting resolution. High-resolution adapter envelope: 0.136 ms.</td>
+</tr>
+<tr>
+<td>Prime Rust / Python</td>
+<td style="text-align: right;">0 ms</td>
+<td>High-resolution adapter envelope: 0.132 ms.</td>
+</tr>
+<tr>
+<td>WasmEdge interpreter</td>
+<td style="text-align: right;">9.718 ms</td>
+<td>Range 9.220–10.466 ms. Excludes Cargo and snapshots.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Zero does not mean free execution. A new 15-sample control measured Python envelopes of 0.197/0.217 ms, WasmEdge at 10.642 ms, and a new native Rust process at 1.802 ms.</p>
+<p>Process startup is inside the measured Rust boundary. No internal hooks split the roughly 10 ms into OS spawn, load, validation, instantiation, guest startup, and exit. Subtracting the native 1.8 ms would not prove that the remainder is VM setup.</p>
+<h2 id="3-interpreter-costs-inside-the-program">3. Interpreter costs inside the program</h2>
+<p>Each group had two warmups and 15 serial measured runs. Rust used release builds. These timers are inside the program, excluding process startup:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Fixed work</th>
+<th style="text-align: right;">Python / TS host</th>
+<th style="text-align: right;">Python / Rust host</th>
+<th style="text-align: right;">Rust/Wasm interpreter</th>
+<th style="text-align: right;">Native Rust</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100,000 uint32 wrapping operations</td>
+<td style="text-align: right;">4.725 ms</td>
+<td style="text-align: right;">4.692 ms</td>
+<td style="text-align: right;">2.079 ms</td>
+<td style="text-align: right;">0.109 ms</td>
+</tr>
+<tr>
+<td>Parse/sum 10,000 JSON records</td>
+<td style="text-align: right;">4.064 ms, including read</td>
+<td style="text-align: right;">4.320 ms, including read</td>
+<td style="text-align: right;">212.394 ms; read 1.840 ms separately</td>
+<td style="text-align: right;">1.130 ms; read 0.043 ms separately</td>
+</tr>
+</tbody>
+</table></div>
+<p>The Rust/Wasm integer body was faster than Python. Process cost made the complete cell slower. JSON was slower within the body itself.</p>
+<p>Python 3.11.15 used the <code>_json</code> C accelerator for <code>json.decoder.scanstring</code> and <code>json.scanner.make_scanner</code>. Python called native C parsing code. Rust <code>serde_json</code> ran as interpreted Wasm. The two parser implementations did not have the same execution mode.</p>
+<p>A separate control alternated interpreter and AOT execution of the same trusted artifact, module, program, and data. Each mode had 15 measured runs. AOT compilation was excluded:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Work</th>
+<th style="text-align: right;">Interpreter cell wall</th>
+<th style="text-align: right;">AOT cell wall</th>
+<th>Interpreter body</th>
+<th>AOT body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Near-empty</td>
+<td style="text-align: right;">8.361 ms</td>
+<td style="text-align: right;">7.026 ms</td>
+<td>No body timer</td>
+<td>No body timer</td>
+</tr>
+<tr>
+<td>100,000 operations</td>
+<td style="text-align: right;">10.690 ms</td>
+<td style="text-align: right;">6.616 ms</td>
+<td>2.022 ms</td>
+<td>0.023 ms</td>
+</tr>
+<tr>
+<td>10,000 JSON records</td>
+<td style="text-align: right;">223.773 ms</td>
+<td style="text-align: right;">9.009 ms</td>
+<td>Parse/sum 211.703 ms</td>
+<td>Parse/sum 1.220 ms</td>
+</tr>
+<tr>
+<td>Equivalent E09 regex/count/state</td>
+<td style="text-align: right;">31.237 ms</td>
+<td style="text-align: right;">10.308 ms</td>
+<td>Regex creation 4.574 ms; matching 3.484 ms</td>
+<td>Regex creation 0.161 ms; matching 0.048 ms</td>
+</tr>
+</tbody>
+</table></div>
+<p>This directly identifies interpreter execution as a major JSON/regex cost. AOT retained new-process costs. Compilation took 1.407/1.505/1.822/10.810 seconds for the four programs. Short-lived, changing cells cannot obtain that improvement without paying compilation.</p>
+<p>At diagnosis time, forced interpreter mode prevented guest-supplied native AOT payloads from bypassing import inspection. The control used trusted local fixtures. A product AOT path needed host compilation from verified Wasm. Removing the flag alone would not preserve the policy. That path was implemented later.</p>
+<h2 id="4-reproducible-bridge-polling-delay">4. Reproducible bridge polling delay</h2>
+<p>The guest bridge slept 5 ms when stdin had no reply, then read again. First use also needed hello/hello_ok. Diff needed emit/ack. A fast host reply could arrive during the guest sleep.</p>
+<p>A diagnostic workspace copy changed polling from 5 ms to 1 ms. Modes alternated for 15 measured samples each, with the same handlers, payload, and assertions. All passed:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Work</th>
+<th style="text-align: right;">5 ms polling: body median</th>
+<th style="text-align: right;">1 ms polling: body median</th>
+<th style="text-align: right;">5 ms polling: process median</th>
+<th style="text-align: right;">1 ms polling: process median</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One diff with handshake/ack</td>
+<td style="text-align: right;">6.590 ms</td>
+<td style="text-align: right;">1.647 ms</td>
+<td style="text-align: right;">15.201 ms</td>
+<td style="text-align: right;">10.796 ms</td>
+</tr>
+<tr>
+<td>100 echoes × 1 KiB, with handshake</td>
+<td style="text-align: right;">147.509 ms</td>
+<td style="text-align: right;">62.722 ms</td>
+<td style="text-align: right;">157.416 ms</td>
+<td style="text-align: right;">72.664 ms</td>
+</tr>
+</tbody>
+</table></div>
+<p>This handler returned only <code>n/payload</code>. The older R09 handler also returned <code>cellSourceCode</code>, so these workloads must not be pooled. A 5 ms sleep does not add exactly 5 ms to every request. No sleep occurs if a reply is ready at the first poll. Scheduling also changes the delay. The causal comparison uses the final alternating samples only.</p>
+<p>The 1 ms change was a diagnostic perturbation. The proposed product fix was fd readiness with a deadline, cancellation, and timeout behavior. The later implementation uses that approach.</p>
+<h2 id="5-explanation-of-the-paid-cases">5. Explanation of the paid cases</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Actual Rust execution, ms/cell</th>
+<th>Confirmed mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E03 bug fix</td>
+<td>9.872, 24.425</td>
+<td>First cell lists files. <code>edit_exact</code> in the second cell also calls <code>rlm::display::diff</code>, with handshake/ack. Python uses pathlib replacement/write.</td>
+</tr>
+<tr>
+<td>E08 rename</td>
+<td>10.877</td>
+<td>Close to the near-empty process floor. The earlier compile error never executed and is outside execution totals.</td>
+</tr>
+<tr>
+<td>E09 helper/state</td>
+<td>29.964, 30.873, 11.765</td>
+<td>The first two processes rebuild regex, scan logs, and read/write state. The third loads state and formats output without regex.</td>
+</tr>
+<tr>
+<td>E11 join/report</td>
+<td>9.455, 11.604</td>
+<td>Small fixture; two process starts matter. The larger 10,000-record diagnostic cannot replace these measurements.</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>rlm::state</code> reads and writes <a href="../wasmedge-agent-runtime/template/rlm/src/state.rs">state files</a>. It does <strong>not</strong> use the host bridge. In the equivalent E09 diagnosis, regex creation took 4.347 ms, first captures/matching 3.399 ms, state write 0.640 ms, and log read 0.101 ms. A separate state write/read measured 0.582/0.132 ms.</p>
+<p>These timers do not partition the full guest. Load, allocation, destruction, output, and other work remain unsplit. The paid sources lacked body timers, so their exact breakdown cannot be recovered later. Different variants also used different programs and cell counts. Product charts describe those task paths; fixed-program controls explain mechanisms. Their values cannot be subtracted to fabricate an original run's startup or body time.</p>
+<h2 id="6-priorities-and-saved-evidence">6. Priorities and saved evidence</h2>
+<ol>
+<li>Remove fixed bridge sleep. Test diff and request/reply deadlines, aborts, and broken pipes.</li>
+<li>Evaluate an embedded runner or worker reuse, while keeping fresh cell instances and isolation. Cargo changes alone will not remove process startup.</li>
+<li>Test trusted AOT/reuse for JSON and regex, or native host services. Report compilation and amortization separately. Host services still incur bridge and serialization costs.</li>
+<li>Define lifetimes for reusable helpers, data, and compiled regex. Persistent Python and new Wasm processes have different cache behavior.</li>
+</ol>
+<p>Evidence: <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/measurements.json">main measurements</a>, <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/diagnostic-source.mjs">reproducible source</a>, <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/aot-control/measurements.json">same-artifact AOT control</a>, and <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html">original paid dashboard</a>.</p>
+<p>The main diagnosis saved 272 Rust/process and 136 Python samples, including warmups. The AOT control saved 136 samples. Each comparison excludes two warmups and uses the median of 15 measured samples.</p>
+<p><code>cell-runtime-diagnostic-20261008-01</code> stopped after a regex-escape error in the diagnostic script. It is saved and excluded. Valid controls come from <code>-02</code>, with hashes, output, assertions, and completion markers. No profiler-overhead audit or cross-machine validation was done. The results concern these programs on this host with WasmEdge 0.14.1.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

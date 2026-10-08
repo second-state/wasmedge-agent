@@ -13,7 +13,9 @@
 //! WASI uses stdin/stdout only, without socket imports. Native protocol tests
 //! use `std::net` and RLM_BRIDGE_ADDR.
 
-use std::io::{ErrorKind as IoErrorKind, Read, Write};
+#[cfg(not(target_os = "wasi"))]
+use std::io::Read;
+use std::io::{ErrorKind as IoErrorKind, Write};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -185,7 +187,11 @@ impl Conn {
                 return Ok(frame);
             }
             let mut chunk = [0u8; READ_CHUNK];
-            match self.stream.read(&mut chunk) {
+            #[cfg(target_os = "wasi")]
+            let read = self.stream.read_until(&mut chunk, deadline);
+            #[cfg(not(target_os = "wasi"))]
+            let read = self.stream.read(&mut chunk);
+            match read {
                 Ok(0) => return Err(Error::bridge("bridge connection closed by the host").into()),
                 Ok(n) => {
                     if self.buffer.len() + n > MAX_FRAME_BYTES {
@@ -200,6 +206,9 @@ impl Conn {
                         || e.kind() == IoErrorKind::Interrupted =>
                 {
                     wait_or_timeout(deadline, "waiting for a host bridge reply")?;
+                }
+                Err(e) if e.kind() == IoErrorKind::TimedOut => {
+                    return Err(Error::bridge("timed out waiting for a host bridge reply").into())
                 }
                 Err(e) => {
                     return Err(Error::bridge(format!("reading from the host bridge: {e}")).into())

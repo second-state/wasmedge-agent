@@ -222,6 +222,7 @@ const FORBIDDEN = [
  *  a PI_* name rebranded into one of those two prefixes -- is what the pins in
  *  REQUIRED catch from the other side. */
 const PRODUCT_ENV_NAMES = new Set([
+	"WASMEDGE_AGENT_AOT_COMPILER",
 	"WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL",
 	"WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL",
 	"WASMEDGE_AGENT_BUILD_ID",
@@ -732,6 +733,65 @@ const ALLOWLIST = [
 		reason:
 			"a dated record of a campaign that was really run on 2026-08-10 against the real upstream binary (rule R2): the two products compared, the upstream worktree and its package manifest pinned by SHA, the literal command line that launched it, and the environment variable the harness actually set. Rebranding any of them would make a measurement record claim something that did not happen. Only these historical literals and the exact manifest URL are exempt, so a newly branded string added to this file still fails",
 	},
+	{
+		glob: "docs/benchmark-three-way-design-2026-10-08.md",
+		allow: [
+			/Prime Agent，/,
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/(?:tree|blob|commit)\/[a-f0-9]{40}(?:\/[^\s)]+)?/,
+		],
+		reason:
+			"the three-version experiment names the two upstream products and links their pinned source revisions (rule R1); only the upstream product label and upstream source URLs are exempt, not this fork's own branding",
+	},
+	{
+		glob: "docs/benchmark-three-way-plan.json",
+		allow: [/"https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent"/],
+		reason:
+			"the experiment's source manifest must identify the actual upstream repository for both baseline variants (rule R1); only that exact repository URL is exempt",
+	},
+	{
+		glob: "packages/coding-agent/test/benchmark-three-way.test.ts",
+		allow: [/PRIME_AGENT_(?:BASE_URL|API_KEY)\b/],
+		reason: "faux credential tests verify the authorized external gateway names and their removal from child environments (rule R1); no paid provider is used",
+	},
+	{
+		glob: "REPORT.en.*",
+		allow: [
+			/Prime Agent's persistent IPython runtime/,
+			/Prime Agent v0\.7\.0/,
+			/Prime Agent source analysis/,
+			/1-prime-agent-source-analysis/,
+			/Prime Agent is a coding\/research agent/,
+			/Prime Agent was an in-repository fork/,
+		],
+		reason: "the English reading edition describes the upstream product assessed in the historical feasibility study (rules R1/R2); only those upstream descriptions and their generated section anchor are exempt",
+	},
+	{
+		glob: "docs/benchmark-comparison-2026-08-10.en.*",
+		allow: [
+			/Prime Agent vs WasmEdge Agent benchmark/,
+			/prime-agent-vs-wasmedge-agent-benchmark-2026-08-10/,
+			/stock Prime Agent's IPython runtime/,
+			/PrimeIntellect-ai\/prime-agent/,
+			/prime-agent-clean-bench\/prime-agent\.sh/,
+			/PRIME_AGENT_CODING_AGENT_DIR/,
+		],
+		reason: "the named English counterparts preserve the August campaign's actual upstream product, repository, launcher path, and isolated configuration variable (rule R2); the HTML heading anchor derives from its historical title",
+	},
+	{
+		glob: "docs/benchmark-three-way-design-2026-10-08.en.*",
+		allow: [
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/(?:tree|blob|commit)\/[a-f0-9]{40}(?:\/[^\s)"<>]+)?/,
+		],
+		reason: "the English experiment design links pinned upstream revisions and their source paths (rule R1); the fork's own product names remain checked",
+	},
+	...[
+		"docs/rust-cell-report-2026-10-08.*",
+		"poc/bench/templates/rust-cell-report*.md",
+	].map((glob) => ({
+		glob,
+		allow: [/Prime Agent with a (?:TypeScript|Rust) host/, /Prime Agent 的/, /pinned Prime Agent README/],
+		reason: "the consolidated report and its templates describe the upstream comparison groups and pinned upstream documentation (rule R1); only those upstream clauses are exempt",
+	})),
 	{
 		glob: "examples/showcase/README.md",
 		allow: [/a fork of Prime Agent/],

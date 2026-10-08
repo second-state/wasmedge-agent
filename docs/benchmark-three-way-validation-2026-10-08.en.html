@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Benchmark Validation History — October 8, 2026</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#fixed-inputs">Fixed inputs</a><a href="#initial-tests">Initial tests</a><a href="#observed-failures-and-limits">Observed failures and limits</a><a href="#first-graphical-reports">First graphical reports</a><a href="#earlier-cell-compilation-deduction">Earlier cell-compilation deduction</a><a href="#corrected-cell-only-test">Corrected cell-only test</a><a href="#startup-and-model-trajectory-diagnosis">Startup and model-trajectory diagnosis</a><a href="#all-cargo-capture-and-cell-execution">All-Cargo capture and cell execution</a><a href="#runtime-diagnosis-and-later-updates">Runtime diagnosis and later updates</a></nav><main><h1 id="benchmark-validation-history-october-8-2026">Benchmark Validation History — October 8, 2026</h1>
+<p>The runner, trace collector, runtime adapters, and offline HTML/CSV reports are implemented. The catalog has three host cases, 16 direct-runtime cases, and 12 task cases. The first tests covered all H/R cases and four E tasks. This validates the harness, outputs, and measurement coverage. It does not establish a general speed ranking.</p>
+<p>The first paid campaign allowed native tools. WasmEdge E03/E08/E11 used only bash. Those runs cannot answer the Python-cell versus Rust/Wasm-cell question. Their raw records remain saved, but they are excluded from cell comparisons. Later tests require a successful cell in every task turn, prohibit shell delegation, and time the shared checker separately. Earlier chart and deduction checks below are historical records of earlier report versions.</p>
+<p>See the <a href="../poc/bench/three-way/README.en.html">runner instructions</a>, <a href="benchmark-three-way-design-2026-10-08.en.html">protocol</a>, and <a href="rust-cell-report-2026-10-08.en.html">current consolidated report</a>. Raw data and paid outputs are in gitignored <code>poc/bench/results/</code>. Links point to saved local artifacts.</p>
+<h2 id="fixed-inputs">Fixed inputs</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Base revision</th>
+<th>Host / cell runtime</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prime-ts</code></td>
+<td><code>7d442aafa985f9342134fac16c2ef41f03fb45c1</code></td>
+<td>TS Node bundle / persistent Python</td>
+</tr>
+<tr>
+<td><code>prime-rust</code></td>
+<td><code>967eb13fd488507af5f590e9c6ea8b2672f1fc05</code></td>
+<td>Native Rust release / persistent Python</td>
+</tr>
+<tr>
+<td><code>wasmedge</code></td>
+<td><code>48d6312570f7d39809703db2c69a43f342fb7424</code></td>
+<td>Fork TS Node bundle / Rust WASI, interpreter</td>
+</tr>
+</tbody>
+</table></div>
+<p>Prime Rust changes the host, not the Python cell runtime. Direct upstream tests use identical Python bytes. Rust references implement equivalent operations with assertions. Adapters call the real product engines, not mock runtimes.</p>
+<p>Environment: Darwin 25.6.0 arm64, Apple M5 Max, 18 logical CPUs, 128 GiB RAM, Node 24.13.1, Cargo/rustc 1.98.1, and WasmEdge 0.14.1. Rust host, adapter, and guest use release builds. Plans save source/build/task/collector hashes, collector snapshots, seed, and paired order.</p>
+<p>Paid tests use <code>anthropic/claude-opus-5-5</code> with reasoning off. The service catalog advertises this ID. Its immutable backend revision was not independently verified.</p>
+<h2 id="initial-tests">Initial tests</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Campaign</th>
+<th style="text-align: right;">Slots</th>
+<th>Result</th>
+<th style="text-align: right;">Paid requests</th>
+<th>Report</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>three-way-local-02</code></td>
+<td style="text-align: right;">57</td>
+<td>R 48/48; H 6 passed, 2 failed, 1 not applicable</td>
+<td style="text-align: right;">0</td>
+<td><a href="../poc/bench/results/three-way-local-02/report.en.html">Host/runtime</a></td>
+</tr>
+<tr>
+<td><code>three-way-opus55-smoke-01</code></td>
+<td style="text-align: right;">12</td>
+<td>Four tasks × three variants; all checkers passed; native-tool policy</td>
+<td style="text-align: right;">54</td>
+<td><a href="../poc/bench/results/three-way-opus55-smoke-01/report.en.html">Native-tool observation</a></td>
+</tr>
+<tr>
+<td><code>three-way-opus55-cell-smoke-01</code></td>
+<td style="text-align: right;">12</td>
+<td>Checker and per-turn cell rules passed 12/12</td>
+<td style="text-align: right;">50</td>
+<td><a href="../poc/bench/results/three-way-opus55-cell-smoke-01/report.en.html">Cell comparison</a></td>
+</tr>
+<tr>
+<td><code>three-way-command-profile-check</code></td>
+<td style="text-align: right;">1</td>
+<td>Fork R01 passed; 48 Cargo/rustc command spans saved</td>
+<td style="text-align: right;">0</td>
+<td><a href="../poc/bench/results/three-way-command-profile-check/report.en.html">Command profile</a></td>
+</tr>
+<tr>
+<td><code>three-way-edit-phase-check</code></td>
+<td style="text-align: right;">3</td>
+<td>R06 passed in all variants; read/transform/write/verify measured</td>
+<td style="text-align: right;">0</td>
+<td><a href="../poc/bench/results/three-way-edit-phase-check/report.en.html">Edit phases</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>Paid tasks were E03 fix-bug, E08 rust-rename, E09 helper-accumulation, and E11 join-report. Twelve passing runs do not mean all 12 task types were tested.</p>
+<p>Recorded checks at that stage:</p>
+<ul>
+<li>Root checks and workspace build passed. Pinned TS bundles and Rust release hosts/adapters built and ran.</li>
+<li>Collector tests passed 15/15 using faux HTTP/SSE, without paid calls.</li>
+<li>The initial 73 slots had 6,187 schema-valid spans and zero cross-record integrity errors. The later cell campaign is reported separately below.</li>
+<li>R06 read/transform/write/verify durations fit inside the edit transaction. Write time covered write/close, not read, matching, verification, or an fsync guarantee.</li>
+<li>Browser filters worked. A <a href="../poc/bench/results/three-way-opus55-smoke-01/report-filtered.png">filtered screenshot</a> is saved.</li>
+<li>A scoped scan of 675 paid artifacts found zero occurrences of the actual API key. Build outputs were skipped. Credentials were not written to config, child environment, manifest, or command line.</li>
+</ul>
+<p><a href="../poc/bench/results/three-way-validation-2026-10-08.json">Trace/stream/edit audit</a> and <a href="../poc/bench/results/three-way-opus55-smoke-01/credential-artifact-audit.json">credential audit</a> record these checks. Runs retain SSE, decoded arguments, session logs, project outputs, checker logs, and failures.</p>
+<h2 id="observed-failures-and-limits">Observed failures and limits</h2>
+<p>H02 replay used 8 KiB context, 64 KiB UTF-8 output, and 64 code points per chunk in a zero-delay burst. Prime TS and the fork exited zero but omitted the final assistant <code>message_end</code> in JSON output. Both sessions retained all 65,536 bytes and the marker. Prime Rust delivered and saved the complete result. The two correctness failures remain recorded. Their client root cause was not fixed in this work.</p>
+<p>H03 is not applicable to the Rust CLI. It has no separate bash model tool or equivalent tool-filter flags. A shell call inside a runtime was not substituted for host-only dispatch. R10 separately uses the real bridge with a common <code>/bin/sh</code> handler.</p>
+<p>The first paid native Cargo task used a global shared build directory. It cannot establish cache-controlled compilation latency. Later project targets/build directories are isolated per run. Old outputs are preserved. Native-tool and cell-only policies have different inputs and are not pooled.</p>
+<p>All dashboards set <code>rankingAllowed:false</code>. Early cells had one repetition, no overhead audit showing ≤2%, and no paired confidence intervals. PATH command profiling adds process overhead and is a separate lane. <code>cargo test</code> combines build/test work. Nested rustc unit times cannot be added as Cargo wall time.</p>
+<p>Unexposed compiler internals, host phases, CPU, and tree RSS remain missing. Independent duration clocks are not merged into a global timeline. Designed scale, cold-host-cache, recovery, and library-gate extensions were not all implemented.</p>
+<h2 id="first-graphical-reports">First graphical reports</h2>
+<p>Four initial campaigns were reanalyzed offline, without paid calls. Reports gained case bars, correctness, coverage, phase heatmaps, a single-clock timeline, trace links, and SVG export.</p>
+<p>The 12 paid latency bars matched recorded successful medians. H02 failures retained null success medians and a 90,000 ms penalized mean each. H03 Rust remained not applicable. At 390/320 px, pages had no horizontal overflow; wide charts scrolled internally. Heatmap/timeline navigation and SVG download worked. Collector tests then passed 18/18.</p>
+<p><a href="../poc/bench/results/three-way-opus55-smoke-01/report-charts-desktop.png">Desktop</a>, <a href="../poc/bench/results/three-way-opus55-smoke-01/report-phase-heatmap.png">heatmap</a>, <a href="../poc/bench/results/three-way-opus55-smoke-01/report-charts-mobile.png">mobile</a>, and <a href="../poc/bench/results/three-way-opus55-smoke-01/report-visual-audit.json">visual audit</a> are saved. These screenshots show the historical Chinese reports.</p>
+<h2 id="earlier-cell-compilation-deduction">Earlier cell-compilation deduction</h2>
+<p>The first deduction section removed measured Rust-to-Wasm <code>cell.compile</code> time from each successful run, then took the median. Raw bars used the same samples. Other Cargo work was still in the remainder. These adjusted values also retained model and other tool time.</p>
+<p>All 73 JSON/CSV deductions matched: 18 runs deducted Cargo; 46 upstream runs had no corresponding phase; five had no Rust cell; three were excluded from successful medians; one was unavailable. R15 parallel compile durations lacked a shared origin and could not be safely deducted. Historical Opus E09 had 689.717917 ms of cell Cargo, 29,427.396583 ms agent time, and 28,737.678666 ms adjusted time. This native-policy run is now excluded from cell comparisons.</p>
+<p>Collector tests passed 25/25. Tests covered paired medians, failures, parent/child overlap, missing/duplicate observations, clocks, negative values, and export. Browser checks passed at desktop and 390/320 px. No paid calls were added. See <a href="../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-runs.csv">deduction CSV</a> and <a href="../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-audit.json">audit</a>.</p>
+<h2 id="corrected-cell-only-test">Corrected cell-only test</h2>
+<p><code>three-way-opus55-cell-smoke-01</code> is a new immutable plan. It ran E03/E08/E09/E11 once per variant, with the same model route and reasoning off. All 50 requests exposed only the appropriate Python or Rust cell tool. All 12 runs passed the checker and per-turn rules. The checker ran after agent completion and is outside agent elapsed time.</p>
+<p>There were 32 calls: 28 successful and four repaired failures. All costs remain. Inspection of 34 generated Python/Rust files, including library sources, found no shell/subprocess delegation. E03 Rust used <code>edit_exact</code>; other Rust file work used <code>std::fs</code>. E09 used the products' real helper/state APIs. Automated source screening is not a proof about arbitrary code.</p>
+<p>Single-run agent values below are descriptive. Cell Cargo includes failed builds:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th style="text-align: right;">Prime TS / Python (s)</th>
+<th style="text-align: right;">Prime Rust / Python (s)</th>
+<th style="text-align: right;">Rust raw (s)</th>
+<th style="text-align: right;">Cell Cargo (ms)</th>
+<th style="text-align: right;">Rust adjusted (s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E03 fix bug</td>
+<td style="text-align: right;">9.067</td>
+<td style="text-align: right;">7.320</td>
+<td style="text-align: right;">15.056</td>
+<td style="text-align: right;">337.089</td>
+<td style="text-align: right;">14.718</td>
+</tr>
+<tr>
+<td>E08 rename</td>
+<td style="text-align: right;">7.556</td>
+<td style="text-align: right;">6.435</td>
+<td style="text-align: right;">16.840</td>
+<td style="text-align: right;">209.671</td>
+<td style="text-align: right;">16.630</td>
+</tr>
+<tr>
+<td>E09 helper/state</td>
+<td style="text-align: right;">38.656</td>
+<td style="text-align: right;">22.429</td>
+<td style="text-align: right;">27.863</td>
+<td style="text-align: right;">607.187</td>
+<td style="text-align: right;">27.256</td>
+</tr>
+<tr>
+<td>E11 join/report</td>
+<td style="text-align: right;">9.130</td>
+<td style="text-align: right;">8.287</td>
+<td style="text-align: right;">17.793</td>
+<td style="text-align: right;">353.279</td>
+<td style="text-align: right;">17.439</td>
+</tr>
+</tbody>
+</table></div>
+<p>The revised table separates raw time, deduction, adjusted time, and reason. No Rust-to-Wasm phase does not mean all Python preparation is free. Missing data mean cannot calculate; failed or non-compliant runs mean excluded. Earlier native records retain their phases and checker results but are excluded from cell bars.</p>
+<p>Collector tests passed 29/29. All 1,008 new spans passed schema/integrity checks. JSON/CSV arithmetic and checker boundaries matched. A scan of 5,354 non-build/cache files found no actual API key. Desktop, mobile, filters, trace links, and SVG export passed. See <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/cell-runtime-audit.json">cell audit</a> and <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/report-visual-audit.json">visual audit</a>.</p>
+<h2 id="startup-and-model-trajectory-diagnosis">Startup and model-trajectory diagnosis</h2>
+<p>Before the first gateway request, the four Rust runs took 5.195–5.916 s; Prime TS took 0.510–0.538 s; Prime Rust took 0.032–0.037 s. This initialization was inside agent elapsed but outside cell compilation. Synchronous workspace/toolchain/skill work blocked the Node event loop despite fire-and-forget prewarming.</p>
+<p>The prepared template lacked websearch, but real sessions mounted it. <code>syncRustSkills</code> then ran an <code>agent_lib</code> probe build. A separate six-workspace test alternated three no-skill and three websearch cases. Initialization took 0.346–0.389 s without the skill and 4.612–5.048 s with it. Probe Cargo took 4.241–4.650 s. Dependencies rebuilt despite template warming. Reopening the three saved skill workspaces took 0.049–0.055 s without another probe. Wrappers were present and overhead was not audited. Those diagnostic values cannot be subtracted from original paid runs. <a href="../poc/bench/results/startup-diagnostic-20261008-01/startup-profile.json">Startup measurements</a>.</p>
+<p>E11 used the following clipped agent intervals. HTTP intervals were merged. Tool windows excluded HTTP overlap. Nested cells/compiler time were not added again:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>E11 phase (s)</th>
+<th style="text-align: right;">Prime TS / Python</th>
+<th style="text-align: right;">Rust/Wasm</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Before first model request</td>
+<td style="text-align: right;">0.516</td>
+<td style="text-align: right;">5.195</td>
+</tr>
+<tr>
+<td>Model HTTP requests</td>
+<td style="text-align: right;">7.058</td>
+<td style="text-align: right;">11.939</td>
+</tr>
+<tr>
+<td>Tool event windows</td>
+<td style="text-align: right;">0.011</td>
+<td style="text-align: right;">0.483</td>
+</tr>
+<tr>
+<td>Other unsplit wait</td>
+<td style="text-align: right;">1.545</td>
+<td style="text-align: right;">0.176</td>
+</tr>
+<tr>
+<td>Agent total</td>
+<td style="text-align: right;">9.130</td>
+<td style="text-align: right;">17.793</td>
+</tr>
+</tbody>
+</table></div>
+<p>Inside the Rust tool window, Cargo totaled 0.353 s, execution 0.021 s, and snapshots 0.076 s. Python execute summaries totaled 4 ms under a different boundary. Wasm execution does not explain the 8.663 s total gap.</p>
+<p>Both variants made three E11 HTTP calls. Rust cell-request output was 774 tokens, versus 341 for Python; whole-task output was 876/439. First prompts were 9,241/11,520 tokens. The slower Rust model path cannot be explained as simply a longer prompt. Server queue, cache, prefill, and generation were not independently timed.</p>
+<p>E08 Rust first referenced unavailable <code>walkdir::WalkDir</code>, then repaired with <code>std::fs</code>: three calls versus two Python calls. E09 Rust used three successful cells and six HTTP calls; Prime TS used eight cells, two API errors, and 11 HTTP calls. Rust took 27.863 s versus 38.656 s. See <a href="../poc/bench/results/three-way-opus55-cell-smoke-01/latency-attribution.json">full attribution</a>.</p>
+<p>Twelve smoke runs mean four cases × three variants × one observation. They identify local costs and failures, but cannot estimate model variance or stable win rates. With n=1, a median is the single value. Formal comparison needs more paired runs, confidence intervals, overhead checks, and initialization Cargo coverage.</p>
+<h2 id="all-cargo-capture-and-cell-execution">All-Cargo capture and cell execution</h2>
+<p><code>three-way-opus55-all-cargo-smoke-01</code> is another separate cell-only campaign with the same four cases. It passed 12/12, used 52 paid requests, and made 34 calls: 28 successes, five Python runtime API errors, and one Rust compile error. Inspection of all 36 generated source files found no shell delegation. E09 persistence/helper methods still differ, so this is a product task comparison, not a fixed-program CPU test.</p>
+<p>All 12 runs have complete capture of 16 Cargo commands, with timestamps, IDs, arguments, cwd, and three child-clock calibration samples. Agent/user/validated interval merging, clipping, and subtraction matched CSV. All 1,068 spans passed schema/integrity checks. A scan of 5,433 non-build artifacts found no key. All 52 requests exposed only cell tools.</p>
+<p>The table uses initialization through checker completion, in seconds. Cargo includes full command wall time, including tests:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Variant / cell</th>
+<th style="text-align: right;">Raw total</th>
+<th style="text-align: right;">All Cargo</th>
+<th style="text-align: right;">Adjusted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E03</td>
+<td>Prime TS / Python</td>
+<td style="text-align: right;">11.349</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">11.349</td>
+</tr>
+<tr>
+<td>E03</td>
+<td>Prime Rust / Python</td>
+<td style="text-align: right;">7.324</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">7.324</td>
+</tr>
+<tr>
+<td>E03</td>
+<td>Rust/Wasm</td>
+<td style="text-align: right;">14.939</td>
+<td style="text-align: right;">4.366</td>
+<td style="text-align: right;">10.573</td>
+</tr>
+<tr>
+<td>E08</td>
+<td>Prime TS / Python</td>
+<td style="text-align: right;">9.306</td>
+<td style="text-align: right;">0.873</td>
+<td style="text-align: right;">8.433</td>
+</tr>
+<tr>
+<td>E08</td>
+<td>Prime Rust / Python</td>
+<td style="text-align: right;">7.331</td>
+<td style="text-align: right;">0.415</td>
+<td style="text-align: right;">6.916</td>
+</tr>
+<tr>
+<td>E08</td>
+<td>Rust/Wasm</td>
+<td style="text-align: right;">17.624</td>
+<td style="text-align: right;">4.534</td>
+<td style="text-align: right;">13.090</td>
+</tr>
+<tr>
+<td>E09</td>
+<td>Prime TS / Python</td>
+<td style="text-align: right;">44.481</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">44.481</td>
+</tr>
+<tr>
+<td>E09</td>
+<td>Prime Rust / Python</td>
+<td style="text-align: right;">25.283</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">25.283</td>
+</tr>
+<tr>
+<td>E09</td>
+<td>Rust/Wasm</td>
+<td style="text-align: right;">28.254</td>
+<td style="text-align: right;">5.045</td>
+<td style="text-align: right;">23.209</td>
+</tr>
+<tr>
+<td>E11</td>
+<td>Prime TS / Python</td>
+<td style="text-align: right;">9.885</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">9.885</td>
+</tr>
+<tr>
+<td>E11</td>
+<td>Prime Rust / Python</td>
+<td style="text-align: right;">8.919</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">8.919</td>
+</tr>
+<tr>
+<td>E11</td>
+<td>Rust/Wasm</td>
+<td style="text-align: right;">18.163</td>
+<td style="text-align: right;">4.946</td>
+<td style="text-align: right;">13.217</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rust initialization skill probes are now captured. Python E08 checker Cargo was 0.873/0.415 s. It is deducted only from validated time. Agent/user periods exclude the checker and have zero checker deduction. Older incomplete ledgers remain unavailable; diagnostic values are not filled in.</p>
+<p>Cell totals below are ms, including runtime failures. Counts are success/runtime failure/compile failure. Compile failures have no execution duration:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th style="text-align: right;">Prime TS / Python</th>
+<th style="text-align: right;">Prime Rust / Python</th>
+<th style="text-align: right;">Rust/Wasm</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E03</td>
+<td style="text-align: right;">6.000 · 2/0/0</td>
+<td style="text-align: right;">2.000 · 2/0/0</td>
+<td style="text-align: right;">34.297 · 2/0/0</td>
+</tr>
+<tr>
+<td>E08</td>
+<td style="text-align: right;">3.000 · 1/0/0</td>
+<td style="text-align: right;">2.000 · 1/0/0</td>
+<td style="text-align: right;">10.877 · 1/0/1</td>
+</tr>
+<tr>
+<td>E09</td>
+<td style="text-align: right;">23.000 · 6/4/0</td>
+<td style="text-align: right;">7.000 · 4/1/0</td>
+<td style="text-align: right;">72.601 · 3/0/0</td>
+</tr>
+<tr>
+<td>E11</td>
+<td style="text-align: right;">4.000 · 2/0/0</td>
+<td style="text-align: right;">10.000 · 2/0/0</td>
+<td style="text-align: right;">21.060 · 2/0/0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Thirty benchmark tests and root checks passed. Tests cover concurrent command unions, boundary clipping, missing/duplicate commands, clock proof, legacy missing data, Python resolution, and runtime/compile failures. One repetition and unaudited overhead prevent a general winner claim.</p>
+<p><a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html">Dashboard</a>, <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/all-cargo-cell-audit.json">Cargo/cell audit</a>, <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/compilation-adjusted-runs.csv">deductions CSV</a>, and <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-runs.csv">cell CSV</a> are saved.</p>
+<p>Browser checks at 1440/390/320 px found no page overflow or JavaScript errors. Period switching, outside-period checker reasons, and execution trace links matched. Added cell bars show per-run totals or successful-cell averages, with linear/log scales and SVG export. Both metrics matched all 12 groups. See the <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-chart-visual-audit.json">cell-chart audit</a>. These report updates made no paid calls.</p>
+<h2 id="runtime-diagnosis-and-later-updates">Runtime diagnosis and later updates</h2>
+<p>Fixed-program controls used two warmups and 15 measured samples per group. The main diagnosis saved 272 Rust/process and 136 Python samples. Same-artifact interpreter/AOT controls saved 136 more. They identified new-process cost, interpreter JSON/regex cost, and bridge polling delay. E09 state used files, not the bridge. AOT and 1 ms polling were then diagnostic copies. <a href="benchmark-cell-runtime-analysis-2026-10-08.en.html">Full diagnosis</a>.</p>
+<p>Later, production readiness reads and trusted host AOT were added. Those four-way campaigns have separate evidence and test counts. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">AOT/bridge report</a> and <a href="rust-cell-report-2026-10-08.en.html">consolidated report</a>. Historical test counts above describe each stage; they are not combined into one suite count.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

@@ -5,6 +5,7 @@ import type { BridgeServer } from "./bridge-server.js";
 import type { CargoSandbox } from "./cargo-sandbox.js";
 import type { CellTimings } from "./cell-timing.js";
 import type { RuntimeResourceLimits } from "./resource-limits.js";
+import type { RustCellRuntimeMode } from "./runtime-mode.js";
 import type { WorkspaceHistory } from "./workspace-history.js";
 import type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
@@ -24,6 +25,8 @@ export type CellStatus = "ok" | "compile_error" | "error" | "timeout" | "aborted
 
 export interface CellResult {
 	status: CellStatus;
+	runtimeMode?: RustCellRuntimeMode;
+	aotCompileFailed?: boolean;
 	stdout: string;
 	stderr: string;
 	compileDiagnostics?: string;
@@ -55,6 +58,7 @@ export interface CellResult {
 }
 
 export interface RunnerOptions extends RuntimeResourceLimits {
+	runtimeMode?: RustCellRuntimeMode;
 	cargoSandbox?: CargoSandbox;
 	/** Test proposed lib edits in WASI before applying them; defaults to false. */
 	libraryTestGate?: boolean;

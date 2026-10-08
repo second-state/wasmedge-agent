@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Performance Benchmark Protocol</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#1-questions-and-variants">1. Questions and variants</a><a href="#2-three-test-lanes">2. Three test lanes</a><a href="#3-timing-definitions">3. Timing definitions</a><a href="#4-workloads">4. Workloads</a><a href="#5-cache-and-controls">5. Cache and controls</a><a href="#6-trace-and-resources">6. Trace and resources</a><a href="#7-statistics-and-scoring">7. Statistics and scoring</a><a href="#8-implementation-sequence-and-coverage">8. Implementation sequence and coverage</a><a href="#9-all-cargo-cell-and-aot-additions">9. All-Cargo, cell, and AOT additions</a></nav><main><h1 id="agent-performance-benchmark-protocol">Agent Performance Benchmark Protocol</h1>
+<p>Date: October 8, 2026. This is the English reading edition of the original three-way design. The original was written before the runner and formal tests existed. Later implementation added cell-only rules, all-Cargo capture, and a fourth AOT group. Design requirements below are not claims that every hook or workload is implemented. See the <a href="../poc/bench/three-way/README.en.html">runner coverage</a> and <a href="benchmark-three-way-validation-2026-10-08.en.html">validation history</a>.</p>
+<p>Inputs: <a href="benchmark-three-way-plan.json">case catalog</a>, <a href="benchmark-trace.schema.json">trace schema</a>. The catalog keeps <code>executionReady: false</code>. The CLI creates an immutable executable manifest with actual source, build, and environment hashes. The requested model route is <code>anthropic/claude-opus-5-5</code>. Its backend revision is not independently verified. The experiment does not change the older D20/D21 acceptance rules or reuse historical measurements as new results.</p>
+<h2 id="1-questions-and-variants">1. Questions and variants</h2>
+<p>Measure three separate questions:</p>
+<ol>
+<li>How do TS and Rust hosts differ in startup, prompts, streams, dispatch, and persistence?</li>
+<li>How do Python and Rust/Wasm cells differ in fixed cost, computation, I/O, bridge work, and state?</li>
+<li>With the same model and task, how much time and usage go to generated code, compilation, execution, repair, and checks?</li>
+</ol>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Product</th>
+<th>Host</th>
+<th>Generated control code</th>
+<th>Execution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prime-ts</code></td>
+<td>Prime TS parent of the Rust port</td>
+<td>TypeScript</td>
+<td>Python</td>
+<td>Persistent Python kernel</td>
+</tr>
+<tr>
+<td><code>prime-rust</code></td>
+<td>Pinned Prime Rust revision</td>
+<td>Rust</td>
+<td>Python</td>
+<td>Persistent Python kernel</td>
+</tr>
+<tr>
+<td><code>wasmedge</code></td>
+<td>This fork</td>
+<td>TypeScript</td>
+<td>Rust</td>
+<td>Release WASI build; new WasmEdge interpreter process per cell</td>
+</tr>
+<tr>
+<td><code>wasmedge-aot</code></td>
+<td>Added later</td>
+<td>TypeScript</td>
+<td>Rust</td>
+<td>Same fork/reference code; trusted host AOT; new process per cell</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="pinned-source-and-builds">Pinned source and builds</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Full base revision</th>
+<th>Selection</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prime-ts</code></td>
+<td><code>7d442aafa985f9342134fac16c2ef41f03fb45c1</code></td>
+<td>Sole parent of the Rust port; TS package 0.9.8</td>
+</tr>
+<tr>
+<td><code>prime-rust</code></td>
+<td><code>967eb13fd488507af5f590e9c6ea8b2672f1fc05</code></td>
+<td>Upstream revision checked at design time; commit 2026-10-07 22:04:58 UTC</td>
+</tr>
+<tr>
+<td>Fork</td>
+<td><code>48d6312570f7d39809703db2c69a43f342fb7424</code></td>
+<td>Fork baseline before this experiment; later runtime patch is saved separately</td>
+</tr>
+</tbody>
+</table></div>
+<p><a href="https://github.com/PrimeIntellect-ai/prime-agent/tree/7d442aafa985f9342134fac16c2ef41f03fb45c1">TS source</a>, <a href="https://github.com/PrimeIntellect-ai/prime-agent/tree/967eb13fd488507af5f590e9c6ea8b2672f1fc05">Rust source</a>, and <a href="https://github.com/PrimeIntellect-ai/prime-agent/commit/39bc99a91d102c46474c090fdc7ae7cd5037ffcf">port commit</a> identify fixed inputs. The pinned <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/examples/kernel_bench.rs">Rust kernel benchmark</a> launches Python. A Rust host is not native execution of generated Rust.</p>
+<p>Product revisions also differ in features, prompts, and dependencies. An optional port-commit versus TS-parent control can study the rewrite more closely, but remains separate and does not remove every port change. Instrumented builds must save base revision, patch bytes/hash, and complete modified-source hash.</p>
+<p>Use built TS bundles with the same Node binary and <code>cargo build --release --locked</code> for the Rust host. Do not rank a tsx development entry against release Rust. The upstream <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/prime-agent.sh">launcher</a> uses bundles with <code>--dist</code>. Bun <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/scripts/build-binary.mjs">standalone builds</a> belong to a separate packaging lane. Installation, vendoring, and one-time host builds are setup costs. Builds of generated project code are task costs.</p>
+<h2 id="2-three-test-lanes">2. Three test lanes</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Lane</th>
+<th>Model source</th>
+<th>Work</th>
+<th>What it measures</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H: host</td>
+<td>Local HTTP/SSE replay</td>
+<td>Fixed response schedule, sizes, and tool contract</td>
+<td>Host overhead, stream delivery, persistence</td>
+</tr>
+<tr>
+<td>R: runtime</td>
+<td>No model</td>
+<td>Fixed Python/Rust programs with common output rules</td>
+<td>Cell pipeline, language, and library costs</td>
+</tr>
+<tr>
+<td>E: tasks</td>
+<td>Paid model</td>
+<td>Same task, fixture, and hidden checker</td>
+<td>Quality, user wait, usage, repairs</td>
+</tr>
+</tbody>
+</table></div>
+<p>H/R require no paid tokens. H uses the actual provider adapter, client/daemon, and agent loop. A faux in-process provider validates instrumentation but does not replace wire replay. Preserve native prompts/tool schemas and save request hashes; requests are not byte-identical. Fix reasoning/text/argument bytes, chunks, terminal events, usage, call counts, and delays. Log actual emits and backpressure. A synthetic-context parser test is a separate control. Native cell replay measures a fixed trajectory, not host-only overhead.</p>
+<h2 id="3-timing-definitions">3. Timing definitions</h2>
+<p>Record <code>run → turn → request attempt → tool call → cell/command → phase</code>, with agent and parent-agent IDs. Save start/end events, not just averages.</p>
+<h3 id="host-and-model-phases">Host and model phases</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Start → end</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>startup.cli</code></td>
+<td>Launch → CLI accepts commands</td>
+<td>Record packaging and runtime.</td>
+</tr>
+<tr>
+<td><code>startup.daemon</code></td>
+<td>Supervisor launch → protocol ready</td>
+<td>Socket existence alone is insufficient.</td>
+</tr>
+<tr>
+<td><code>startup.worker</code></td>
+<td>Session request → worker ready</td>
+<td>Includes worker boot.</td>
+</tr>
+<tr>
+<td><code>startup.resources</code></td>
+<td>Load start → prompts/skills/catalog ready</td>
+<td>Split scan/read/config when observable.</td>
+</tr>
+<tr>
+<td><code>startup.runtime</code></td>
+<td>Provision start → first-cell readiness</td>
+<td>Python boot or Rust scaffold; can overlap startup.</td>
+</tr>
+<tr>
+<td><code>host.prompt_build</code></td>
+<td>Turn dispatch → messages ready</td>
+<td>Record bytes, entries, tokens.</td>
+</tr>
+<tr>
+<td><code>host.provider_prepare</code></td>
+<td>Messages ready → transport handoff</td>
+<td>Conversion, serialization, credential lookup.</td>
+</tr>
+<tr>
+<td><code>provider.headers_wait</code></td>
+<td>Send boundary → headers</td>
+<td>Upload, network, queue, prefill; not pure inference.</td>
+</tr>
+<tr>
+<td><code>provider.first_body_wait</code></td>
+<td>Headers → first body/SSE bytes</td>
+<td>Requires a transport marker.</td>
+</tr>
+<tr>
+<td><code>provider.first_content_wait</code></td>
+<td>Headers → first nonempty content</td>
+<td>Reasoning, text, or arguments; empty starts do not count.</td>
+</tr>
+<tr>
+<td><code>provider.reasoning_visible</code></td>
+<td>First → last reasoning delta</td>
+<td>Visible window, not full internal thinking.</td>
+</tr>
+<tr>
+<td><code>provider.code_emission</code></td>
+<td>First → last decoded source byte</td>
+<td>Keep original chunks and source ranges.</td>
+</tr>
+<tr>
+<td><code>provider.response_stream</code></td>
+<td>First content → terminal event</td>
+<td>Parent of emission windows; do not add children again.</td>
+</tr>
+<tr>
+<td><code>host.stream_decode</code></td>
+<td>Chunk arrives → event/arguments ready</td>
+<td>Per-chunk distribution; stream wait is not parser CPU.</td>
+</tr>
+<tr>
+<td><code>host.tool_dispatch</code></td>
+<td>Arguments ready → tool body</td>
+<td>Validation, scheduling, serialization.</td>
+</tr>
+<tr>
+<td><code>host.result_pack</code></td>
+<td>Tool ends → result ready</td>
+<td>Diagnostics, truncation, attachments, encoding.</td>
+</tr>
+<tr>
+<td><code>host.transcript_append</code></td>
+<td>Append starts → persistence contract met</td>
+<td>Distinguish write, flush, and fsync.</td>
+</tr>
+<tr>
+<td><code>host.next_turn_gap</code></td>
+<td>Result ready → next request</td>
+<td>Host bookkeeping; not model diagnostic comprehension.</td>
+</tr>
+<tr>
+<td><code>host.client_delivery</code></td>
+<td>Enqueue → complete client receipt</td>
+<td>IPC, encoding, backpressure.</td>
+</tr>
+<tr>
+<td><code>task.agent_elapsed</code></td>
+<td>Submit → final required output</td>
+<td>Excludes fixture setup, external checker, teardown.</td>
+</tr>
+<tr>
+<td><code>run.user_elapsed</code></td>
+<td>Cold CLI launch or warm submit → final output</td>
+<td>Cold case includes startup without adding it again.</td>
+</tr>
+<tr>
+<td><code>task.check</code></td>
+<td>External checker launch → completion</td>
+<td>Same checker; agent-run tests stay in agent time.</td>
+</tr>
+<tr>
+<td><code>run.teardown</code></td>
+<td>Stop request → owned tree stopped</td>
+<td>Separate from task latency.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each retry has an attempt ID. Keep backoff, failed responses, HTTP status, error kind, model ID, and usage for every attempt.</p>
+<h3 id="cell-and-project-phases">Cell and project phases</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Required detail</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cell.provision</code></td>
+<td>Toolchain, scaffold, skills, cache validation, history</td>
+<td>Rust; compare with Python boot separately.</td>
+</tr>
+<tr>
+<td><code>cell.queue</code></td>
+<td>Runtime queue and build-permit queue</td>
+<td>State deadline coverage.</td>
+</tr>
+<tr>
+<td><code>cell.source_prepare</code></td>
+<td>Backup, library edits, main write, helper index</td>
+<td>File writing is not model generation.</td>
+</tr>
+<tr>
+<td><code>cell.validate</code></td>
+<td>Skill gate, library-test snapshot/build/run, policy/probe</td>
+<td>Every Cargo call gets an ID.</td>
+</tr>
+<tr>
+<td><code>cell.compile</code></td>
+<td>Cargo, fingerprints, rustc units, link, diagnostics</td>
+<td>Control-cell compilation, not project build.</td>
+</tr>
+<tr>
+<td><code>cell.python_prepare</code></td>
+<td>Decode, parse/bytecode, imports</td>
+<td>Python preparation is not assumed free.</td>
+</tr>
+<tr>
+<td><code>cell.runtime_launch</code></td>
+<td>Spawn → guest entry</td>
+<td>Combine load/instantiate/WASI init if hooks are absent.</td>
+</tr>
+<tr>
+<td><code>cell.guest</code></td>
+<td>Guest entry → exit</td>
+<td>Inclusive wall, not CPU alone.</td>
+</tr>
+<tr>
+<td><code>guest.compute</code></td>
+<td>Fixed algorithm start → end</td>
+<td>Local wall/CPU; unavailable for unmarked code.</td>
+</tr>
+<tr>
+<td><code>guest.input</code></td>
+<td>Read, decode, parse, index</td>
+<td>Record bytes, records, files.</td>
+</tr>
+<tr>
+<td><code>guest.output</code></td>
+<td>Encode, write, flush, emit</td>
+<td>Record hash and durability contract.</td>
+</tr>
+<tr>
+<td><code>guest.state</code></td>
+<td>Encode, save, load, decode</td>
+<td>Separate memory reuse, blobs, and reparsing.</td>
+</tr>
+<tr>
+<td><code>bridge.roundtrip</code></td>
+<td>Send → full reply</td>
+<td>One guest clock, method, sequence, payload.</td>
+</tr>
+<tr>
+<td><code>bridge.host</code></td>
+<td>Full frame → reply handed to writer</td>
+<td>Parse, queue, handler, encode, write.</td>
+</tr>
+<tr>
+<td><code>cell.exit_drain</code></td>
+<td>Guest exit → process/output complete</td>
+<td>Not guest computation.</td>
+</tr>
+<tr>
+<td><code>cell.rollback</code></td>
+<td>Failure → source restoration</td>
+<td>Build/runtime failure semantics differ.</td>
+</tr>
+<tr>
+<td><code>cell.snapshot</code></td>
+<td>Snapshot start → contract met</td>
+<td>Git or Python serialization; contracts differ.</td>
+</tr>
+<tr>
+<td><code>cell.cleanup</code></td>
+<td>Stop → cleanup complete</td>
+<td>Handler drain/cancel and scratch cleanup.</td>
+</tr>
+<tr>
+<td><code>project.source_write</code></td>
+<td>Actual project-file writes</td>
+<td>Separate from wrapper/helper source.</td>
+</tr>
+<tr>
+<td><code>project.build</code></td>
+<td>Native build spawn → end</td>
+<td>Resolution, compile, link; separate from cell build.</td>
+</tr>
+<tr>
+<td><code>project.test</code></td>
+<td>Agent-run tests → end</td>
+<td>Assertions, outcomes, runner startup.</td>
+</tr>
+<tr>
+<td><code>project.program_run</code></td>
+<td>Generated program start → end</td>
+<td>Separate from build/test.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Guest time includes I/O and bridge waits. Use exclusive intervals and a residual. Merge overlapping children before subtraction. Phase medians do not add to total medians.</p>
+<p>Compiler detail has levels. Level 1 records Cargo wall/CPU, artifact freshness, and units. Level 2 uses supported <a href="https://doc.rust-lang.org/cargo/reference/timings.html">Cargo timings</a>, with toolchain/flags recorded. Parse, typecheck, borrowing, codegen, and link detail require separate instrumentation and an overhead audit. Parallel unit durations do not sum to Cargo wall. Missing Python hooks remain missing.</p>
+<h3 id="four-meanings-of-write-code-time">Four meanings of “write code time”</h3>
+<ol>
+<li><code>code_ready_ms</code>: request dispatch to complete source arguments. The design includes upstream preparation when dispatch is observable. The implemented gateway measure starts at gateway receipt and does not observe earlier prompt construction.</li>
+<li><code>code_emission_ms</code>: first to last decoded source byte. Tool JSON and source bytes are separate. Concurrent source windows require interval union.</li>
+<li><code>source_write_ms</code>: actual filesystem writing, split into cell, helper, and project roles.</li>
+<li><code>time_to_first_correct_artifact_ms</code>: submit to a predefined passing probe. No intermediate probe means only final correctness is known.</li>
+</ol>
+<p>Save source bytes, provider-supplied code tokens if available, total output/reasoning tokens, attempts, compile errors, and rewritten bytes. Do not estimate billed code tokens from character ratios. If only complete tool arguments are visible, code-ready can be measured but emission is missing. Raw JSON source ranges can be mapped back to SSE timestamps; the result is a client-visible window.</p>
+<p>Use <code>artifactRole: control_cell | helper_library | project_source</code>. Nested windows must not be added. Dynamically constructed project source has a write/hash record, not an invented model-emission timer.</p>
+<h3 id="repairs">Repairs</h3>
+<p>Link related attempts with <code>repairChainId</code>: generation → write → compile rejection → diagnostics → repair request → build → runtime/test error → repair → passing checks. Save every stage, rollback, and retry. Report first-attempt success, attempts to correct, repair elapsed/tokens, and failed build/test cost. Internal model comprehension is not observable. Diagnostic-format effects need a separate randomized ablation with matched inputs.</p>
+<h2 id="4-workloads">4. Workloads</h2>
+<h3 id="host-cases">Host cases</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Planned parameters</th>
+<th>Main costs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H01 startup/session</td>
+<td>Cold CLI/daemon and warm new session; 0/1k/10k transcript entries</td>
+<td>Startup, load, hydration, first response</td>
+</tr>
+<tr>
+<td>H02 stream/context</td>
+<td>Context 8/32/128 KiB; output 1/64/1024 KiB; chunks 64/1024/16384 bytes; burst/paced</td>
+<td>Prompt, payload, decode, delivery/backpressure</td>
+</tr>
+<tr>
+<td>H03 dispatch/persistence</td>
+<td>1/10/100 common calls; result 1/64/1024 KiB; handler 0/10 ms</td>
+<td>Dispatch, packing, persistence, IPC, gaps</td>
+</tr>
+</tbody>
+</table></div>
+<p>Use registered H02 parameter combinations before a full Cartesian matrix. Report planned versus actual emit delays. Subtracting replay sleep does not isolate host overhead. H03 Rust is not applicable in the implemented matrix because it lacks a standalone bash model tool.</p>
+<h3 id="runtime-cases">Runtime cases</h3>
+<p>Both upstreams use identical Python bytes. Rust performs equivalent operations with common Unicode, sorting, overflow, and error rules. Optimized implementations are separate controls.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Planned workload/scale</th>
+<th>Check and phase focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R01</td>
+<td>Fixed <code>ok</code>; first and later cells</td>
+<td>Exact output; provision/queue/compile/launch/protocol/snapshot</td>
+</tr>
+<tr>
+<td>R02</td>
+<td>Same source, literal/helper change, empty target</td>
+<td>Output/hash and actual cache evidence</td>
+</tr>
+<tr>
+<td>R03</td>
+<td>uint32 loop: 10^4/10^6/10^7 iterations</td>
+<td>Oracle checksum; compute/CPU/throughput</td>
+</tr>
+<tr>
+<td>R04</td>
+<td>JSONL/CSV join: 1/16/128 MiB</td>
+<td>Canonical rows/hash; read/parse/index/join/write</td>
+</tr>
+<tr>
+<td>R05</td>
+<td>100/1k/10k files × 4 KiB, TODO/FIXME</td>
+<td>Sorted path/line/content hash; walk/read/search/sort</td>
+</tr>
+<tr>
+<td>R06</td>
+<td>Exact replacement in 1/100/1k files × 4 KiB</td>
+<td>Tree hash/count; missing match rejected; read/match/write/diff</td>
+</tr>
+<tr>
+<td>R07</td>
+<td>Five state cells: 4 KiB/1 MiB/16 MiB</td>
+<td>Query/hash; resident, serialized, and reparse strategies</td>
+</tr>
+<tr>
+<td>R08</td>
+<td>Define helper, use in ten cells, then edit</td>
+<td>Counts/version; definition/compile/reuse/invalidation</td>
+</tr>
+<tr>
+<td>R09</td>
+<td>1/100/1k echoes; payload 0/1/64 KiB; handler 0/10 ms</td>
+<td>Sequence/reply hash; bridge/handler/transport</td>
+</tr>
+<tr>
+<td>R10</td>
+<td>Common pinned shell command; 0/10/100 ms</td>
+<td>Exit/output; bridge/launch/wait/drain</td>
+</tr>
+<tr>
+<td>R11</td>
+<td>Save/stop/resume: 1 KiB/1 MiB/16 MiB state/helper</td>
+<td>Restored query/hash; snapshot/stop/boot/load</td>
+</tr>
+<tr>
+<td>R12</td>
+<td>Syntax, type/name, runtime, contract errors</td>
+<td>Expected rejection and recovery; diagnostics/rollback/retest</td>
+</tr>
+<tr>
+<td>R13</td>
+<td>Stdout 1/64/1024 KiB and 16 MiB file</td>
+<td>Raw hash and truncation; emit/drain/pack/save</td>
+</tr>
+<tr>
+<td>R14</td>
+<td>Cancel compute, handler wait, or compile; probe again</td>
+<td>Tree stop/recovery; cancellation/drain/cleanup</td>
+</tr>
+<tr>
+<td>R15</td>
+<td>1/4/8 runtime sessions</td>
+<td>All hashes; queue/slowdown/throughput/tree memory</td>
+</tr>
+<tr>
+<td>R16</td>
+<td>100/1k cells; state change every ten cells</td>
+<td>Checksums/inventory; drift/history/state/RSS</td>
+</tr>
+</tbody>
+</table></div>
+<p>R07 strategies are separate. Rust has no cross-cell resident objects, so that strategy is not applicable. Serialized/reparse controls are comparable. R11 checks the product's actual durability, not unpromised atomic rollback. Rust/Python can reject the same error at different phases. Python compiler cancellation has no corresponding Cargo phase. Linux resource-limit ablations are separate from unrestricted comparisons.</p>
+<p>Prebuilt Rust modules and precompiled Python code objects can diagnose R01/R03 execution. They do not replace complete tool-pipeline totals. The later AOT group reports compilation separately; it does not replace interpreter.</p>
+<h3 id="task-cases">Task cases</h3>
+<p>Use the existing <a href="../poc/bench/README.md#tasks-full-set-designmd-appendix-c">12 fixtures/checkers</a>, pinned by version/hash. Scaling and intermediate-probe variants need new task versions.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Work</th>
+<th>Separate costs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01-log-stats</td>
+<td>Log report</td>
+<td>Explore, code, parse/count, write</td>
+</tr>
+<tr>
+<td>02-csv-normalize</td>
+<td>CSV to JSON</td>
+<td>Infer schema, parse/normalize, encode</td>
+</tr>
+<tr>
+<td>03-fix-bug</td>
+<td>Boundary bug</td>
+<td>Read/search, edit, checks, repair</td>
+</tr>
+<tr>
+<td>04-multi-turn-state</td>
+<td>Explore and answer later</td>
+<td>Save, load/reread, answer</td>
+</tr>
+<tr>
+<td>05-toolchain-loop</td>
+<td>Two bugs and test iteration</td>
+<td>Edits, failures, repair, retest</td>
+</tr>
+<tr>
+<td>06-build-cli</td>
+<td>Word-frequency CLI</td>
+<td>Code-ready, write, checks, run</td>
+</tr>
+<tr>
+<td>07-todo-scan</td>
+<td>Multi-file index</td>
+<td>Walk, match/sort, Markdown</td>
+</tr>
+<tr>
+<td>08-rust-rename</td>
+<td>Cross-file Rust rename</td>
+<td>Search/edit, control-cell build, native project Cargo/tests</td>
+</tr>
+<tr>
+<td>09-helper-accumulation</td>
+<td>Three-turn helper reuse</td>
+<td>Helper creation/build, state, reuse, summary</td>
+</tr>
+<tr>
+<td>10-lint-fix</td>
+<td>Lint and behavior</td>
+<td>Lint, diagnostics, edits, tests</td>
+</tr>
+<tr>
+<td>11-join-report</td>
+<td>JSON/CSV report</td>
+<td>Parse/index/join, write, repair</td>
+</tr>
+<tr>
+<td>12-repair-config</td>
+<td>Validator-compatible configuration</td>
+<td>Read, edit, validate, retry</td>
+</tr>
+</tbody>
+</table></div>
+<p>Extended tasks are separate from D21: E13 a stdlib Rust streaming log CLI with empty/malformed/overflow/sort and 1/16/128 MiB checks; E14 four/eight child shards plus reduction, with parity verified first; E15 compaction/checkpoint/resume with saved helper and large-input index. Record source/build/test/run in E13, parent versus child work in E14, and context/provider/checkpoint/restore costs in E15. Do not silently alter compaction thresholds to force parity.</p>
+<p>The implemented <code>cell-runtime-comparison-v1</code> retains native system prompts but exposes only the cell tool. Reads, parsing, calculations, edits, and writes must occur in Python/Rust APIs. Shell/subprocess delegation is prohibited. Every turn needs a successful cell. External project tests/lint run in a shared checker after agent completion, outside agent time. This differs from the older native project-test loop.</p>
+<p><code>native-tool-choice-observation</code> records normal tool choice separately. Bash-only trajectories cannot answer the cell comparison. Keep original records, but exclude them from cell latency. Prompts, inputs/hashes, and policies are not pooled. Even cell-only model tasks retain prompt/schema differences; R isolates fixed code more closely.</p>
+<h2 id="5-cache-and-controls">5. Cache and controls</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Required state</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>installed-fresh-session</td>
+<td>Installed tools/dependencies; fresh agent/session/workspace; no worker; template warmth recorded</td>
+</tr>
+<tr>
+<td>active-session</td>
+<td>Same worker/runtime after a passing cell; preserve namespace/target</td>
+</tr>
+<tr>
+<td>empty-cell-target</td>
+<td>Delete only this run's target; retain vendor/toolchain; not applicable to Python</td>
+</tr>
+<tr>
+<td>artifact-reuse</td>
+<td>Same bytes and actual compiler freshness evidence</td>
+</tr>
+<tr>
+<td>checkpoint-restored</td>
+<td>Save, stop, open a new worker from saved state</td>
+</tr>
+<tr>
+<td>setup-empty</td>
+<td>New install/cache roots; network/setup measured separately</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rewriting the same <code>main.rs</code> and copying a template target do not prove cache hits. Record Cargo freshness, rustc counts, fingerprints, paths, mtimes, and compiler version.</p>
+<p>Use one host per platform, fixed binaries/hashes, AC power, and recorded load. Pin compatible Python executable/dependencies for controlled H/R; otherwise disclose product defaults. Fix route/model/settings/retries where possible and mark unknown backend details. Keep native prompts, schemas, and actual cache usage. Generate identical fixture bytes/permissions from a seed and validate both references first.</p>
+<p>Isolate each run's agent directory, socket, session, project, runtime, and logs. Keep driver setup/hash/check/teardown separate from product latency. Do not run the main latency campaign concurrently. Counterbalance variant order with a fixed seed; the original three-way design uses six permutations. A four-way plan must record its own order. Preserve within-case cell dependencies. Do not clear user or system-wide caches. Record OS/cache/load/thermal conditions; empty target is not cold OS.</p>
+<h2 id="6-trace-and-resources">6. Trace and resources</h2>
+<p>Each planned slot has a manifest entry before launch. Save source/collector patches and fixtures. Per run, preserve metadata, incremental events, normalized spans, requests, cells, commands, resources, checks, stdout, and stderr. Export run/phase/cell/request CSV plus filterable HTML. Every aggregate must lead back to samples.</p>
+<p>Fields include IDs for run/variant/case/agent/turn/attempt/tool/cell/command/repair/span/parent/process/clock, decimal-string monotonic timestamps, duration, state, outcome, attributes, and counters. The <a href="benchmark-trace.schema.json">schema</a> checks structure. Separate checks validate IDs, parent graphs, clocks, coverage, and duration consistency.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>State</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>measured</code></td>
+<td>Real timestamps/duration, including failed work</td>
+</tr>
+<tr>
+<td><code>not_applicable</code></td>
+<td>Product has no such phase</td>
+</tr>
+<tr>
+<td><code>not_run</code></td>
+<td>Phase did not occur, such as execution after compile rejection</td>
+</tr>
+<tr>
+<td><code>missing</code></td>
+<td>Phase/hook record unavailable</td>
+</tr>
+<tr>
+<td><code>incomplete</code></td>
+<td>Start observed, end absent after crash/abort</td>
+</tr>
+</tbody>
+</table></div>
+<p>Do not replace these states with zero. Use an expected-phase inventory, not only observed spans, for coverage. Keep clocks local unless calibrated with uncertainty. UTC is provenance. Do not subtract unrelated monotonic origins. Calibration uncertainty larger than a phase blocks a cross-process ranking. Background work needs causal links and settled boundaries. Report inclusive wall, exclusive wall, CPU work, and critical-path waits separately. Preserve unattributed time.</p>
+<p>Planned resource counters include exited-child user/system CPU, peak RSS, spawn/thread counts, and sampled concurrent tree RSS every 10 ms. Individual child peaks do not sum to a tree peak. Linux charged cgroup memory differs from RSS. Missing macOS equivalents stay unavailable. Record input/output, files, records, artifacts, caches, state, and transcript size. Wall minus CPU is not exact I/O wait. perf/strace and CPU profiles belong in separate audited profiling lanes. Current campaigns do not have complete resource coverage.</p>
+<h2 id="7-statistics-and-scoring">7. Statistics and scoring</h2>
+<p>The original sampling design calls for five warmups and 100 operations within each of at least ten independent warm session blocks. Fresh startup, empty target, and restore need at least 30 independent samples without warming away the intended condition. Stateful R07/R08/R12/R15/R16 use ten independent trajectories per parameter case; R14 uses 30 cancellation samples. Cells within a session are not independent sessions.</p>
+<p>The original three-way plan described 12 smoke runs, 324 pilot runs (12 tasks × 3 variants × 3 model roles × 3 repetitions), and 1,080 formal runs at ten repetitions. The requested single-Opus four-way plan is 16 smoke, 144 pilot, and 480 formal runs. Do not confuse these matrices. D21 model roles remain a separate legacy requirement. Pilot variance sets the formal count before execution.</p>
+<p>Report median, mean, range, IQR, n, and 95% intervals when supported. Small per-task samples do not support reliable p95/p99 claims. Seeded paired bootstrap must preserve tasks, matched blocks, variants, and all cells within sessions. Separate model/platform/cache strata. Give tasks equal weight.</p>
+<p>Report a quality/cost vector: correctness and repairs; user wait; code-ready/emission/write and usage; cell/project/gate compilation; execution and bridge; host costs; persistence; CPU/memory/storage and actual billed cost when available.</p>
+<pre><code class="language-text">latency_score(v, k) = 100 * median_ms(prime-ts, k) / median_ms(v, k)
+throughput_score(v, k) = 100 * throughput(v, k) / throughput(prime-ts, k)
+quality_score = 100 * passed_runs / attempted_valid_runs
+</code></pre>
+<p>Only score matched work/scale/cache/model with complete coverage and positive denominators. Scores can exceed 100. A missing or zero baseline is unavailable. Python does not receive infinite speed for having no Cargo. Runtime references must pass all oracles before a speed score.</p>
+<p>Keep actual outcomes for all valid attempts, successful-only latency with its survivor count, and predefined-budget penalized latency. Failures/timeouts use the registered task budget; do not choose it after results. Infrastructure errors do not count as model failures but block matrix completeness. Missing slots, trace gaps, or source drift block formal verdicts. Reruns need new attempts and retained old evidence.</p>
+<p>A single speed ratio, if needed, uses equal-task-weight geometric means of penalized median ratios, separately per model, with quality and confidence intervals. Overlapping phase scores are not a total-performance score. D20/D21 retain their original 12-task evidence and pass/token rules. Prime Rust is not legacy group A; the old A/B/F analyzer needs explicit compatibility handling.</p>
+<h2 id="8-implementation-sequence-and-coverage">8. Implementation sequence and coverage</h2>
+<p>Reusable components are the <a href="../packages/coding-agent/src/core/rust-cell/cell-timing.ts">cell timing code</a>, <a href="../packages/coding-agent/src/core/tools/rust.ts">Rust tool</a>, <a href="../packages/coding-agent/src/core/request-timing.ts">request timing</a>, <a href="runtime-microbenchmark-2026-10-07.en.html">offline microbenchmark</a>, and <a href="../poc/bench/README.md">older harness</a>.</p>
+<p>Required work includes release adapters and readiness/parity checks; normalized traces and clocks; Python/Rust runtime hooks; source-field SSE mapping; process accounting; and explicit missing-phase coverage. Legacy <code>compileMs</code> includes build-queue work and sometimes rollback. Legacy <code>runMs</code> includes cleanup. They cannot be added to their child phases or called pure compiler/guest time. Arbitrary unmarked model code gets observable totals, not invented body partitions.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Output</th>
+<th>Gate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>Pins, release builds, adapters</td>
+<td>Complete fingerprints/settings and parity</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>H replay, traces, filters</td>
+<td>Oracles, phase inventory, partial-event detection</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>R references, oracles, cache setup</td>
+<td>Equivalent outputs and expected failure/recovery</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>Paired instrumentation on/off audit</td>
+<td>Primary-latency overhead 95% upper bound ≤2%</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>Smoke/pilot, usage, variance</td>
+<td>Freeze changes in a new plan before formal execution</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>Complete formal matrix</td>
+<td>Source stability, complete checks/traces, intervals and failures</td>
+</tr>
+</tbody>
+</table></div>
+<p>Report absolute overhead too. Very short no-op cases can make percentages unstable. Unproven hooks remain diagnostic. Do not subtract estimated overhead from primary results. Save normal and failed evidence with checksums. Keep sensitive payloads in restricted archives. Clean only benchmark-owned processes/workspaces.</p>
+<p>The first useful order is H01/H03 → R01/R02/R09 → E03/E08/E09/E11, then larger data, long sessions, and concurrency.</p>
+<h2 id="9-all-cargo-cell-and-aot-additions">9. All-Cargo, cell, and AOT additions</h2>
+<p>The later all-Cargo wrapper captures initialization, skill probes, cells, gates, checker builds/tests, helper commands, and retries through the pinned runtime's PATH and <code>WASMEDGE_AGENT_CARGO</code> entries. It saves command ledgers and three child-clock samples. Incomplete endpoints, duplicate IDs, bad clocks, or absent legacy capture make deductions unavailable. Custom absolute paths outside these entries are outside verified capture coverage.</p>
+<p><code>run.validated_elapsed</code> covers initialization to checker completion, excluding benchmark setup and teardown. User ends at agent completion. Agent excludes daemon and checker. Merge command intervals, clip to the selected period, then subtract once. Do not add cell.compile or rustc children. Raw and adjusted medians use identical eligible samples. Wrappers leave startup overhead in the remainder. This is arithmetic, not a rerun without Cargo.</p>
+<p>Cell views use <code>cell.python_execute</code> and <code>cell.execution</code>, not buffered client tool-event windows. They show calls, success/runtime/compile failures, totals, successful-cell averages, and failed execution. Compile failures have no runtime duration. Runtime failures remain in successful task trajectories. Parallel totals measure work. Python 0 ms is below resolution. Boundaries include each runtime's launch/I/O/bridge costs.</p>
+<p>The AOT addition keeps interpreter as a separate group and compiles verified, stripped Wasm on the host for every cell. Capture <code>cargo.command</code> and <code>aot.command</code> separately. Combined deductions use interval union. Missing AOT capture is not zero. The current product has no AOT cache. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">AOT/bridge report</a> for the measured implementation.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

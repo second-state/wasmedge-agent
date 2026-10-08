@@ -243,7 +243,7 @@ wasmedge run --force-interpreter \
 
 上述為 `CellRunner` 組裝的命令形狀；host 必須同時處理 stdout protocol frames 並向 stdin 回覆，不能只在 shell 設 env 就取得 bridge。Readonly preopen 由專用 inert module 探測；runtime 不支援時省略 library 掛載。Standalone 純計算 cell 可省略 bridge env，但直接呼叫 WasmEdge CLI 不含 agent 的 import 政策。
 
-- **執行前 import gate**：cargo 成功後 validate Wasm 並檢查全部 imports，只允許明列的非網路 WASI Preview 1 functions；失敗或取消不啟動 cell（§2.7）。強制 interpreter 避免 embedded AOT native code 繞過檢查。
+- **執行前 import gate**：cargo 成功後 validate Wasm 並檢查全部 imports，只允許明列的非網路 WASI Preview 1 functions；失敗或取消不啟動 cell（§2.7）。預設強制 interpreter；opt-in AOT 先移除 guest 的全部 custom sections，再由 host 編譯，避免 guest 提交的 native payload 繞過檢查。
 - `/agent/lib` 與 `/agent/state` 為**兩個獨立 preopen**（定案：不做合成 `/agent` 掛載，避免依賴 preopen 對 symlink 的行為；guest 路徑穩定為 `/agent/lib/src/...`、`/agent/state/...`）。`/agent/lib` 唯讀（D14——lib 變更只經 `lib` 參數）。
 - **stdout/stderr 串流**：host 先從 stdout 分離 bridge frames，普通輸出逐 chunk 經 `onUpdate` 送 TUI；host 累積並截斷。stdin 專供 bridge 回覆。
 - **逾時**：單一 cell 總預算 `cellTimeoutMs`（預設 120,000；compile 與 run 共享）。逾時/使用者 abort → process group SIGKILL → `status: "timeout" | "aborted"`。
@@ -333,7 +333,7 @@ rlm::prelude     // pub use 上述常用項 + anyhow::{Result, Context, bail}
 
 **傳輸更新（2026-10-02）**：原 T1 TCP bridge 的 crate 約束無法阻止 unsafe／自帶 socket imports。現改用每 cell 的 private stdin/stdout pipes，保留 stock WasmEdge CLI、協議 v1、同步 guest API 與 host handlers；不啟動 TCP listener，WASI guest 不再依賴 `wasmedge_wasi_socket`。Runner 傳入 `RLM_BRIDGE_STDIO=1`、session token、active cell ID 與 cell 時間預算。Native Rust protocol tests 保留 TCP backend 與 `RLM_BRIDGE_ADDR`。這是 T2 native host-functions runner 前的過渡實作，不代表 §8.1 全部完成。
 
-**Guest 網路政策**：所有 cell（有無 bridge 皆同）與 skill tests 共用非網路 WASI Preview 1 function import 白名單。執行前由 host JavaScript engine validate/compile Wasm 並讀取 imports，不 instantiate；socket／DNS、plugin、未知 module/function、非 function imports 及無法驗證的 Wasm features 均拒絕，未使用的 import 也不放行。WasmEdge 必須以 `--force-interpreter` 執行已檢查的 Wasm code，忽略 embedded AOT native payload。這是 agent runner 的 admission policy，不是 stock WasmEdge CLI 的全域網路限制；guest 對外能力仍由已註冊 host handlers 提供。Host bash、Cargo build scripts/proc macros、host handlers 的權限不受此政策限制。
+**Guest 網路政策**：所有 cell（有無 bridge 皆同）與 skill tests 共用非網路 WASI Preview 1 function import 白名單。執行前由 host JavaScript engine validate/compile Wasm 並讀取 imports，不 instantiate；socket／DNS、plugin、未知 module/function、非 function imports 及無法驗證的 Wasm features 均拒絕，未使用的 import 也不放行。預設 WasmEdge 以 `--force-interpreter` 執行已檢查的 Wasm code，忽略 embedded AOT native payload。2026-10-08 新增 `rustCell.runtimeMode: "aot"`：通過相同 import gate 後移除全部 custom sections，再由 host 以 `wasmedge compile --interruptible` 產生全新的 native payload；設定 gas limit 時同時啟用 compiler gas instrumentation。編譯輸出必須保留完全相同的 core Wasm sections 且含 WasmEdge native section，否則不執行。產物放在不對 guest preopen 的 host workspace `.aot/`，每個 cell 重新編譯並保存 input/output hashes，沒有 AOT cache。編譯與執行共用 deadline、取消與 process limits；`aotCompileMs` 與 `executionMs` 分開記錄。Skill/library tests 維持 interpreter。這是 agent runner 的 admission policy，不是 stock WasmEdge CLI 的全域網路限制；guest 對外能力仍由已註冊 host handlers 提供。Host bash、Cargo build scripts/proc macros、host handlers 的權限不受此政策限制。
 
 **Cargo 環境（2026-10-02）**：runtime 發起的 Cargo（模板準備、workspace upgrade、cell、skill probe/tests、依賴解析／vendoring）及 Rust toolchain probes/repairs 共用環境變數白名單，只繼承工具鏈、系統路徑與離線設定；skill tests 的 target/build 目錄由 host 另行指定。未列入的 provider credentials、registry tokens、proxy、compiler flags/wrappers 不再從 host 環境繼承，完整名單見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md#trust-boundary)。這不是編譯沙箱：`include_str!`、build scripts、proc macros 仍可依主機權限存取檔案，Cargo config 也能另行提供環境／credentials；既有產物不會被清除，host bash 與 handlers 的權限不變，不能宣稱 credentials 全面隔離。
 
@@ -765,7 +765,7 @@ wasmedge-agent/
 ### 8.2 其他
 
 - **Curated deps.add（D15 後續，已落實）**：30 個精確版本 crate；host 抓取／re-vendor、離線驗證與 commit，失敗回復，resume／child 重用 vendor，細節見 §2.3 實作註記。Catalog 後續擴充需增加 WASI API 測試。
-- **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 仍 interpreter（短命，AOT 不划算）。
+- **AOT 快取**：`agent_lib` 與 skills 變更時背景 `wasmedge compile`；cell 預設 interpreter；opt-in AOT 已可實測，cache 尚未實作，短命 cell 的額外編譯成本應分開評估。
 - **rustdoc JSON 按需查詢（2026-10-07）**：`rustCell.rustdocToolchain` 預設 null；指定已安裝 toolchain 後，`rlm::api::{list,list_page,describe}` 透過 `api.describe` host handler 回傳 `agent_lib`／掛載 skills／`rlm` 的公開路徑與結構化宣告，包含 signatures、generics、fields、variants、associated items、local re-exports、macro 產物與 WASI target cfg。固定 `nightly-2026-09-25` 驗證 JSON format 61；其他格式明確拒絕，不自動安裝／下載／換 compiler。Host 在 disposable snapshot release/offline/locked 產生文件，前後比對來源指紋；失敗、取消或來源變更不發布 cache。快取於 `target/.agent-api.json`，查詢比對 source／toolchain／rustc version，resume／compaction 僅比對 source 並標示 cache 來源；資料不納入 Git。Query 分頁、檔案與索引大小有界。第三方依賴缺少 JSON 時標 external re-export；不枚舉 synthetic／blanket impls。Rustdoc 的 `cfg(doc)`、不完整函式本體檢查與 nightly compiler 不等於 cell build 驗證；Cargo／proc macros 仍有 host 權限，guest gas／memory 上限不限制文件編譯。外部 build inputs、vendor 內容與跨進程檔案鎖不在指紋保證內。操作與限制見 `packages/coding-agent/docs/rlm-runtime.md`。
 - **Workspace 唯讀模式（已落實，2026-10-05）**：`rustCell.workspaceWritePolicy: "rw" | "ro"`，預設 rw；ro 時以 WasmEdge `:readonly` 掛載 `/workspace`，教義改為產 patch，由既有 host bash 套用；無 bash 時交回 caller。設定經 session／child／SDK／runner 傳遞，修改後 restart 或 `/reload`；無效值拒絕啟動。`/agent/state`、`/scratch` 與宣告式 lib 修改仍可寫。編譯與執行前檢查 state/scratch 不得與 project 重疊（含 symlink root），拒絕含冒號的 host mount 路徑以避免 CLI 解析歧義，沒有 rw fallback。此限制只涵蓋 guest execution；Cargo、bash、host handlers 保留 host 權限，host hard links／並行 filesystem 變更不在保證內。未增加 patch approval gate，也尚未實作 trajectory replay。
 - **沙箱內測試**：host `/refine` 的 skill create/update gate 已落實（§4.2）；guest skill CRUD 已經 host 儲存並移除 harness preopens；測試 import 白名單已拒絕網路能力。Project-local `skills.package` scaffold 已落實，reload 與登錄測試仍分開執行；一般 cell 已共用 import 白名單並改用 stdio bridge（§2.7）。
@@ -826,7 +826,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | D6 | 工具名 `rust`（不冒名 `ipython`） | 冒名會觸發上游 `hasIpython` 的全套 Python prompt（探索確認）；誠實命名 + fork 內改分支條件 |
 | D7 | Prompt 全新創作、面向通用 frontier models | 上游 base prompt 是「訓練過的前綴」，模仿無利；REPORT §3.6 |
 | D8 | 押 wasm32-wasip1 core module；CM/wasip2 列 Phase 3 | Rust tier-2 穩定 + WasmEdge 最成熟路徑；REPORT 附錄 B |
-| D9 | Guest 直接網路能力由 runner 禁止（2026-10-02，取代 T1 crate 約束） | stdio bridge 移除 socket 需求；全部 cell/test imports 只接受非網路 WASI functions，且強制 interpreter。Standalone WasmEdge、host build scripts、bash、host handlers 不受此政策限制（§2.7） |
+| D9 | Guest 直接網路能力由 runner 禁止（2026-10-02，取代 T1 crate 約束） | stdio bridge 移除 socket 需求；全部 cell/test imports 只接受非網路 WASI functions，預設強制 interpreter；opt-in AOT 必須剝除 guest native payload 並從檢查過的 Wasm 由 host 重新編譯（2026-10-08）。Standalone WasmEdge、host build scripts、bash、host handlers 不受此政策限制（§2.7） |
 | D10 | 工作名 wasmedge-agent；正式命名延後到 M5 轉 org 時定案 | 上游協調議題依 D23 延後至設計成熟期；命名部分維持延後 |
 | D11 ✅ | 接受「無長命進程 → 大資料跨 cell 重讀」語意 | 緩解：state/blobs 序列化中間結果；resident data service 不預先設計，待實證瓶頸再議（§1.2） |
 | D12 ✅ | Guest 對外 I/O 一律 host-mediated——**產品原則，非過渡措施** | 一切 fetch/search 類能力以 host handler 擴充（websearch 模式）；guest 永不直連外網。決定性/replay/credential 隔離三重理由（§1.3 原則 4、§2.7）。D9 的 guest 強制力已由 runner import 政策補齊；host 權限邊界保留 |

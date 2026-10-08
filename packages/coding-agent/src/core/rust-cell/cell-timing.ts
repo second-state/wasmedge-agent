@@ -8,6 +8,7 @@ export const CELL_PHASES = [
 	"rollbackMs",
 	"importPolicyMs",
 	"probeMs",
+	"aotCompileMs",
 	"executionMs",
 	"bridgeCleanupMs",
 	"snapshotMs",

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rust Cell Design: English Reading Guide</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#architecture">Architecture</a><a href="#decisions-d1-d26">Decisions D1–D26</a><a href="#work-packages-and-roadmap">Work packages and roadmap</a></nav><main><h1 id="rust-cell-design-english-reading-guide">Rust Cell Design: English Reading Guide</h1>
+<p>This is an English guide to the architecture and decision log. It is <strong>not a full translation</strong> of every historical design note or code appendix. The authoritative <a href="DESIGN.md">design document</a> is in Chinese. The full <a href="packages/coding-agent/docs/rlm-runtime.md">runtime reference</a> is already in English and documents the implemented settings, APIs, and limits. The <a href="docs/rust-cell-report-2026-10-08.en.html">consolidated report</a> describes current evidence.</p>
+<h2 id="architecture">Architecture</h2>
+<p>The TypeScript host owns provider credentials, sessions, handlers, goals, compaction, and child agents. Rust cells compile to <code>wasm32-wasip1</code> and run in a new WasmEdge process. The guest uses non-network WASI imports, explicit directory mounts, and a private stdio bridge. Direct network access is rejected. Host handlers and bash keep host permissions.</p>
+<p>Each cell is a complete program. It does not preserve arbitrary objects across cells. <code>agent_lib</code> stores reusable source; state/blob files store data; project files remain on disk. Build rejection restores staged source. Successful cells attempt Git snapshots. External effects are not atomically rolled back. Snapshots do not provide complete deterministic replay.</p>
+<p>Interpreter is the default. Optional AOT inspects imports, removes guest custom sections, compiles on the host, verifies the output, and records provenance. AOT has no cache. Gas, memory-page, read-only-project, compiler-sandbox, and process-tree settings have distinct scopes. See the runtime reference for exact defaults and platform support.</p>
+<h2 id="decisions-d1-d26">Decisions D1–D26</h2>
+<p>Decisions describe intent. Historical plans are not proof of implementation. Later notes and the runtime reference determine what has shipped.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Decision and reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1</td>
+<td>Use Rust cells in Phases 0–2. Keep a driver boundary for possible later languages.</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Project mount is writable by default. Read-only mode restricts the guest; host tools remain separate.</td>
+</tr>
+<tr>
+<td>D3</td>
+<td>Begin with socket CLI transport, move to CLI/stdio, and keep embedded host functions as the later T2 design.</td>
+</tr>
+<tr>
+<td>D4</td>
+<td>Use a random 64-hex session bearer token and active cell ID. Private cell pipes carry the current protocol.</td>
+</tr>
+<tr>
+<td>D5</td>
+<td>Version workspace files in Git and guard library edits. Snapshots cover defined files, with no fixed commit-time or full-replay guarantee.</td>
+</tr>
+<tr>
+<td>D6</td>
+<td>Name the tool <code>rust</code>. Do not reuse <code>ipython</code> and trigger Python-specific behavior.</td>
+</tr>
+<tr>
+<td>D7</td>
+<td>Write a new prompt for general frontier models.</td>
+</tr>
+<tr>
+<td>D8</td>
+<td>Use <code>wasm32-wasip1</code> core modules. Component Model/wasip2 is a later path.</td>
+</tr>
+<tr>
+<td>D9</td>
+<td>The runner denies guest networking through import inspection. Default interpreter; optional AOT must strip and rebuild native payloads on the host. Host compiler/bash/handlers are outside this policy.</td>
+</tr>
+<tr>
+<td>D10</td>
+<td>Use wasmedge-agent as the working identity; formal naming was deferred to M5. The later rename has shipped.</td>
+</tr>
+<tr>
+<td>D11</td>
+<td>Accept no long-lived guest process and possible data reload per cell. Save processed results explicitly. A resident service needs evidence first.</td>
+</tr>
+<tr>
+<td>D12</td>
+<td>External guest I/O is host-mediated as a product principle. Host authority remains explicit.</td>
+</tr>
+<tr>
+<td>D13</td>
+<td>Keep <code>rust</code> and <code>bash</code> as separate built-in tools. Guest isolation is not a whole-agent sandbox.</td>
+</tr>
+<tr>
+<td>D14</td>
+<td>Edit reusable source through the declarative <code>lib</code> argument. <code>/agent/lib</code> is read-only to the guest. Failed builds/interrupts restore source; runtime effects are not transactional.</td>
+</tr>
+<tr>
+<td>D15</td>
+<td>Start with a fixed prelude. Later dependencies use host-managed curated resolution and vendoring.</td>
+</tr>
+<tr>
+<td>D16</td>
+<td>Prefer Rust APIs for file reads/search/edits. Native project commands use bash in the product loop. The cell-only benchmark has stricter rules.</td>
+</tr>
+<tr>
+<td>D17</td>
+<td>Test a complete few-shot example in a prompt sub-A/B. Its fixed token cost must be compared with repair cost.</td>
+</tr>
+<tr>
+<td>D18</td>
+<td>Planned child inheritance: copy parent library and target state, start data state empty. See runtime documentation for current child-inheritance coverage.</td>
+</tr>
+<tr>
+<td>D19</td>
+<td>Start with guidance for skill tests; enforce model-written tests inside Wasm rather than native host execution.</td>
+</tr>
+<tr>
+<td>D20</td>
+<td>Legacy acceptance: pass rate at least baseline minus 15 percentage points, output-token ratio ≤2.0, with at least two models passing. This is a stop-loss gate.</td>
+</tr>
+<tr>
+<td>D21</td>
+<td>Legacy model roles: Sonnet class, Opus/Fable class, and one open-weight family. Original budget estimate: about 216 runs and $200–600. The current single-Opus test does not replace this matrix.</td>
+</tr>
+<tr>
+<td>D22</td>
+<td>Develop first under <code>hydai/wasmedge-agent</code>; transfer to the organization after M5 acceptance.</td>
+</tr>
+<tr>
+<td>D23</td>
+<td>Develop independently. Defer upstream coordination until the design matures.</td>
+</tr>
+<tr>
+<td>D24</td>
+<td>Use an independent repository with attribution rather than GitHub's fork mechanism.</td>
+</tr>
+<tr>
+<td>D25</td>
+<td>Retain upstream names during incubation; rebrand at M5. The canonical name is now <code>wasmedge-agent</code>, with <code>WASMEDGE_AGENT_*</code> and <code>~/.wasmedge-agent</code>. Only documented temporary fallbacks remain.</td>
+</tr>
+<tr>
+<td>D26</td>
+<td>Make the repository public during M2 to use public GitHub Actions. This supersedes private incubation.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="work-packages-and-roadmap">Work packages and roadmap</h2>
+<p>The fork replaces the Python kernel/tool/guest shim and updates session wiring, prompts, rendering, skills, harness integration, and installation. Provider code, agent loop, TUI framework, daemon, session storage, and general compaction remain reusable. Sync strategy keeps runtime-exclusive directories separate and lists shared-file changes explicitly.</p>
+<p>Historical milestones were M0 prototype, M1 feasibility gate, M2 cell engine, M3 bridge/children/rendering, M4 skills/harness/install, M5 acceptance/dogfooding, and M6 later runner work. The schedule assumed one full-time engineer. It is a historical plan, not a current delivery forecast.</p>
+<p>Future work includes an embedded runner, trusted artifact reuse, broader dependency support, replay inputs, and local inference integration. Each requires separate implementation and validation. Use the <a href="docs/benchmark-three-way-design-2026-10-08.en.html">English benchmark protocol</a> for measurement requirements and the <a href="REPORT.en.html">English feasibility report</a> for the original rationale.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

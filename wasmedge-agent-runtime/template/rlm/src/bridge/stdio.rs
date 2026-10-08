@@ -1,14 +1,18 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
+use std::time::Instant;
 
 pub(super) struct Stream;
 
-impl Read for Stream {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+impl Stream {
+    pub(super) fn read_until(&mut self, buffer: &mut [u8], deadline: Instant) -> io::Result<usize> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        // stdin does not carry FD_FDSTAT_SET_FLAGS rights in WasmEdge. Poll
-        // readiness instead of changing its flags or blocking past a deadline.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        // Wait for input or the request deadline, without changing stdin flags.
         let subscriptions = [
             wasi::Subscription {
                 userdata: 1,
@@ -26,7 +30,7 @@ impl Read for Stream {
                     u: wasi::SubscriptionUU {
                         clock: wasi::SubscriptionClock {
                             id: wasi::CLOCKID_MONOTONIC,
-                            timeout: 0,
+                            timeout: remaining.as_nanos().min(u64::MAX as u128) as u64,
                             precision: 0,
                             flags: 0,
                         },
@@ -65,7 +69,7 @@ impl Read for Stream {
                 return unsafe { wasi::fd_read(0, &[iov]) }.map_err(errno);
             }
         }
-        Err(io::ErrorKind::WouldBlock.into())
+        Err(io::ErrorKind::TimedOut.into())
     }
 }
 
