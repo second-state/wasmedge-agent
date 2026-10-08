@@ -734,6 +734,26 @@ const ALLOWLIST = [
 			"a dated record of a campaign that was really run on 2026-08-10 against the real upstream binary (rule R2): the two products compared, the upstream worktree and its package manifest pinned by SHA, the literal command line that launched it, and the environment variable the harness actually set. Rebranding any of them would make a measurement record claim something that did not happen. Only these historical literals and the exact manifest URL are exempt, so a newly branded string added to this file still fails",
 	},
 	{
+		glob: "docs/benchmark-three-way-design-2026-10-08.md",
+		allow: [
+			/Prime Agent，/,
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/(?:tree|blob|commit)\/[a-f0-9]{40}(?:\/[^\s)]+)?/,
+		],
+		reason:
+			"the three-version experiment names the two upstream products and links their pinned source revisions (rule R1); only the upstream product label and upstream source URLs are exempt, not this fork's own branding",
+	},
+	{
+		glob: "docs/benchmark-three-way-plan.json",
+		allow: [/"https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent"/],
+		reason:
+			"the experiment's source manifest must identify the actual upstream repository for both baseline variants (rule R1); only that exact repository URL is exempt",
+	},
+	{
+		glob: "packages/coding-agent/test/benchmark-three-way.test.ts",
+		allow: [/PRIME_AGENT_(?:BASE_URL|API_KEY)\b/],
+		reason: "faux credential tests verify the authorized external gateway names and their removal from child environments (rule R1); no paid provider is used",
+	},
+	{
 		glob: "examples/showcase/README.md",
 		allow: [/a fork of Prime Agent/],
 		reason:

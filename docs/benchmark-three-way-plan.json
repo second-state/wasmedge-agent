@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "status": "implemented-reference-subset",
+  "executionReady": false,
+  "executionNote": "This is a design catalog, not an executable plan. Use poc/bench/three-way/cli.ts plan for an immutable manifest with actual input hashes. See the runner README for implemented scales and missing hooks.",
+  "standardModel": { "providerRoute": "anthropic/claude-opus-5-5", "reasoning": "off", "identity": "advertised-id-not-independent-revision-verification" },
+  "singleModelMatrix": {
+    "smoke": { "taskCount": 4, "variantCount": 3, "repetitions": 1, "paidRuns": 12 },
+    "pilot": { "taskCount": 12, "variantCount": 3, "repetitions": 3, "paidRuns": 108 },
+    "formal": { "taskCount": 12, "variantCount": 3, "repetitions": 10, "paidRuns": 360 }
+  },
+  "designDocument": "benchmark-three-way-design-2026-10-08.md",
+  "traceSchema": "benchmark-trace.schema.json",
+  "randomizationSeed": 20261008,
+  "variants": [
+    {
+      "id": "prime-ts",
+      "repository": "https://github.com/PrimeIntellect-ai/prime-agent",
+      "baseRevision": "7d442aafa985f9342134fac16c2ef41f03fb45c1",
+      "hostLanguage": "typescript",
+      "cellLanguage": "python",
+      "launchMode": "built-node-bundle",
+      "binarySha256": null,
+      "instrumentationPatchSha256": null
+    },
+    {
+      "id": "prime-rust",
+      "repository": "https://github.com/PrimeIntellect-ai/prime-agent",
+      "baseRevision": "967eb13fd488507af5f590e9c6ea8b2672f1fc05",
+      "hostLanguage": "rust",
+      "cellLanguage": "python",
+      "launchMode": "release-native-binary",
+      "binarySha256": null,
+      "instrumentationPatchSha256": null
+    },
+    {
+      "id": "wasmedge",
+      "repository": "https://github.com/second-state/wasmedge-agent",
+      "baseRevision": "48d6312570f7d39809703db2c69a43f342fb7424",
+      "hostLanguage": "typescript",
+      "cellLanguage": "rust-wasi",
+      "launchMode": "built-node-bundle",
+      "wasmedgeMode": "interpreter",
+      "cellBuildProfile": "release",
+      "binarySha256": null,
+      "instrumentationPatchSha256": null
+    }
+  ],
+  "optionalDiagnosticVariant": {
+    "id": "prime-rust-port",
+    "baseRevision": "39bc99a91d102c46474c090fdc7ae7cd5037ffcf",
+    "includedInPrimaryRanking": false
+  },
+  "modelRoles": [
+    { "role": "sonnet", "provider": null, "immutableModelId": null },
+    { "role": "opusOrFable", "provider": null, "immutableModelId": null },
+    { "role": "openWeight", "provider": null, "immutableModelId": null }
+  ],
+  "pendingBeforeExecution": [
+    "Implement and validate three variant adapters and protocol parity",
+    "Pin built binaries, dependencies, runtime executables and effective environment",
+    "Pin instrumentation patches and measured source hashes",
+    "Implement trace hooks, required-phase inventory and cross-record validation",
+    "Implement fixed wire provider replay and language-equivalent reference cells",
+    "Freeze case parameters, task versions, fixtures, checkers and task budgets",
+    "Measure instrumentation overhead and clock alignment uncertainty",
+    "Choose immutable model IDs, effective provider settings and live campaign budget",
+    "Generate an executable immutable manifest containing every expected run slot"
+  ],
+  "protocol": {
+    "primaryVariants": ["prime-ts", "prime-rust", "wasmedge"],
+    "primaryLatencySerial": true,
+    "orderPolicy": "seeded-counterbalanced-six-permutations-with-declared-remainder",
+    "providerCallsInHostOrRuntimeLane": false,
+    "preserveNativeProductPromptsInEndToEndLane": true,
+    "endToEndProtocol": "cell-runtime-comparison-v1",
+    "endToEndToolPolicy": "runtime-only",
+    "successfulCellRequiredEveryTurn": true,
+    "shellDelegationInCellsAllowed": false,
+    "projectValidationPolicy": "common-host-checker-after-agent-timed-separately",
+    "nativeToolObservationsIncludedInCellComparison": false,
+    "preserveFailedAttempts": true,
+    "infrastructureErrorsBlockIncompleteComparisons": true,
+    "resourceSamplingIntervalMs": 10,
+    "instrumentationOverheadCiUpperBoundPercent": 2,
+    "measurementStates": ["measured", "not_applicable", "not_run", "missing", "incomplete"],
+    "baselineVariant": "prime-ts",
+    "ranking": "quality-and-phase-cost-vector-plus-equal-task-weight-geometric-mean-penalized-time-ratio",
+    "changesExistingD20D21Gate": false
+  },
+  "sampling": {
+    "hostRuntimeAtomicWarm": { "independentSessions": 10, "warmupsPerSession": 5, "measuredOperationsPerSession": 100 },
+    "freshStartupEmptyTargetOrRestore": { "independentSamples": 30, "warmups": 0 },
+    "statefulTrajectories": { "benchmarks": ["R07", "R08", "R12", "R15", "R16"], "independentSessionBlocks": 10, "warmups": 0 },
+    "cancellation": { "benchmarks": ["R14"], "independentSamples": 30, "warmups": 0 },
+    "endToEndSmoke": { "taskCount": 4, "variantCount": 3, "modelCount": 1, "repetitions": 1, "expectedRuns": 12 },
+    "endToEndPilot": { "taskCount": 12, "variantCount": 3, "modelCount": 3, "repetitions": 3, "expectedRuns": 324 },
+    "endToEndFormal": { "taskCount": 12, "variantCount": 3, "modelCount": 3, "repetitions": 10, "expectedRuns": 1080 }
+  },
+  "hostBenchmarks": [
+    { "id": "H01", "name": "startup-session-open", "transcriptEntries": [0, 1000, 10000] },
+    { "id": "H02", "name": "stream-context", "contextKiB": [8, 32, 128], "outputKiB": [1, 64, 1024], "chunkBytes": [64, 1024, 16384], "pacing": ["zero-delay", "paced"] },
+    { "id": "H03", "name": "dispatch-persistence", "toolCalls": [1, 10, 100], "resultKiB": [1, 64, 1024], "handlerWorkMs": [0, 10] }
+  ],
+  "runtimeBenchmarks": [
+    { "id": "R01", "name": "no-op", "conditions": ["installed-fresh-session", "active-session"] },
+    { "id": "R02", "name": "source-cache", "edits": ["unchanged-bytes", "literal", "helper", "empty-cell-target"] },
+    { "id": "R03", "name": "cpu-integer-loop", "iterations": [10000, 1000000, 10000000], "arithmetic": "uint32-wrapping" },
+    { "id": "R04", "name": "data-parse-join", "inputMiB": [1, 16, 128] },
+    { "id": "R05", "name": "repository-scan", "files": [100, 1000, 10000], "fileKiB": 4 },
+    { "id": "R06", "name": "exact-edits", "files": [1, 100, 1000], "fileKiB": 4 },
+    { "id": "R07", "name": "state-across-cells", "cells": 5, "stateBytes": [4096, 1048576, 16777216], "strategies": ["resident", "serialized", "reparse"] },
+    { "id": "R08", "name": "helper-reuse", "reuseCells": 10, "helperEdit": true },
+    { "id": "R09", "name": "bridge", "requests": [1, 100, 1000], "payloadKiB": [0, 1, 64], "handlerWorkMs": [0, 10] },
+    { "id": "R10", "name": "native-command", "commandWorkMs": [0, 10, 100] },
+    { "id": "R11", "name": "persistence-resume", "stateBytes": [1024, 1048576, 16777216], "shutdown": "normal-checkpoint" },
+    { "id": "R12", "name": "deterministic-repair", "errors": ["syntax", "type-or-name", "runtime", "test-contract"], "modelGeneratedRepair": false },
+    { "id": "R13", "name": "output-volume", "stdoutKiB": [1, 64, 1024], "fileOutputMiB": 16 },
+    { "id": "R14", "name": "interrupt-timeout", "cancelDuring": ["compute", "handler", "compile-if-applicable"] },
+    { "id": "R15", "name": "fan-out-resource", "concurrentSessions": [1, 4, 8] },
+    { "id": "R16", "name": "long-session", "cells": [100, 1000], "stateUpdateEveryCells": 10, "stateUpdateKiB": 4 }
+  ],
+  "endToEndTasks": [
+    "01-log-stats", "02-csv-normalize", "03-fix-bug", "04-multi-turn-state",
+    "05-toolchain-loop", "06-build-cli", "07-todo-scan", "08-rust-rename",
+    "09-helper-accumulation", "10-lint-fix", "11-join-report", "12-repair-config"
+  ],
+  "smokeTasks": ["03-fix-bug", "08-rust-rename", "09-helper-accumulation", "11-join-report"],
+  "extendedTasks": [
+    { "id": "E13", "name": "native-rust-cli", "includedInCoreRanking": false },
+    { "id": "E14", "name": "child-fan-out", "shards": [4, 8], "includedInCoreRanking": false },
+    { "id": "E15", "name": "compaction-resume", "includedInCoreRanking": false }
+  ],
+  "cacheConditions": [
+    "installed-fresh-session", "active-session", "empty-cell-target",
+    "artifact-reuse", "checkpoint-restored", "setup-empty"
+  ],
+  "syntheticSpanExample": {
+    "schemaVersion": 1,
+    "recordId": "example-record-1",
+    "runId": "example-run-not-a-measurement",
+    "variantId": "wasmedge",
+    "benchmarkId": "R02",
+    "agentId": "root",
+    "turnId": "turn-1",
+    "requestId": null,
+    "requestAttempt": null,
+    "toolCallId": "tool-1",
+    "cellId": "cell-1",
+    "commandId": "cargo-1",
+    "spanId": "span-compile-1",
+    "parentSpanId": "span-cell-1",
+    "name": "cell.compile",
+    "processId": 12345,
+    "clockId": "example-host-process-clock",
+    "startMonoNs": "1000000000",
+    "endMonoNs": "1125000000",
+    "durationMs": 125,
+    "measurementState": "measured",
+    "outcome": "ok",
+    "attributes": { "synthetic": true, "cacheCondition": "active-session", "buildProfile": "release", "artifactRole": "control_cell" },
+    "counters": { "rustc_invocation_count": 1, "cpu_user_ms": 80, "cpu_system_ms": 10 }
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Normalized benchmark phase span",
+  "description": "Design contract for spans.jsonl. This schema does not validate cross-record graph, clock calibration, completeness, or benchmark correctness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "recordId", "runId", "variantId", "benchmarkId",
+    "agentId", "spanId", "parentSpanId", "name", "processId", "clockId",
+    "startMonoNs", "endMonoNs", "durationMs", "measurementState", "outcome",
+    "attributes", "counters"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "variantId": { "enum": ["prime-ts", "prime-rust", "wasmedge", "wasmedge-aot", "prime-rust-port"] },
+    "benchmarkId": { "$ref": "#/$defs/id" },
+    "agentId": { "$ref": "#/$defs/id" },
+    "parentAgentId": { "$ref": "#/$defs/nullableId" },
+    "turnId": { "$ref": "#/$defs/nullableId" },
+    "requestId": { "$ref": "#/$defs/nullableId" },
+    "requestAttempt": { "type": ["integer", "null"], "minimum": 1 },
+    "toolCallId": { "$ref": "#/$defs/nullableId" },
+    "cellId": { "$ref": "#/$defs/nullableId" },
+    "commandId": { "$ref": "#/$defs/nullableId" },
+    "repairChainId": { "$ref": "#/$defs/nullableId" },
+    "spanId": { "$ref": "#/$defs/id" },
+    "parentSpanId": { "$ref": "#/$defs/nullableId" },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$" },
+    "processId": { "type": ["integer", "null"], "minimum": 1 },
+    "clockId": { "$ref": "#/$defs/nullableId" },
+    "startMonoNs": { "$ref": "#/$defs/nullableNs" },
+    "endMonoNs": { "$ref": "#/$defs/nullableNs" },
+    "durationMs": { "type": ["number", "null"], "minimum": 0 },
+    "measurementState": { "enum": ["measured", "not_applicable", "not_run", "missing", "incomplete"] },
+    "outcome": { "enum": ["ok", "compile_error", "error", "timeout", "aborted", "not_applicable", "not_run", "unknown"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "attributes": {
+      "type": "object",
+      "description": "Cache, scale, command classification, source/artifact hashes, policy, durability semantics, causal links and clock uncertainty. Units must be named explicitly."
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": { "type": ["number", "null"], "minimum": 0 },
+      "description": "Counter names must include units, e.g. source_bytes, cpu_user_ms, io_read_bytes. Null means unavailable, never zero-filled."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "measurementState": { "const": "measured" } } },
+      "then": {
+        "properties": {
+          "processId": { "type": "integer" },
+          "clockId": { "$ref": "#/$defs/id" },
+          "startMonoNs": { "$ref": "#/$defs/ns" },
+          "endMonoNs": { "$ref": "#/$defs/ns" },
+          "durationMs": { "type": "number" },
+          "outcome": { "enum": ["ok", "compile_error", "error", "timeout", "aborted"] }
+        }
+      },
+      "else": {
+        "required": ["reason"],
+        "properties": {
+          "endMonoNs": { "type": "null" },
+          "durationMs": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "measurementState": { "enum": ["not_applicable", "not_run", "missing"] } } },
+      "then": { "properties": { "startMonoNs": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "measurementState": { "const": "incomplete" } } },
+      "then": {
+        "properties": {
+          "processId": { "type": "integer" },
+          "clockId": { "$ref": "#/$defs/id" },
+          "startMonoNs": { "$ref": "#/$defs/ns" },
+          "outcome": { "enum": ["error", "timeout", "aborted", "unknown"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "measurementState": { "const": "not_applicable" } } },
+      "then": { "properties": { "outcome": { "const": "not_applicable" } } }
+    },
+    {
+      "if": { "properties": { "measurementState": { "const": "not_run" } } },
+      "then": { "properties": { "outcome": { "const": "not_run" } } }
+    },
+    {
+      "if": { "properties": { "measurementState": { "const": "missing" } } },
+      "then": { "properties": { "outcome": { "const": "unknown" } } }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "nullableId": { "type": ["string", "null"], "minLength": 1 },
+    "ns": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+    "nullableNs": { "type": ["string", "null"], "pattern": "^(0|[1-9][0-9]*)$" }
+  }
+}
