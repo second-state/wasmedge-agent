@@ -39,6 +39,9 @@ retains host permissions by default; host bash and handlers do so in either mode
 
 Evidence and design:
 
+- [English report set](docs/rust-cell-report-2026-10-08.en.html) ([Markdown](docs/rust-cell-report-2026-10-08.en.md)): simple technical English, with English analysis reports and offline benchmark dashboards. Rebuild with `uv run --with markdown==3.10.2 python poc/bench/english-report.py`.
+- [Download the English offline report package](docs/assets/rust-cell-report-2026-10-08/english-report-set.zip): extract it and open `docs/rust-cell-report-2026-10-08.en.html`. Includes all English readers, nine saved dashboards, charts, and linked CSV tables. Raw requests, SSE, and generated sources remain in the original local run directories.
+- [Rust cell security and efficiency report](docs/rust-cell-report-2026-10-08.html) ([editable Markdown](docs/rust-cell-report-2026-10-08.md)): current four-way Python/interpreter/AOT results, security controls and negative tests, bridge improvements, and separate Cargo/AOT costs. The report distinguishes implemented controls, measured outcomes, and remaining work.
 - [August 10 benchmark](docs/benchmark-comparison-2026-08-10.md): 12 distinct tasks, two models, three repetitions per group; fork 72/72 runs versus baseline 69/72, with higher wall time and output-token usage. All baseline failures were one Sonnet rename task; this does not isolate a compiler effect.
 - [M1 PoC report](docs/m1-measurement-report.md): a separate August 6 campaign with 146 runs including two smoke runs; treatment passed 73/73. Its recovery measurements are not from the August 10 benchmark.
 - [Feasibility study](REPORT.md), [design decisions](DESIGN.md), and [PoC source](poc/): historical measurements, planned work, and implementation notes.

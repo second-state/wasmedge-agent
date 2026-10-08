@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runtime phase microbenchmark — October 7, 2026</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#method-and-provenance">Method and provenance</a><a href="#results">Results</a><a href="#interpretation-and-limits">Interpretation and limits</a></nav><main><h1 id="runtime-phase-microbenchmark-october-7-2026">Runtime phase microbenchmark — October 7, 2026</h1>
+<p>This is a model-free measurement of the current persisted Rust cell tool:
+10 fixed scenarios × 5 serial repetitions, 50 cell results. It is separate
+from the August 6 feasibility study and August 10 model comparison. No model
+calls, task success-rate comparison, D20/D21 verdict, or before/after speedup
+was measured.</p>
+<h2 id="method-and-provenance">Method and provenance</h2>
+<ul>
+<li>Apple M5 Max, 18 logical CPUs, 128 GiB RAM, macOS arm64 (Darwin 25.6.0).</li>
+<li>Node 24.13.1, rustc/Cargo 1.98.1, WasmEdge 0.14.1, <code>wasm32-wasip1</code>, release/interpreter.</li>
+<li>UTC October 6, 21:21:15–21:22:26 (October 7 in Asia/Taipei).</li>
+<li>Based on <code>346a2eb038ad6cdd8b7848cd6acdffa694b865c4</code> plus this PR's timing changes.
+  The worktree was dirty. The raw artifact lists and hashes measured source
+  files, hashes the selected template separately, and checks both at the end.</li>
+<li>Template vendoring/warming happened before the campaign. Each repetition
+  started a fresh persisted workspace; all successful cells attempted Git
+  snapshots. The fixed scenario order is in the <a href="../poc/bench/runtime.ts">driver</a>.</li>
+<li>Gas/page limits and rustdoc queries were disabled; only the final scenario
+  enabled the library test gate. Builds were offline. No other repository
+  tests/builds were run concurrently with this campaign; host background load
+  was not controlled.</li>
+</ul>
+<p><a href="runtime-microbenchmark-2026-10-07.json">Raw JSON: all 50 samples and environment</a>
+has SHA-256 <code>aa5a8924dea830d4dac0bef7b907512efd1e59ee084542ce7dd74734e446885e</code>.
+The measured-source SHA-256 is
+<code>40908972a83666a048558b155428c4714f74e43336a2986ccd0c88668dd5b54d</code>.
+These fingerprints do not cover installed binaries, Node dependencies, vendor
+contents or arbitrary host configuration.</p>
+<h2 id="results">Results</h2>
+<p>All values below are milliseconds. <code>med</code> is the sample median; p95 uses
+sorted index <code>floor(n × .95)</code>, capped at the final index. With only five samples,
+p95 is the observed maximum, not a reliable population-tail estimate. Phase
+medians need not sum to the median total. Zero means the phase was not reached
+or enabled in these samples; every phase is present in the raw JSON.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: right;">Runner med</th>
+<th style="text-align: right;">Runner p95</th>
+<th style="text-align: right;">Tool med</th>
+<th style="text-align: right;">Cargo med</th>
+<th style="text-align: right;">Execution med</th>
+<th style="text-align: right;">Git med</th>
+<th style="text-align: right;">Library tests med</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>template-first</td>
+<td style="text-align: right;">3823.1</td>
+<td style="text-align: right;">4529.2</td>
+<td style="text-align: right;">4193.8</td>
+<td style="text-align: right;">3768.0</td>
+<td style="text-align: right;">7.5</td>
+<td style="text-align: right;">39.9</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>unchanged</td>
+<td style="text-align: right;">115.7</td>
+<td style="text-align: right;">123.4</td>
+<td style="text-align: right;">115.8</td>
+<td style="text-align: right;">70.3</td>
+<td style="text-align: right;">7.9</td>
+<td style="text-align: right;">37.3</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>cell-edit</td>
+<td style="text-align: right;">123.4</td>
+<td style="text-align: right;">128.5</td>
+<td style="text-align: right;">123.4</td>
+<td style="text-align: right;">75.8</td>
+<td style="text-align: right;">7.8</td>
+<td style="text-align: right;">39.8</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>library-edit</td>
+<td style="text-align: right;">165.6</td>
+<td style="text-align: right;">185.9</td>
+<td style="text-align: right;">165.6</td>
+<td style="text-align: right;">115.6</td>
+<td style="text-align: right;">8.0</td>
+<td style="text-align: right;">42.2</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>bridge-100</td>
+<td style="text-align: right;">855.7</td>
+<td style="text-align: right;">870.7</td>
+<td style="text-align: right;">855.7</td>
+<td style="text-align: right;">137.4</td>
+<td style="text-align: right;">661.3</td>
+<td style="text-align: right;">57.4</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>state-64k</td>
+<td style="text-align: right;">158.1</td>
+<td style="text-align: right;">163.3</td>
+<td style="text-align: right;">158.2</td>
+<td style="text-align: right;">101.2</td>
+<td style="text-align: right;">13.8</td>
+<td style="text-align: right;">42.4</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>compile-error</td>
+<td style="text-align: right;">54.7</td>
+<td style="text-align: right;">55.6</td>
+<td style="text-align: right;">54.7</td>
+<td style="text-align: right;">54.3</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>recovery</td>
+<td style="text-align: right;">140.5</td>
+<td style="text-align: right;">142.4</td>
+<td style="text-align: right;">140.5</td>
+<td style="text-align: right;">87.1</td>
+<td style="text-align: right;">13.7</td>
+<td style="text-align: right;">39.5</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>cold-target</td>
+<td style="text-align: right;">3078.1</td>
+<td style="text-align: right;">3272.0</td>
+<td style="text-align: right;">3078.2</td>
+<td style="text-align: right;">3030.0</td>
+<td style="text-align: right;">8.1</td>
+<td style="text-align: right;">39.8</td>
+<td style="text-align: right;">0.0</td>
+</tr>
+<tr>
+<td>library-test-gate</td>
+<td style="text-align: right;">4896.2</td>
+<td style="text-align: right;">4899.6</td>
+<td style="text-align: right;">4944.5</td>
+<td style="text-align: right;">117.3</td>
+<td style="text-align: right;">7.3</td>
+<td style="text-align: right;">41.8</td>
+<td style="text-align: right;">4720.1</td>
+</tr>
+</tbody>
+</table></div>
+<p>The 45 successful results and five intentional compile errors matched their
+expected statuses; bridge/state/library scenarios include assertions. Source
+fingerprints remained unchanged. This validates these small scenarios only.</p>
+<h2 id="interpretation-and-limits">Interpretation and limits</h2>
+<ul>
+<li>First use from the warm template still spent a median 3,768 ms in Cargo.
+  A copied target is not a guaranteed reusable cache; the run did not capture
+  Cargo's invalidation reasons. This is a separate condition from the subsequent
+  unchanged-cell scenario, where the tool still rewrites <code>main.rs</code>.</li>
+<li>The unchanged/changed/library-edit scenarios spent roughly 37–42 ms in Git
+  snapshot attempts. That supports measuring Git separately; it is not a fixed
+  commit cost for larger state or repositories.</li>
+<li>The bridge scenario issues 100 synchronous echo requests over stdio; its
+  handler echoes the received payload, including the injected source field.
+  Its 661 ms execution median includes process startup, protocol work and
+  handler waits. It is not guest-only CPU time or an isolated bridge latency.</li>
+<li>State uses one 64 KiB blob write/read per cell. Recovery reruns the preceding
+  successful state program after a deliberate type error; no model repairs it.</li>
+<li>Cold target removes only that workspace's <code>target/</code>. OS and toolchain caches
+  remain warm. The library-gate scenario reloads the provisioner, stages an edit
+  with one passing test, and includes test snapshot/build/run/cleanup costs.</li>
+<li>Tool time includes provisioning; runner time excludes provisioning and the
+  per-runner queue. All phase definitions are in the
+  <a href="../packages/coding-agent/docs/rlm-runtime.md#cell-timing">runtime documentation</a>.
+  Neither total includes model latency or subsequent transcript/UI processing.</li>
+</ul>
+<p>Reproduce with the <a href="../poc/bench/README.md#runtime-microbenchmark">offline driver instructions</a>.
+These fixed-order samples on one host do not establish broad performance,
+concurrency behavior, a runtime-versus-diagnostics causal split, or improved
+model correctness. The formal multi-model benchmark remains to be rerun.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

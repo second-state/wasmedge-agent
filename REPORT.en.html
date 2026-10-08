@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WasmEdge Agent Feasibility Report</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#0-executive-summary">0. Executive summary</a><a href="#1-prime-agent-source-analysis">1. Prime Agent source analysis</a><a href="#2-mapping-python-cells-to-rust-wasm">2. Mapping Python cells to Rust/Wasm</a><a href="#3-candidate-runtime-design">3. Candidate runtime design</a><a href="#4-route-selection">4. Route selection</a><a href="#5-phased-plan">5. Phased plan</a><a href="#6-risks-and-open-questions">6. Risks and open questions</a><a href="#7-appendices-and-reproduction">7. Appendices and reproduction</a></nav><main><h1 id="wasmedge-agent-feasibility-report">WasmEdge Agent Feasibility Report</h1>
+<p>Date: August 6, 2026. English reading edition prepared October 8, 2026.</p>
+<p>This study assessed replacing Prime Agent's persistent IPython runtime with Rust cells compiled and executed in WasmEdge. The source was Prime Agent v0.7.0 at <code>c22549a3</code>, under the MIT license. Local tests used Apple Silicon macOS, Darwin 25.5.0, rustc 1.97.0, and a local WasmEdge 0.17.1 master build.</p>
+<p><strong>Historical scope:</strong> Sections 3–5 describe candidate designs and plans, not a list of shipped features. Source analysis applies to the pinned upstream revision. The small program test is separate from the <a href="docs/benchmark-comparison-2026-08-10.en.html">August 10 benchmark</a>, which used WasmEdge 0.14.1. Current implementation details are in the <a href="packages/coding-agent/docs/rlm-runtime.md">English runtime reference</a>. Current results are in the <a href="docs/rust-cell-report-2026-10-08.en.html">October consolidated report</a>.</p>
+<h2 id="0-executive-summary">0. Executive summary</h2>
+<p>The compile-run prototype was feasible. Rust provides compile-time checks. WasmEdge provides a basis for isolated guest execution. Network policy, resource limits, and replay require a concrete runner and host design; the prototype alone did not prove them.</p>
+<p>The tradeoff is a change from a live REPL to <strong>one cell = one complete program</strong>. Explicit files and reusable source replace the arbitrary in-memory namespace.</p>
+<p>Four findings supported further work:</p>
+<ol>
+<li>A representative small release program compiled in 0.28 s with a warm target, executed with state round-trip in about 10 ms, and took 4.8 s for a cold dependency build. These are local program measurements, not fixed per-cell guarantees.</li>
+<li>The SDK has a custom-runtime entry, but host bridge, goals, prompts, skills, and rendering have deep Python coupling. A prototype can use the SDK; a complete product needs a fork or equivalent core changes.</li>
+<li>Most provider, loop, TUI, daemon, session, and compaction code can be reused. The concentrated runtime-specific code is the kernel, tool, prompt, skills bootstrap, and renderer.</li>
+<li>Persistence needs a new model: a session Cargo workspace, reusable <code>agent_lib</code> source, explicit serialized state, and a host bridge. Recovery depends on successful writes, file integrity, and format compatibility.</li>
+</ol>
+<p>The recommended route was SDK prototype first, runtime-swap fork second, and a new Rust-native host only as a later strategic option. The largest uncertainty was whether models could work efficiently under the complete-program cell model.</p>
+<h2 id="1-prime-agent-source-analysis">1. Prime Agent source analysis</h2>
+<h3 id="1-1-product-and-origin">1.1 Product and origin</h3>
+<p>Prime Agent is a coding/research agent built around a persistent IPython scratchpad and a continual harness. The RLM model treats context and tool calls as program data and functions. The harness saves supplemental prompts, memory, skill references, and child specifications; <code>/refine</code> applies evidence-based edits without changing the base system prompt.</p>
+<p>At the studied revision, Prime Agent was an in-repository fork of pi-mono. Four packages retained the pi package names. That established a practical example of keeping an existing host while replacing its execution model.</p>
+<p>The pinned README says generated Python and project commands run with user permissions. Worker/kernel separation helps lifecycle and recovery; it is not a security sandbox. This distinction motivates an explicit guest permission boundary.</p>
+<h3 id="1-2-repository-size">1.2 Repository size</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Role</th>
+<th style="text-align: right;">Approximate TS/Python lines</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>packages/ai</code></td>
+<td>Nine API implementations, 32 provider definitions, normalized streaming</td>
+<td style="text-align: right;">34,013, including about 20k generated model lines</td>
+</tr>
+<tr>
+<td><code>packages/agent</code></td>
+<td>Agent loop, tools, queues, events</td>
+<td style="text-align: right;">2,395</td>
+</tr>
+<tr>
+<td><code>packages/coding-agent</code></td>
+<td>Daemon, worker, kernel, sessions, skills, harness, UI and protocols</td>
+<td style="text-align: right;">115,565</td>
+</tr>
+<tr>
+<td><code>packages/tui</code></td>
+<td>Terminal UI framework</td>
+<td style="text-align: right;">14,927</td>
+</tr>
+<tr>
+<td>Python runtime shim</td>
+<td>Bridge, harness store, skill adapter</td>
+<td style="text-align: right;">About 1,205</td>
+</tr>
+</tbody>
+</table></div>
+<p>The repository also had 33 documentation files and 13 bundled skills. Node required version 22.8 or later; uv managed Python 3.11. The thin Python shim left authority in the TypeScript host, which made the guest-language swap practical.</p>
+<h3 id="1-3-processes">1.3 Processes</h3>
+<p>TUI, print, JSON, and RPC clients connect to a daemon supervisor. A session worker owns the root session tree, scheduler, agent session, root Python kernel, and child runtimes. The host manages providers, queues, tools, compaction, goals, children, and transcripts. The kernel is a separate process. Detached sessions can continue under the daemon.</p>
+<h3 id="1-4-the-built-in-python-tool">1.4 The built-in Python tool</h3>
+<p>The default model-visible built-in tool was <code>ipython</code>, with <code>code: string</code> and sequential execution. Reads, edits, shell magics, skills, children, and context operations all used Python cells. Variables and imports remained alive. Tool output combined stdout, stderr, results, and tracebacks, with each stream truncated at 65,536 characters. Attachments carried image MIME blocks. A reset notice told the model to rebuild lost state.</p>
+<h3 id="1-5-kernel-transport">1.5 Kernel transport</h3>
+<p>KernelManager implemented Jupyter wire protocol 5.3 over ZeroMQ, with HMAC-SHA256 and loopback ports. Shell carried execution, iopub carried output/status/comms, and control carried interrupt/shutdown and host replies. Promise chaining serialized cells. A busy-kernel recovery path sent interrupts every 500 ms for up to five seconds before offering wait or restart.</p>
+<p>Linux used a fork-server optimization with preloaded modules and <code>gc.freeze()</code>. Custom MIME output supported diffs, attachments, and agent messages. A runtime owned by the project could replace much of this Jupyter-specific transport with a smaller request/reply protocol.</p>
+<h3 id="1-6-host-bridge">1.6 Host bridge</h3>
+<p>The Python shim opened a <code>host.request</code> comm. The host dispatched JSON by method to <code>HostRequestHandlers</code>: children, models, goals, messages, compaction, refinement, heartbeat, observation, and MCP. Replies used the control channel because replying on the serialized shell channel during a cell could deadlock. Python used thread-safe event-loop delivery.</p>
+<p>The handler registry was language-neutral. <code>rlm.run</code> was admission-only: it returned a spawn handle immediately, not the child's answer. Children returned results through messages or files. Host child state survived kernel resets and compaction.</p>
+<h3 id="1-7-bootstrap-and-skills">1.7 Bootstrap and skills</h3>
+<p>uv prepared Python 3.11, a kernel environment, ipykernel, the runtime shim, dill, HTTP/config packages, and common data libraries. A schema-8 bootstrap marker hashed runtime/skill inputs and triggered rebuilds. Python skills used editable installation and pre-imported callable module wrappers. On resume, dill restoration occurred before fresh runtime/skill handles were installed.</p>
+<h3 id="1-8-persistence">1.8 Persistence</h3>
+<p>Compaction changed conversation messages while the live kernel remained. The host reported surviving names to the model. Resume used best-effort dill snapshots after successful execution, debounced by 1.5 s. Top-level names were serialized individually, with exclusions and a 256 MiB cap. A failed variable did not block others. Open files, sockets, threads, and unserializable objects were not preserved.</p>
+<p>Explicit Rust files avoid arbitrary object snapshots, but still require write/recovery/compatibility checks. They do not make all persistence failures disappear.</p>
+<h3 id="1-9-prompts">1.9 Prompts</h3>
+<p>Prompt construction combined the base RLM prompt, child guidance, harness entries, tool guidelines, project context, skill metadata, and appended content. The fixed body was about 10–11 KB or 2,600–2,800 tokens; skills/harness could bring it to 15–20 KB. Python-specific guidance covered REPL state, magics, package installation, and async calls.</p>
+<p>A Rust prompt must teach a new programming model. The existing separation between the scratchpad and the target project's native environment remains useful.</p>
+<h3 id="1-10-skill-types">1.10 Skill types</h3>
+<p>Markdown skills supplied instructions. Python-backed skills supplied installed callable code. Host-bridge skills were thin wrappers around host authority. Metadata appeared in the prompt; full files were read on demand. Only edit, image attachment, and websearch had substantial Python work among the bundled skills. Most other behavior could move to Rust wrappers or remain in the host.</p>
+<h3 id="1-11-harness-and-refinement">1.11 Harness and refinement</h3>
+<p>The schema-1 harness stored prompt, memory, skill, and child entries plus refinement history. Local/global stores synchronized by file metadata. <code>/refine</code> used a separate model pass over up to 80k trajectory characters, with a 32k-token output cap and thinking off. Strict JSON edits used optimistic concurrency and before/after snapshots. Base-system-prompt edits were rejected.</p>
+<p>Auto-refine ran after 25 assistant turns or compaction, subject to root-only and 20-minute cooldown rules. Skill references required the Python discriminator in both host and shim; Rust would need an additional value. The core store and edit protocol were otherwise reusable.</p>
+<h3 id="1-12-extension-limits-and-fork-cost">1.12 Extension limits and fork cost</h3>
+<p>Custom tools, <code>baseToolsOverride</code>, active-tool control, prompt replacement, extension dependencies, and custom providers made an SDK prototype possible. Four gaps blocked a complete extension-only product:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host handlers wired only to the Python provisioner</td>
+<td>Custom runtime could not access core child/goal/message/MCP operations.</td>
+</tr>
+<tr>
+<td>Unconditional Python prompt lines</td>
+<td>Disabling ipython did not remove all Python guidance.</td>
+</tr>
+<tr>
+<td>Goals required/re-enabled ipython</td>
+<td>Goal management conflicted with a custom runtime.</td>
+</tr>
+<tr>
+<td>Executable skill contract was Python-only</td>
+<td>Custom runtime lost skills and their creation loop.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rendering, compaction notices, installation, CLI help, and environment names added further coupling. Runtime-specific replacement was estimated at about 7.7k TS lines, 2.2k Python lines, 965 skill lines, and 3.8k test lines. Shared-file changes affected roughly 6k lines scattered through larger modules. An estimated 90–92% of the codebase was reusable. These were source-based planning estimates, not a measured migration percentage.</p>
+<h2 id="2-mapping-python-cells-to-rust-wasm">2. Mapping Python cells to Rust/Wasm</h2>
+<h3 id="2-1-and-2-2-required-capabilities">2.1 and 2.2 Required capabilities</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Python capability</th>
+<th>Proposed Rust/Wasm counterpart</th>
+<th>Tradeoff</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fast dynamic evaluation</td>
+<td>Release compile/run and compiler diagnostics</td>
+<td>Compile and repair costs need measurement.</td>
+</tr>
+<tr>
+<td>Persistent namespace</td>
+<td>Workspace source, explicit state, complete programs</td>
+<td>Fundamental semantic change.</td>
+</tr>
+<tr>
+<td>Best-effort dill resume</td>
+<td>Serialized files and defined schemas</td>
+<td>Recovery path still needs checks.</td>
+</tr>
+<tr>
+<td>Dynamic package ecosystem</td>
+<td>Validated prelude, Cargo manifests, vendoring</td>
+<td>Smaller WASI-compatible ecosystem.</td>
+</tr>
+<tr>
+<td>Shell magics</td>
+<td>Separate host bash/exec</td>
+<td>Explicit host permission boundary.</td>
+</tr>
+<tr>
+<td>Jupyter host comm</td>
+<td>Host functions or request/reply bridge</td>
+<td>Reuse handler registry.</td>
+</tr>
+<tr>
+<td>Callable skills and introspection</td>
+<td>Skill crates, re-exports, rustdoc</td>
+<td>Typed APIs, slower edit/build loop.</td>
+</tr>
+<tr>
+<td>Rich MIME output</td>
+<td>Guest emit API routed to the same UI</td>
+<td>Preserve display behavior.</td>
+</tr>
+<tr>
+<td>Interrupt/restart</td>
+<td>Process kill or runtime cancellation, gas, pages, timeout</td>
+<td>Distinct controls need implementation.</td>
+</tr>
+<tr>
+<td>Async expression calls</td>
+<td>Synchronous <code>Result</code> APIs with admission-only spawn</td>
+<td>Preserve call semantics with new syntax.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="2-3-complete-program-cells">2.3 Complete-program cells</h3>
+<p>The proposed runner writes each complete <code>fn main()</code> into a session workspace, compiles it, runs it, and returns output. It does not use a Rust REPL to move arbitrary variables between Wasm instances. Helpers remain in <code>agent_lib</code>; small values use serialized state; large data remain in files. Exploration requires a small program, so templates and high-level helpers are important.</p>
+<h3 id="2-4-local-prototype-measurement">2.4 Local prototype measurement</h3>
+<p>The small program scanned a mounted directory and read/updated a serde JSON state file:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th style="text-align: right;">Value</th>
+<th>Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cold dependency build</td>
+<td style="text-align: right;">4.80 s</td>
+<td>Release <code>wasm32-wasip1</code>, including serde/serde_json</td>
+</tr>
+<tr>
+<td>Warm build after main edit</td>
+<td style="text-align: right;">0.28 s</td>
+<td>Warm target directory</td>
+</tr>
+<tr>
+<td>Interpreter execution</td>
+<td style="text-align: right;">0.01 s</td>
+<td>Includes state round-trip</td>
+</tr>
+<tr>
+<td>Artifact size</td>
+<td style="text-align: right;">206 KB</td>
+<td>Release, without strip/wasm-opt</td>
+</tr>
+<tr>
+<td>State persistence</td>
+<td style="text-align: right;">Passed</td>
+<td>Correct accumulation over two executions</td>
+</tr>
+</tbody>
+</table></div>
+<p>This does not cover the agent, queues, bridge handlers, model requests, or repairs. No adequate latency distribution was collected. Cache changes can trigger rebuilds. The 10 ms is not isolated instance startup, and 206 KB is not a general cell size.</p>
+<h3 id="2-5-benefits-and-unproven-goals">2.5 Benefits and unproven goals</h3>
+<p>Preopens can restrict guest files. The original socket design did not enforce fine-grained network egress. Compiler/bash/handlers were outside the guest. Rust diagnostics can reject some mistakes before execution, but not incorrect business logic. Replay needs files, time, randomness, external replies, and concurrency order; Wasm/Git alone are insufficient. Gas, page caps, cancellation, and deadlines have different scopes. Deployment footprint, concurrency density, and local LlamaEdge/WASI-NN integration were not measured.</p>
+<h3 id="2-6-costs">2.6 Costs</h3>
+<p>The study expected extra compile/repair turns and token cost; Phase 0 had to measure them. Python's data-science ecosystem was stronger. WASI compatibility excludes or constrains native dependencies, mmap, and some async features. Shell convenience and live introspection need alternatives. Initial positioning favored coding/systems tasks rather than replacing all Python research workflows.</p>
+<h2 id="3-candidate-runtime-design">3. Candidate runtime design</h2>
+<h3 id="3-1-architecture">3.1 Architecture</h3>
+<p>Keep the TS daemon, worker, providers, session loop, queues, compaction, goals, children, and handler registry. Replace the kernel with workspace/build/execution management and output streaming. A thin Rust <code>rlm</code> crate exposes spawn, model lookup, messaging, goals, state, harness, diff, and attachment APIs. The host remains authoritative.</p>
+<h3 id="3-2-workspace-and-state">3.2 Workspace and state</h3>
+<p>Each session keeps a Cargo workspace with <code>agent_lib</code>, a rewritten <code>cell/src/main.rs</code>, <code>state/</code>, and <code>target/</code>. The proposed offline release pipeline mounts the project, state, and scratch directories. Build errors become model-visible diagnostics. Small data use state; reusable logic uses library source; large data stay in files. Compaction can report state keys and library APIs.</p>
+<p>These were candidate interfaces. Later implementation uses <code>/agent/state</code>, <code>/agent/lib</code>, declarative library edits, and read-only guest library mounts. Use the current runtime reference for exact APIs.</p>
+<h3 id="3-3-transport-options">3.3 Transport options</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Mechanism</th>
+<th>Assessment at study time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T1</td>
+<td>Stock CLI and loopback WASI socket bridge</td>
+<td>Fastest prototype; no fine-grained guest network policy.</td>
+</tr>
+<tr>
+<td>T2</td>
+<td>Small embedded WasmEdge runner with host functions and host IPC</td>
+<td>Intended final form for explicit capabilities and resource controls.</td>
+</tr>
+<tr>
+<td>T3</td>
+<td>WasmEdge plugin with host functions</td>
+<td>Additional plugin deployment surface.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The study recommended T1 first and T2 later. The later product switched CLI transport to private stdio and import-denied guest networking. That update is documented separately.</p>
+<h3 id="3-4-skill-crates">3.4 Skill crates</h3>
+<p>Replace Python packaging with <code>SKILL.md</code>, <code>Cargo.toml</code>, and <code>src/lib.rs</code>. Mount/re-export through <code>agent_lib</code>, inspect via rustdoc, and rebuild after edits. Tests should run in the guest rather than executing generated native tests on the host. Host-bridge skills become <code>rlm</code> modules. Harness references gain a Rust discriminator.</p>
+<h3 id="3-5-trust-boundary">3.5 Trust boundary</h3>
+<p>The guest runs agent computation within configured mounts. Native project commands use a separate host bash tool. Host bridge operations use host permissions. This is not a whole-agent sandbox. Compiler scripts/macros also require separate controls. Replay remains a goal requiring more recorded inputs.</p>
+<h3 id="3-6-prompt-rules">3.6 Prompt rules</h3>
+<p>Teach complete programs, explicit state, reusable library helpers, large-data files, the target-project environment, <code>Result</code> calls, admission-only children, controlled dependencies, and Rust skill references. General frontier models need a new prompt. The design does not assume access to models trained on Prime's Python-specific prefix.</p>
+<h2 id="4-route-selection">4. Route selection</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Time estimate</th>
+<th>Strength</th>
+<th>Main limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A: runtime-swap fork</td>
+<td>4–8 weeks after prototype</td>
+<td>Reuse host features and add full wiring</td>
+<td>Upstream sync cost</td>
+</tr>
+<tr>
+<td>B: extension/SDK prototype</td>
+<td>1–2 weeks</td>
+<td>Low-cost model/runtime experiment</td>
+<td>Core bridge/goals/skills/rendering gaps</td>
+</tr>
+<tr>
+<td>C: new Rust-native host</td>
+<td>3–6 person-months for headless MVP</td>
+<td>Independent architecture and local inference integration</td>
+<td>Rebuild mature providers, sessions, daemon, UI, and protocols</td>
+</tr>
+</tbody>
+</table></div>
+<p>Fork work replaces the kernel/shim/tool/prompt/rendering, then updates registration, session wiring, skills, harness, and installation. Most host code remains. A full mature host rebuild is much larger than the headless estimate. The recommendation was B → A, retaining C if strategic goals or sync costs justified it. These estimates were planning assumptions, not delivery promises.</p>
+<h2 id="5-phased-plan">5. Phased plan</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Proposed work and exit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, 1–2 weeks</td>
+<td>SDK Rust-cell prototype; compare model success and token cost. Gate: success at least Python minus 15 percentage points and token ratio below 2×.</td>
+</tr>
+<tr>
+<td>1, 4–8 weeks</td>
+<td>Fork runtime, bridge/children, bash, Rust rendering, prompt, state/compaction notices, installer, vendored prelude. Exit: use the agent to develop itself.</td>
+</tr>
+<tr>
+<td>2, 6–10 weeks</td>
+<td>Skill crates, harness/refine, goals/heartbeat/observation/MCP, resource-controlled runner, artifact reuse, resume, platform review.</td>
+</tr>
+<tr>
+<td>3, ongoing</td>
+<td>Replay inputs, local inference, Component Model evolution, and server deployment studies.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Replay, artifact caching, deployment density, and local inference were goals, not measured benefits. The main target was stable <code>wasm32-wasip1</code> core modules; Component Model was a later option.</p>
+<h2 id="6-risks-and-open-questions">6. Risks and open questions</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Impact</th>
+<th>Validation/mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Model efficiency with Rust</td>
+<td>High</td>
+<td>Measure first errors, repair turns, and tokens; use a validated prelude/helpers.</td>
+</tr>
+<tr>
+<td>Data-science ecosystem gap</td>
+<td>Medium</td>
+<td>Start with coding/systems; validate WASI libraries explicitly.</td>
+</tr>
+<tr>
+<td>Crate compatibility</td>
+<td>Medium</td>
+<td>Maintain a tested dependency set and host policy.</td>
+</tr>
+<tr>
+<td>Upstream synchronization</td>
+<td>Medium</td>
+<td>Separate exclusive directories and enumerate shared-file patches.</td>
+</tr>
+<tr>
+<td>Concurrent compilation</td>
+<td>Low–medium</td>
+<td>Per-session targets and a global permit gate.</td>
+</tr>
+<tr>
+<td>Overselling isolation</td>
+<td>Communication risk</td>
+<td>Document guest/compiler/host/bash boundaries.</td>
+</tr>
+<tr>
+<td>Loss of Python-trained model assumptions</td>
+<td>Medium</td>
+<td>Test multiple model families with a new prompt.</td>
+</tr>
+<tr>
+<td>Component Model schedule</td>
+<td>Low</td>
+<td>Do not depend on it for the core design.</td>
+</tr>
+<tr>
+<td>T1 network policy</td>
+<td>Transitional risk</td>
+<td>Move to an enforced guest network boundary.</td>
+</tr>
+<tr>
+<td>Windows coverage</td>
+<td>Low initially</td>
+<td>Begin with macOS/Linux and assess separately.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Open decisions at study time were product identity/upstream relationship, Rust-only versus more Wasm languages, model budget, and writable project versus read-only plus explicit patch application. Later decisions are in the <a href="DESIGN.en.html">English design guide</a>.</p>
+<h2 id="7-appendices-and-reproduction">7. Appendices and reproduction</h2>
+<h3 id="source-index-at-the-pinned-revision">Source index at the pinned revision</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Approximate source size / location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kernel manager</td>
+<td>1,529 lines; upstream kernel index</td>
+</tr>
+<tr>
+<td>Kernel bootstrap</td>
+<td>929 lines; fork-server support 363 + 148</td>
+</tr>
+<tr>
+<td>State snapshot</td>
+<td>297 lines</td>
+</tr>
+<tr>
+<td>Python tool/bootstrap injection</td>
+<td>708 lines</td>
+</tr>
+<tr>
+<td>Runtime prompt</td>
+<td>199 lines</td>
+</tr>
+<tr>
+<td>Host-request dispatcher</td>
+<td>242 lines</td>
+</tr>
+<tr>
+<td>Agent session</td>
+<td>11,188 lines; 85 Python coupling sites</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>633 lines</td>
+</tr>
+<tr>
+<td>Refinement / Python harness</td>
+<td>1,017 / 820 lines</td>
+</tr>
+<tr>
+<td>Extension API / documentation</td>
+<td>1,523 / 2,589 lines</td>
+</tr>
+<tr>
+<td>Sandbox extension example</td>
+<td>321 lines</td>
+</tr>
+<tr>
+<td>Python guest shim</td>
+<td>347 lines</td>
+</tr>
+<tr>
+<td>Agent loop / agent</td>
+<td>986 / 613 lines</td>
+</tr>
+</tbody>
+</table></div>
+<p>These locations describe the historical upstream, not files to restore in the runtime-swap fork.</p>
+<h3 id="wasmedge-version-context">WasmEdge version context</h3>
+<p>The study recorded public 0.16.0 (December 30, 2025), earlier 0.15.0 feature work, and the local 0.17.1 build used in its test. These are historical notes, not a current latest-version claim. Component Model, GC, backend, and C API changes were context for future work. The core design did not require Component Model support.</p>
+<h3 id="prototype-command">Prototype command</h3>
+<pre><code class="language-sh">cargo new cell-bench
+cd cell-bench
+cargo add serde --features derive
+cargo add serde_json
+# Implement the directory scan and JSON state read/update in main.rs.
+time cargo build --release --target wasm32-wasip1
+time wasmedge --dir /workspace:$PWD/ws target/wasm32-wasip1/release/cell-bench.wasm
+</code></pre>
+<p>The measured cold/warm builds were 4.80/0.28 s and execution about 0.01 s. State accumulated across two runs. The study also drew on earlier local Component Model and agent-os architecture investigations. They were design references, not additional benchmark samples.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>

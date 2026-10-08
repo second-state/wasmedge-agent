@@ -1,0 +1,151 @@
+<svg role="img" aria-label="boundary.svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="684pt" height="302.688pt" viewBox="0 0 684 302.688" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.8, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 302.688
+L 684 302.688
+L 684 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 18.36 150.7896
+L 263.88 150.7896
+Q 271.692 150.7896 271.692 143.028
+L 271.692 26.604
+Q 271.692 18.8424 263.88 18.8424
+L 18.36 18.8424
+Q 10.548 18.8424 10.548 26.604
+L 10.548 143.028
+Q 10.548 150.7896 18.36 150.7896
+z
+" clip-path="url(#p1b292c5c48)" style="fill: #e7f1f7; stroke: #7e91a3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 300.15 150.7896
+L 651.69 150.7896
+Q 659.502 150.7896 659.502 143.028
+L 659.502 26.604
+Q 659.502 18.8424 651.69 18.8424
+L 300.15 18.8424
+Q 292.338 18.8424 292.338 26.604
+L 292.338 143.028
+Q 292.338 150.7896 300.15 150.7896
+z
+" clip-path="url(#p1b292c5c48)" style="fill: #e5f4ec; stroke: #7e91a3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 18.36 294.9336
+L 263.88 294.9336
+Q 271.692 294.9336 271.692 287.172
+L 271.692 187.38
+Q 271.692 179.6184 263.88 179.6184
+L 18.36 179.6184
+Q 10.548 179.6184 10.548 187.38
+L 10.548 287.172
+Q 10.548 294.9336 18.36 294.9336
+z
+" clip-path="url(#p1b292c5c48)" style="fill: #fff3df; stroke-dasharray: 3.7,1.6; stroke-dashoffset: 0; stroke: #7e91a3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 300.15 294.9336
+L 651.69 294.9336
+Q 659.502 294.9336 659.502 287.172
+L 659.502 187.38
+Q 659.502 179.6184 651.69 179.6184
+L 300.15 179.6184
+Q 292.338 179.6184 292.338 187.38
+L 292.338 287.172
+Q 292.338 294.9336 300.15 294.9336
+z
+" clip-path="url(#p1b292c5c48)" style="fill: #eef0fa; stroke: #7e91a3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 278.156535 84.816
+Q 283.410528 84.816 288.664522 84.816
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+    <path d="M 283.756535 87.616
+L 278.156535 84.816
+L 283.756535 82.016
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+    <path d="M 283.064522 82.016
+L 288.664522 84.816
+L 283.064522 87.616
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 277.038501 240.048
+Q 283.410528 240.048 288.664522 240.048
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+    <path d="M 283.064522 237.248
+L 288.664522 240.048
+L 283.064522 242.848
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 475.92 177.064181
+Q 475.92 165.204075 475.92 154.462004
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+    <path d="M 473.12 160.062004
+L 475.92 154.462004
+L 478.72 160.062004
+" clip-path="url(#p1b292c5c48)" style="fill: none; stroke: #526276; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #203043" x="26.73" y="49.582125" transform="rotate(-0 26.73 49.582125)">TypeScript host (trusted)</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 71.901637)">Model credentials / registered handlers</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 86.138825)">Tool selection / session management</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 100.376013)">Bash and handlers retain OS permissions</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #203043" x="308.52" y="49.582125" transform="rotate(-0 308.52 49.582125)">WasmEdge guest (interpreter or host AOT)</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 71.901637)">Non-network WASI import allowlist</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 86.138825)">Explicit project / state / lib / scratch preopens</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 100.376013)">Cell deadline; optional gas / memory pages</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 114.6132)">Private stdio bridge to selected host handlers</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #203043" x="26.73" y="210.358125" transform="rotate(-0 26.73 210.358125)">Cargo / AOT compiler (trusted toolchain)</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 232.677638)">Environment allowlist</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 246.914825)">Cargo sandbox / cgroup: Linux opt-in</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(26.73 261.152013)">No whole-agent sandbox guarantee</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #203043" x="308.52" y="210.358125" transform="rotate(-0 308.52 210.358125)">Admission and artifact checks</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 232.677638)">Inspect imports; strip guest custom sections</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 246.914825)">Host AOT only; verify core Wasm / provenance</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #203043" transform="translate(308.52 261.152013)">Compiled artifacts are outside guest preopens</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p1b292c5c48">
+   <rect x="7.2" y="7.2" width="669.6" height="288.288"/>
+  </clipPath>
+ </defs>
+</svg>

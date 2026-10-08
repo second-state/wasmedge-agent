@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Four-Way Agent Benchmark Runner</title><style>
+:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
+a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
+.layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
+nav{position:sticky;top:24px;align-self:start;font-size:14px}nav strong{display:block;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}
+main{min-width:0;background:white;border:1px solid var(--line);border-radius:12px;padding:40px 46px}
+h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font-size:26px;margin:50px 0 18px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:20px}
+h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
+li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
+@media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
+@media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+
+main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
+<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
+<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#requirements-and-commands">Requirements and commands</a><a href="#cell-only-task-rules">Cell-only task rules</a><a href="#command-profiling-and-source-integrity">Command profiling and source integrity</a><a href="#implemented-coverage">Implemented coverage</a><a href="#reports-and-timing">Reports and timing</a><a href="#all-cargo-and-aot-deductions">All Cargo and AOT deductions</a><a href="#cell-execution-charts">Cell execution charts</a><a href="#english-report-export">English report export</a></nav><main><h1 id="four-way-agent-benchmark-runner">Four-Way Agent Benchmark Runner</h1>
+<p>Compare <code>prime-ts</code>, <code>prime-rust</code>, <code>wasmedge</code> (interpreter), and <code>wasmedge-aot</code>. The model route is <code>anthropic/claude-opus-5-5</code>, with reasoning off. This ID comes from the service catalog. An immutable backend revision is not independently verified. The older A/B/F harness and D20/D21 rules remain separate.</p>
+<p>Start with the <a href="../../../docs/rust-cell-report-2026-10-08.en.html">English safety and performance report</a>, also available as <a href="../../../docs/rust-cell-report-2026-10-08.en.html">Markdown</a>. It covers architecture, safety tests, fixed programs, Opus tasks, Cargo, AOT, and the bridge.</p>
+<p><a href="../../../docs/assets/rust-cell-report-2026-10-08/english-report-set.zip">Download the offline English package</a> to read the saved dashboards and linked CSV tables. Extract it and open <code>docs/rust-cell-report-2026-10-08.en.html</code>. Raw evidence links require the original local run directories.</p>
+<h2 id="requirements-and-commands">Requirements and commands</h2>
+<p>Use Node 22.8+, npm, Cargo, rustup with <code>wasm32-wasip1</code>, uv, and WasmEdge 0.14.1 with interpreter/AOT support. Install WasmEdge using the project instructions, or set <code>WASMEDGE_AGENT_WASMEDGE</code>. Rust hosts and adapters build with <code>--release --locked</code>.</p>
+<p>Prepare downloads pinned source archives, builds Node bundles, creates upstream runtime environments, and vendors/warms an isolated WASI template. Inputs, bootstrap logs, and paid output remain under gitignored <code>poc/bench/results/</code>. User agent settings are not changed.</p>
+<pre><code class="language-sh">npm run build
+npx tsx poc/bench/three-way/cli.ts prepare
+# Use the exported credentials; source ~/.zshrc first if needed.
+npx tsx poc/bench/three-way/cli.ts discover --model anthropic/claude-opus-5-5
+npx tsx poc/bench/three-way/cli.ts plan --suite smoke --provider poc/bench/results/three-way-provider.json --out poc/bench/results/three-way-smoke
+npx tsx poc/bench/three-way/cli.ts run --plan poc/bench/results/three-way-smoke
+npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/three-way-smoke
+</code></pre>
+<p>The default smoke has 44 slots: 12 host, 16 direct-runtime, and 16 paid task slots. One H03 slot is not applicable. Select <code>--suite host</code>, <code>runtime</code>, <code>end-to-end</code>, <code>all</code>, or comma-separated lanes/case IDs. Use <code>--variants prime-ts,prime-rust,wasmedge,wasmedge-aot</code>, <code>--reps N</code>, and <code>--seed N</code> to set the matrix.</p>
+<p>The single-Opus 12-task pilot has 144 runs (four variants × three repetitions). A ten-repetition formal plan has 480 runs. Prepare, discover, plan, and analyze do not generate paid responses. Only end-to-end slots in <code>run</code> use paid calls. Each run permits at most 64 HTTP requests, including retries, and has a task-specific total deadline.</p>
+<h2 id="cell-only-task-rules">Cell-only task rules</h2>
+<p>The default <code>--tool-policy runtime-only</code> compares Python cells/runtime with Rust cells/Wasm runtime. TS exposes only ipython; the fork exposes only rust; the Rust upstream has its single Python tool. Every turn requires a successful cell. Reads, parsing, computation, edits, and writes must use the cell language's APIs. Shell/subprocess delegation is prohibited.</p>
+<p>Common <code>node --test</code>, <code>cargo test</code>, lint, and other fixture checks run after the agent finishes. Their time is separate. These rules differ from the native product loop. Each run saves <code>cell-audit.json</code>, generated Python/Rust sources, and per-turn prompt hashes. Passing the checker without meeting the cell rules is a failure. Automated source screening is not a security boundary; sources still need inspection.</p>
+<p><code>--tool-policy native</code> is only a tool-choice observation. Old bash trajectories keep their raw records and checker results but are excluded from cell latency. Policies have different case inputs/hashes and cannot be pooled. Native project Cargo target/build directories are isolated per run. Cell engines retain their own target policy.</p>
+<h2 id="command-profiling-and-source-integrity">Command profiling and source integrity</h2>
+<p><code>--profile-commands true</code> creates a separate profiling lane. PATH wrappers preserve output/status and record Cargo/rustc/node/python spawn-to-close time, arguments, cwd, and outcome. Native builds, tests, runs, and control-cell Cargo are classified separately. <code>cargo test</code> remains a combined build/test bucket. rustc unit totals are not Cargo wall time. Absolute executable paths can bypass wrappers and require explicit coverage checks. Wrapper overhead is not yet audited; profiling results are not pooled with default results.</p>
+<p>Manifests pin source/build/collector hashes, task snapshots, inputs, model ID, seed, and order. Runs reject source drift. Resume skips only complete slots and retains interrupted/infrastructure failures. Do not overwrite failed evidence or replace it with a hidden rerun. Create a new plan for retesting. Keep the plan directory in its original location.</p>
+<p>Model credentials stay in the reverse gateway. Isolated agent configurations use a random local token without paid-provider authority. Each request saves body, SSE, decoded arguments, usage, chunk timestamps, session logs, project output, and failures. Raw directories use mode 700; sensitive records use 600. The API key is absent from manifests, config, child environment, and command lines.</p>
+<h2 id="implemented-coverage">Implemented coverage</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Lane</th>
+<th>Cases</th>
+<th>Method</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H</td>
+<td>H01 startup, H02 fixed UTF-8 stream, H03 ten shell calls</td>
+<td>HTTP/SSE replay; no paid model</td>
+</tr>
+<tr>
+<td>R</td>
+<td>R01–R16 small reference programs</td>
+<td>Real product cell engines; identical upstream Python; equivalent Rust with assertions/markers</td>
+</tr>
+<tr>
+<td>E</td>
+<td>Cell-controlled versions of the original 12 tasks</td>
+<td>Native prompts, cell tools, common Opus route/fixtures/checkers</td>
+</tr>
+</tbody>
+</table></div>
+<p>H01/H02 preserve native prompts and metadata and replay the same responses. They are not identical-request parser tests. H03 is not applicable to the Rust CLI. R10 uses the common <code>/bin/sh</code> handler through the bridge. R15 uses independent sessions, not RLM children. R11 compares Python namespace checkpoints with Rust blobs/Git under their different contracts. R04 reports resident and reparse steps separately.</p>
+<p>Designed scales, cold host caches, compiler internals, crash recovery, full library-gate cases, and E13–E15 are not all implemented. R02 clears only its owned target; OS/toolchain/template caches stay warm. R16 currently has 100 no-op cells, without the planned state change every ten cells.</p>
+<h2 id="reports-and-timing">Reports and timing</h2>
+<p>Per-run output includes <code>spans.jsonl</code>, <code>events.jsonl</code>, and <code>result.json</code>. Analysis writes <code>report.html</code>, <code>report.json</code>, run/phase/request CSVs, and phase summaries. HTML supports case/variant/phase/state/outcome filters and run/cell/request search. Failures remain saved. Task failures use the predefined deadline in penalized mean. Infrastructure errors are separate and block completeness.</p>
+<p>Observed phases include gateway headers/body/content/reasoning/stream, tool/source emission, code-ready, tool execution, admission/provision, source/gates/queues/Cargo/policy/probe/execution/cleanup/snapshot/residual, reference guest I/O/compute/state/bridge/output, checker, and teardown.</p>
+<p><code>llm.code_emission</code> is a client-visible SSE window mapped to a JSON source field. It is not pure server generation. Code-ready starts at gateway receipt and excludes unobserved earlier prompt work. Independent duration summaries have separate clocks and cannot form a global timeline. Parent/child and bridge durations are not additive.</p>
+<p>Python bytecode/import detail, rustc typecheck/codegen/link, host result/transcript work, launch/drain detail, exact CPU, and tree RSS remain missing when hooks are absent. A compile rejection means execution did not run. No missing or cached phase is filled with zero. Wall minus CPU is not an I/O timer.</p>
+<p><code>rankingAllowed:false</code> remains set. Smoke validates the harness and describes measured costs. A formal ranking requires adequate samples, paired confidence intervals, and an overhead audit with a 95% upper bound ≤2%. Usage remains as reported by the service. No pricing means no estimated money cost. See the <a href="../../../docs/benchmark-three-way-validation-2026-10-08.en.html">validation history</a>.</p>
+<h2 id="all-cargo-and-aot-deductions">All Cargo and AOT deductions</h2>
+<p>For each successful, cell-compliant run, merge all captured compiler intervals, clip them to the selected period, subtract once, then take the median. Raw and adjusted bars use identical samples. Default validated time includes initialization through checker completion. Agent/user end before the checker.</p>
+<p>All Cargo includes initialization, skill probes, cells, library gates, project build/test, helper commands, and retries. Full <code>cargo test</code> wall time includes test execution. Do not add <code>cell.compile</code> or rustc child time again. Python checkers can also run Cargo.</p>
+<p>The default Cargo-only wrapper captures the pinned runtime's PATH and <code>WASMEDGE_AGENT_CARGO</code> entries and saves <code>cargo-commands.jsonl</code>, <code>cargo-capture.json</code>, and <code>cargo-clock-calibration.json</code>. Three child samples check clock alignment. Missing endpoints, duplicate IDs, bad clocks, or absent old capture make the metric unavailable. Custom absolute paths outside these entries are outside verified scope. Node-wrapper startup stays in the remainder. This is an arithmetic deduction, not a rerun without Cargo.</p>
+<p>AOT is an added fourth group. Both Wasm variants share reference sources and readiness bridge. The host compiles every inspected/stripped cell with no cache. Rust→Wasm uses <code>cargo.command</code>/<code>cell.compile</code>; Wasm→AOT uses <code>aot.command</code>/<code>cell.aot_compile</code>. AOT compiler capture uses <code>aot-commands.jsonl</code>/<code>aot-capture.json</code> and the calibrated collector clock. Runtime itself is not wrapped as compiler work.</p>
+<p>Select all Cargo or all Cargo plus AOT. Combined deductions merge overlapping intervals. <code>agentWithoutAllCompilationMs</code>, <code>userWithoutAllCompilationMs</code>, and <code>validatedWithoutAllCompilationMs</code> include both command types. Older <code>*WithoutCompilationMs</code> fields deduct all Cargo only. Incomplete AOT capture leaves the combined metric unknown. Separate campaign hashes prevent pooling old and new bridge conditions.</p>
+<h2 id="cell-execution-charts">Cell execution charts</h2>
+<p>Cell rows use <code>cell.python_execute</code> and <code>cell.execution</code>, not buffered CLI events. They show calls, success/runtime/Cargo/AOT failures, execution total, successful-cell average, failed execution, and state. They exclude model output, Cargo/AOT, initialization, and snapshots. Runtime boundaries retain launch, I/O, and bridge work. Python uses a resident kernel; Rust starts a process/VM per cell.</p>
+<p>Charts show either per-run totals or the average per successful cell, in ms, then take medians across comparable runs. n counts runs. They support linear/log scales, case/variant filters, bar focus, tooltips, SVG export, and trace links. The CSV is <code>cell-execution-runs.csv</code>; JSON rows are <code>report.json.cellExecutionRuns</code>. Runtime failure costs remain; compile failures have no execution. Parallel totals are work, not wall time. A Python 0 ms report is below resolution. Different generated programs/call counts are not a fixed-program speed ratio.</p>
+<h2 id="english-report-export">English report export</h2>
+<pre><code class="language-sh">uv run --with markdown==3.10.2 python poc/bench/english-report.py
+</code></pre>
+<p>This creates additional <code>.en.md</code>/<code>.en.html</code> reports, <code>report.en.html</code> dashboard copies, a validation record, and an offline ZIP. It does not modify Chinese reports, reanalyze measurements, or call models. Dashboard data scripts are copied byte-for-byte. Raw traces and code keep their original language. Start with <code>docs/rust-cell-report-2026-10-08.en.html</code> after extracting the ZIP. Raw evidence/source links require the full repository archive.</p></main></div>
+<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
+</body></html>
