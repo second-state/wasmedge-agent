@@ -4,7 +4,7 @@ Date: August 6, 2026. English reading edition prepared October 8, 2026.
 
 This study assessed replacing Prime Agent's persistent IPython runtime with Rust cells compiled and executed in WasmEdge. The source was Prime Agent v0.7.0 at `c22549a3`, under the MIT license. Local tests used Apple Silicon macOS, Darwin 25.5.0, rustc 1.97.0, and a local WasmEdge 0.17.1 master build.
 
-**Historical scope:** Sections 3–5 describe candidate designs and plans, not a list of shipped features. Source analysis applies to the pinned upstream revision. The small program test is separate from the [August 10 benchmark](docs/benchmark-comparison-2026-08-10.en.md), which used WasmEdge 0.14.1. Current implementation details are in the [English runtime reference](packages/coding-agent/docs/rlm-runtime.md). Current results are in the [October consolidated report](docs/rust-cell-report-2026-10-08.en.md).
+**Historical scope:** Sections 3–5 describe candidate designs and plans, not a list of shipped features. Source analysis applies to the pinned upstream revision. The small program test is separate from the [August 10 benchmark](docs/bench-history/benchmark-comparison-2026-08-10.md), which used WasmEdge 0.14.1. Current implementation details are in the [English runtime reference](packages/coding-agent/docs/rlm-runtime.md). Current results are in the [October consolidated report](docs/rust-cell-report-2026-10-08.en.md).
 
 ## 0. Executive summary
 

@@ -29,7 +29,7 @@
  *      whose subject is that vendor's account. Never a display name, prose,
  *      or identifier of ours that merely sits near one.
  *   2. Historical records (DESIGN.md, REPORT.md, docs/m*-*.md,
- *      docs/benchmark-comparison-2026-08-10.md, released CHANGELOG.md
+ *      docs/bench-history/benchmark-comparison-2026-08-10.md, released CHANGELOG.md
  *      sections) -- AGENTS.md forbids rewriting these, and rewriting a dated
  *      measurement to match today's branding would make it a lie.
  *   3. Deliberately-kept legacy strings the code cannot do without
@@ -721,7 +721,7 @@ const ALLOWLIST = [
 			"three references to upstream rather than to us (rule R1): what this repo is a fork of, the slug the sync strategy in DESIGN.md 7.3 syncs from, and `prime-agent-runtime/`, an upstream directory deleted in WP1 that the rule forbidding new references to it has to name in order to forbid it. Only these three literals are exempt, so this file's own naming rules still fail if they reintroduce a branded name",
 	},
 	{
-		glob: "docs/benchmark-comparison-2026-08-10.md",
+		glob: "docs/bench-history/benchmark-comparison-2026-08-10.md",
 		allow: [
 			/Prime Agent vs WasmEdge Agent benchmark/,
 			/stock Prime Agent's IPython runtime/,
@@ -744,6 +744,14 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "docs/benchmark-cell-runtime-analysis-2026-10-08.*",
+		allow: [
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/7d442aafa985f9342134fac16c2ef41f03fb45c1\/packages\/coding-agent\/src\/core\/kernel\/repl-manager\.ts/,
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/967eb13fd488507af5f590e9c6ea8b2672f1fc05\/crates\/pa-core\/src\/kernel\/manager\/requests\.rs/,
+		],
+		reason: "the runtime diagnosis cites the exact upstream kernel sources measured by the two Python baselines (rule R1); public pinned URLs replace links into ignored local upstream checkouts",
+	},
+	{
+		glob: "docs/bench-history/benchmark-cell-runtime-analysis-2026-10-08.*",
 		allow: [
 			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/7d442aafa985f9342134fac16c2ef41f03fb45c1\/packages\/coding-agent\/src\/core\/kernel\/repl-manager\.ts/,
 			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/967eb13fd488507af5f590e9c6ea8b2672f1fc05\/crates\/pa-core\/src\/kernel\/manager\/requests\.rs/,
@@ -774,7 +782,7 @@ const ALLOWLIST = [
 		reason: "the English reading edition describes the upstream product assessed in the historical feasibility study (rules R1/R2); only those upstream descriptions and their generated section anchor are exempt",
 	},
 	{
-		glob: "docs/benchmark-comparison-2026-08-10.en.*",
+		glob: "docs/benchmark-comparison-2026-08-10.en.html",
 		allow: [
 			/Prime Agent vs WasmEdge Agent benchmark/,
 			/prime-agent-vs-wasmedge-agent-benchmark-2026-08-10/,
@@ -913,7 +921,7 @@ const ALLOWLIST = [
 	},
 	{ glob: "DESIGN.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
 	{ glob: "REPORT.md", allow: [ANY_LINE], reason: "historical record of the fork's own decisions" },
-	{ glob: "docs/m*-*.md", allow: [ANY_LINE], reason: "dated milestone reports; historical record" },
+	{ glob: "docs/bench-history/m*-*.md", allow: [ANY_LINE], reason: "dated milestone reports; historical record" },
 	{ glob: "scripts/check-branding.mjs", allow: [ANY_LINE], reason: "this file necessarily names what it forbids" },
 ];
 

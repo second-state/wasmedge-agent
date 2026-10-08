@@ -74,9 +74,9 @@ Before the campaign:
 
 `0*` means unavailable: the gateway's streaming responses did not provide input-token usage.
 
-**Statistic definition (corrected 2026-10-02):** the historical analyzer sorted values and selected index `floor(n × p / 100)` (zero-based). Its function named `median` called this p50 operation: for an even sample it selected the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. The [current analyzer](../poc/bench/analyze.ts) averages the middle pair for token and cell-count medians; cell-duration p50/p95 retain the historical convention. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.
+**Statistic definition (corrected 2026-10-02):** the historical analyzer sorted values and selected index `floor(n × p / 100)` (zero-based). Its function named `median` called this p50 operation: for an even sample it selected the higher middle value, rather than averaging the two middle values. The table preserves the historical analyzer output and gate inputs. The [current analyzer](../../poc/bench/analyze.ts) averages the middle pair for token and cell-count medians; cell-duration p50/p95 retain the historical convention. Cell p50 pools individual cell durations from transcripts; it cannot be reconstructed from the CSV's per-run p50 values alone.
 
-The conventional sample medians below are recomputed from the unchanged [144-row CSV](benchmark-comparison-2026-08-10.csv). Wall-time medians in §3.2 already use this definition. Per-task medians use three repetitions, so the definitions agree there.
+The conventional sample medians below are recomputed from the unchanged [144-row CSV](../benchmark-comparison-2026-08-10.csv). Wall-time medians in §3.2 already use this definition. Per-task medians use three repetitions, so the definitions agree there.
 
 | Model | A output-token median | F output-token median | F/A |
 |---|---:|---:|---:|

@@ -279,7 +279,7 @@ running.
 
 - [Root README](../../README.md) — what the fork changes and why
 - [`DESIGN.md`](../../DESIGN.md) — decisions D1–D25
-- [`docs/m1-measurement-report.md`](../../docs/m1-measurement-report.md) and
-  [`docs/m5-acceptance-report.md`](../../docs/m5-acceptance-report.md) —
+- [M1 measurement report](../../docs/bench-history/m1-measurement-report.md) and
+  [M5 acceptance report](../../docs/bench-history/m5-acceptance-report.md) —
   the measurements behind the runtime swap (both written in Traditional
-  Chinese; the root README summarises the m1 numbers in English)
+  Chinese); see the [historical evidence index](../../docs/bench-history/README.md) for campaign context

@@ -1354,6 +1354,6 @@
     "packages/coding-agent/test/rust-cell-wasm-imports.test.ts": "ac2828b2e25ace4ee2e20d02815cc26b3f8ec06d1cfe30c348d62f4c0cffa2dd",
     "packages/coding-agent/test/rust-cell-workspace-policy.test.ts": "172670770d05257739d21a0f50510f2ea9b25e7ca0f9f2a983784c0b9d5c21c7"
   },
-  "reportMarkdownSha256": "d4077412cf3b022863b2ba92161864db29b0164a1480b5ca66034dbad0b90d74",
-  "reportHtmlSha256": "fc4c0c799babebdb3394530614c095cbf291ff0bc90c51e085b21331ffa77b40"
+  "reportMarkdownSha256": "f8e8afba476a48de8c8bcb03030203f3bc6b9daa87076011507eddb444c2e6a2",
+  "reportHtmlSha256": "04f4dfdb71e383a70dabaad84f21eb28654f325c3c43ff72ec515b8920c62b46"
 }

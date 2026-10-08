@@ -64,7 +64,7 @@ Observed phases include gateway headers/body/content/reasoning/stream, tool/sour
 
 Python bytecode/import detail, rustc typecheck/codegen/link, host result/transcript work, launch/drain detail, exact CPU, and tree RSS remain missing when hooks are absent. A compile rejection means execution did not run. No missing or cached phase is filled with zero. Wall minus CPU is not an I/O timer.
 
-`rankingAllowed:false` remains set. Smoke validates the harness and describes measured costs. A formal ranking requires adequate samples, paired confidence intervals, and an overhead audit with a 95% upper bound ≤2%. Usage remains as reported by the service. No pricing means no estimated money cost. See the [validation history](../../../docs/benchmark-three-way-validation-2026-10-08.en.md).
+`rankingAllowed:false` remains set. Smoke validates the harness and describes measured costs. A formal ranking requires adequate samples, paired confidence intervals, and an overhead audit with a 95% upper bound ≤2%. Usage remains as reported by the service. No pricing means no estimated money cost. See the [validation history](../../../docs/bench-history/benchmark-three-way-validation-2026-10-08.en.md).
 
 ## All Cargo and AOT deductions
 

@@ -4,7 +4,7 @@
 
 可執行的 runner 比較 `prime-ts`、`prime-rust`、`wasmedge`（interpreter）、`wasmedge-aot`。標準模型 route 為 `anthropic/claude-opus-5-5`；這是服務實際列出的 ID，服務端不可變 backend revision 尚未獨立驗證。主量測不開 reasoning。原有 A/B/F harness 與 DESIGN D20/D21 放行規則保持原契約。
 
-[安全性與效率統整報告](../../../docs/rust-cell-report-2026-10-08.html)（[Markdown](../../../docs/rust-cell-report-2026-10-08.md)）是最新成果入口，包含架構、安全控制、負向測試、固定程式／Opus 結果、Cargo／AOT 與 bridge 分析。使用 `uv run --with matplotlib==3.10.8 --with markdown==3.10.2 python poc/bench/consolidated-report.py` 可從保存的 evidence 重建，不呼叫模型。
+[安全性與效率統整報告](../../../docs/rust-cell-report-2026-10-08.html)（[Markdown](../../../docs/rust-cell-report-2026-10-08.md)）是最新成果入口，包含架構、安全控制、負向測試、固定程式／Opus 結果、Cargo／AOT 與 bridge 分析。使用 `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py` 從 Git 中的 aggregate、模板與 SVG 重建，不需要原始 traces、不呼叫模型。歷史分析與驗證紀錄見 [歷史索引](../../../docs/bench-history/README.md)。
 
 需要 Node 22.8+、npm、Cargo、rustup `wasm32-wasip1`、uv，以及 WasmEdge 0.14.1 interpreter / AOT。執行前依專案 README 安裝 WasmEdge，或指定既有 `WASMEDGE_AGENT_WASMEDGE`。Rust host 與 adapter 都以 `--release --locked` 編譯。prepare 下載固定 SHA 的外部 source archive，build Node bundle，建立各自的 upstream runtime environment，vendor 並 warm 獨立 WASI template。所有輸入、bootstrap log、paid output 都留在 gitignored `poc/bench/results/`；不修改使用者的 agent 設定。
 
@@ -48,7 +48,7 @@ H01/H02 replay 回應相同，產品原生 prompt/tool metadata 保留並存檔�
 
 報表現在始終 `rankingAllowed:false`：尚未完成 instrumentation overhead ≤2% audit；smoke 樣本不足，僅驗證 harness、correctness 與量測 coverage。正式統計應另作 paired bootstrap 與 confidence interval，不能以單次 latency 宣告勝負。Usage 保留服務原值，未設定 pricing 時不推估付費金額。
 
-首次實測結果、付費產出與比較限制見 [2026-10-08 驗證紀錄](../../../docs/benchmark-three-way-validation-2026-10-08.md)。
+首次實測結果、付費產出與比較限制見 [2026-10-08 驗證紀錄](../../../docs/bench-history/benchmark-three-way-validation-2026-10-08.md)。
 
 HTML 為離線圖形 dashboard：案例耗時並排長條圖（agent/user-visible median 或 penalized mean，可切換 linear/log）、correctness 與量測 coverage、單一案例階段熱圖、單一 clock 時間軸。熱圖與時間軸可點入 trace；SVG 圖可匯出。熱圖是各階段 observation median，錯誤 observation 與缺失狀態保留；它不是可相加的成本 pie chart。重新 `analyze` 即可把既有資料轉成圖形報表，不呼叫模型。
 

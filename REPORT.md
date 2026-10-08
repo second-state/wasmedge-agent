@@ -6,7 +6,7 @@
 - 撰寫日期：2026-08-06
 - 實測環境：macOS（Darwin 25.5.0，Apple Silicon）、rustc 1.97.0、WasmEdge 0.17.1（本機 master build）
 
-**引用範圍（2026-10-02 補註）**：本文件是 2026-08-06 的可行性研究，§3–§5 是當時的候選設計與路線，不是已實作功能清單；上游分析固定在上述 revision。§2.4 的小程式量測也不同於 [August 10 的 12-task benchmark](docs/benchmark-comparison-2026-08-10.md)（WasmEdge 0.14.1）。目前實作範圍見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md)。
+**引用範圍（2026-10-02 補註）**：本文件是 2026-08-06 的可行性研究，§3–§5 是當時的候選設計與路線，不是已實作功能清單；上游分析固定在上述 revision。§2.4 的小程式量測也不同於 [August 10 的 12-task benchmark](docs/bench-history/benchmark-comparison-2026-08-10.md)（WasmEdge 0.14.1）。目前實作範圍見 [runtime 文件](packages/coding-agent/docs/rlm-runtime.md)。
 
 ---
 

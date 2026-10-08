@@ -30,7 +30,7 @@
 
 固定程式的 data join 從 interpreter {{join_before}} ms 降至 AOT {{join_after}} ms，執行成本約降低 {{join_reduction}}%；repository scan 與 bridge 也改善。短 CPU cell 的 AOT {{cpu_aot}} ms 仍高於兩個 Python kernel 的 {{cpu_python}} ms；每個 cell 啟動新的 process／VM 是重要固定成本。這支持按 workload 選 execution mode，沒有支持「Rust 編譯後就一定比較快」。
 
-先前固定診斷也確認 Python JSON 走 `_json` C accelerator，而 Rust `serde_json` 在 interpreter 中逐指令執行。近空程式的 process wall time 約 8–10 ms；guest 計算本身可以很短，但整個 cell 仍受 launch／load 等成本影響。原慢因分析保存 CPU／JSON／regex／state 的 body timers；其中 AOT／1 ms polling 是修正前的診斷控制，最新產品狀態以本報告和實作分析為準。
+先前固定診斷也確認 Python JSON 走 `_json` C accelerator，而 Rust `serde_json` 在 interpreter 中逐指令執行。近空程式的 process wall time 約 8–10 ms；guest 計算本身可以很短，但整個 cell 仍受 launch／load 等成本影響。原慢因分析保存 CPU／JSON／regex／state 的 body timers；其中 AOT／1 ms polling 是修正前的診斷控制，已實作的 AOT 路徑與 readiness 更新見下文。
 
 <a id="bridge"></a>
 
@@ -44,9 +44,25 @@
 
 100 次 echo 的 process 執行時間從 {{bridge_before}} ms 降至 {{bridge_after}} ms，readiness 修正降低約 {{bridge_reduction}}%。正常 WASI reply reads 改以 `poll_oneoff` 同時等待 stdin 就緒與 monotonic deadline，資料抵達即可讀取；native TCP 與罕見 write retries 仍保留既有 polling。
 
-AOT 再降至 {{bridge_aot}} ms。只看 guest body，100 次 echo 為 639.344 → 53.548 → 3.207 ms，支持 readiness 去除等待後，interpreter／JSON framing 等工作仍有優化空間。此次對照不與較早排程環境不同的 bridge median 混算。
+AOT 再降至 {{bridge_aot}} ms。下表另列 guest body median，不含 process 啟動及 module／VM 準備，支持 readiness 去除等待後，interpreter／JSON framing 等工作仍有優化空間。此次對照不與較早排程環境不同的 bridge median 混算。
 
 上述 AOT 執行前另花約 2.74／2.76 秒編譯。若未來可信 artifact 可以重用，在此固定 100-echo workload 下，以 2.76 秒除以每次約 54.57 ms 的執行節省，約需 **51 次**才回收一次 AOT 編譯成本。這是固定程式與未來重用前提下的算術估算；目前每 cell 重編，沒有這個 amortization 收益。
+
+### Guest 本體計時
+
+{{bridge_body}}
+
+這是相同交錯控制樣本的另一個計時邊界。Body 與 process 的 median 不可直接相減，重建成個別 phase 耗時。
+
+<a id="aot-details"></a>
+
+### 已實作的 AOT 路徑
+
+`rustCell.runtimeMode` 預設 `interpreter`，`aot` 是另加的第四組。AOT 先檢查 imports、移除 guest 所有 custom sections，再由 host compiler 以 `--interruptible` 及設定所需的 gas instrumentation 產生 native payload。Core Wasm 必須與檢查輸入相同，native payload 必須存在；驗證失敗就停止，不靜默回退 interpreter。每 cell 重編，沒有 AOT cache。Skill／library tests 仍使用 interpreter。
+
+剝除後 input、AOT output 與 SHA-256 provenance 保存於 host-only `.aot/`，不對 guest preopen。編譯與執行共用 timeout、cancellation、process-limit 設定。本次固定 WasmEdge 0.14.1 CLI 自動載入 AOT，flags 由保存的命令紀錄識別，未使用新版本的 run-mode flag。
+
+`aot.command` 為 compiler spawn-to-close 時間，不包含 Node wrapper 自己的啟動；`cell.aot_compile` 另含 stripping、verification、provenance，與 runner `cell.execution` 不重疊。全部 Cargo capture 涵蓋初始化、cell、library gate、重試及 checker；扣除量依任務時間邊界裁切，命令重疊只計一次。
 
 <a id="tasks"></a>
 
@@ -75,8 +91,6 @@ Python 四個 agent 期間的 Cargo／AOT 扣除量均為 0，扣除後等於上
 E09 AOT 的 3 次 regex compilation 合計 **29.31 秒**，造成原始 agent 時間 59.57 秒；扣除全部 Cargo + AOT 後約 25.14 秒，interpreter 約 30.46 秒。這只說明本輪分段：生成 sources／cell 次數不同，不能用扣除後的大小當純 runtime speed ratio。
 
 ### Cell 執行與修錯成本
-
-
 
 <!-- paid-cell-chart -->
 
@@ -207,6 +221,19 @@ Cell 圖的「每 run 合計」包含成功與 runtime 失敗的執行；Cargo�
 最新兩個 campaigns 共 {{spans}} spans，schema／integrity 檢查皆無錯誤；Cargo {{cargo_commands}} 條、AOT {{aot_commands}} 條命令 capture 完整。每次 paid response、生成程式、修錯、session、project outputs、checker、失敗 attempts 都保留。先前實際 key 掃描的已檢文字檔案沒有外洩；這是保存成果的指定掃描範圍，不是全系統秘密偵測。
 
 固定程式每組 n=3，付費任務每組 n=1；沒有 confidence intervals、跨平台複驗或完整 instrumentation overhead audit。結果足以說明本機 workload 的成本與修正效果，尚不足以估計跨任務穩定勝率。模型 ID 也不等於獨立驗證的 backend revision。
+
+<a id="aot-validation"></a>
+
+### AOT 實作時保存的驗證
+
+實作時的 root checks 與全 workspace build 通過；真實 interpreter／AOT integration 15 tests 通過，涵蓋 large UTF-8 bridge、禁止 socket imports、timeout 後 fresh handshake、gas exhaustion、memory-growth caps。Native bridge release tests 12/12 通過，其他相關 suites 86 tests 通過、3 個環境限定 tests 略過。這些是先前實作驗證，與上文安全重驗的 65 pass／14 skip 分開，不能合計成單一 suite。本次編輯報告沒有重跑 runtime tests。
+
+| 最新 campaign | Schema-valid spans | Cargo commands | AOT commands |
+|---|---|---|---|
+| 固定程式：72 runs | 3,822 | 54 | 24 |
+| Opus 任務：16 runs | 1,600 | 32 | 8 |
+
+全部 88 runs 均可計算 Cargo-only 與 Cargo-plus-AOT 扣除。付費 sources／library edits 已檢視 shell／subprocess 委派，修錯成本完整保留，所有 AOT compiler failure counts 均為 0。Wrappers 與小樣本仍限制效能主張。
 
 <a id="next"></a>
 

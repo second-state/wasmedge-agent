@@ -9,19 +9,19 @@ h1{font-size:36px;line-height:1.35;margin:0 0 24px;letter-spacing:-.02em}h2{font
 h3{font-size:20px;margin-top:30px}p{margin:18px 0}main>p:first-of-type{color:var(--muted);font-size:14px}main>p:nth-of-type(2){background:#edf6f1;border-left:4px solid var(--accent);padding:20px 24px}
 code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;background:#eef2f6;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:14px;min-width:680px}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#edf2f7;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#fafbfd}
-.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
+.panel{margin:30px 0;padding:18px 16px;border:1px solid var(--line);border-radius:8px;background:white}.chart{overflow-x:auto}.chart svg,.chart img{display:block;width:100%;height:auto;min-width:740px}figcaption{font-size:13px;color:var(--muted);padding-top:12px}
 .controls{display:flex;gap:18px;flex-wrap:wrap;padding:0 6px 18px}label{font-size:13px;color:var(--muted)}select{display:block;margin-top:4px;background:white;color:var(--ink);border:1px solid #9fb0c0;border-radius:4px;padding:8px;font:14px inherit;max-width:100%}
 li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color:var(--muted);font-size:13px}.print{flex-shrink:0;color:white;background:transparent;border:1px solid #8aa1b8;border-radius:4px;padding:3px 12px;cursor:pointer}
 @media(max-width:1100px){.layout{grid-template-columns:1fr;padding:20px;gap:20px}nav{position:static;display:flex;gap:6px 14px;flex-wrap:wrap}nav strong{width:100%;margin:0}nav a{font-size:12px;padding:0}main{padding:28px}}
 @media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
-@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
+@media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg,.chart img{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
 
 main{overflow-wrap:anywhere}main>p:nth-of-type(2){background:none;border:0;padding:0}
 .overview{border:1px solid #b2d4c3;border-radius:8px;padding:20px;background:#edf6f1;margin:20px 0}
 .overview table{min-width:0}.overview th{background:#dcefe4}.overview td{padding:12px}
 .cell-chart{display:grid;grid-template-columns:1fr 1fr;gap:24px}.cell-case{min-width:0}.cell-case h4{margin:0 0 8px}.cell-row{margin:12px 0}.cell-label{display:flex;justify-content:space-between;gap:10px;font-size:13px}.cell-track{background:#eef2f6;border-radius:3px;height:12px;margin-top:4px}.cell-bar{height:100%;border-radius:3px}
 details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:16px;background:#eef2f6}pre code{white-space:pre;overflow-wrap:normal}
-@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg{min-width:640px}}
+@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg,.chart img{min-width:640px}}
 @media print{details{display:block}.overview{break-inside:avoid}.cell-chart{grid-template-columns:1fr 1fr}}
 .overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
 @media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
@@ -1470,7 +1470,7 @@ L 859.207051 705.24327
 </tbody>
 </table></div>
 <p>固定程式的 data join 從 interpreter 293.578 ms 降至 AOT 21.266 ms，執行成本約降低 92.8%；repository scan 與 bridge 也改善。短 CPU cell 的 AOT 8.224 ms 仍高於兩個 Python kernel 的 5.000 ms；每個 cell 啟動新的 process／VM 是重要固定成本。這支持按 workload 選 execution mode，沒有支持「Rust 編譯後就一定比較快」。</p>
-<p>先前固定診斷也確認 Python JSON 走 <code>_json</code> C accelerator，而 Rust <code>serde_json</code> 在 interpreter 中逐指令執行。近空程式的 process wall time 約 8–10 ms；guest 計算本身可以很短，但整個 cell 仍受 launch／load 等成本影響。原慢因分析保存 CPU／JSON／regex／state 的 body timers；其中 AOT／1 ms polling 是修正前的診斷控制，最新產品狀態以本報告和實作分析為準。</p>
+<p>先前固定診斷也確認 Python JSON 走 <code>_json</code> C accelerator，而 Rust <code>serde_json</code> 在 interpreter 中逐指令執行。近空程式的 process wall time 約 8–10 ms；guest 計算本身可以很短，但整個 cell 仍受 launch／load 等成本影響。原慢因分析保存 CPU／JSON／regex／state 的 body timers；其中 AOT／1 ms polling 是修正前的診斷控制，已實作的 AOT 路徑與 readiness 更新見下文。</p>
 <p><a id="bridge"></a></p>
 <h2 id="2-bridge-改善的因果對照">2. Bridge 改善的因果對照</h2>
 <p>使用相同的 <code>diff.rs</code>／<code>bridge.rs</code> source bytes、同一 host handlers 與 1 KiB payload。舊 polling、新 readiness interpreter、新 readiness AOT 輪替執行；每模式／案例 2 warmups + 15 measured samples，總計 102 個樣本全部保存。下圖與表只採 measured samples 的 median。</p>
@@ -1947,8 +1947,39 @@ L 865.19952 258.84327
 </tbody>
 </table></div>
 <p>100 次 echo 的 process 執行時間從 652.714 ms 降至 65.795 ms，readiness 修正降低約 89.9%。正常 WASI reply reads 改以 <code>poll_oneoff</code> 同時等待 stdin 就緒與 monotonic deadline，資料抵達即可讀取；native TCP 與罕見 write retries 仍保留既有 polling。</p>
-<p>AOT 再降至 11.224 ms。只看 guest body，100 次 echo 為 639.344 → 53.548 → 3.207 ms，支持 readiness 去除等待後，interpreter／JSON framing 等工作仍有優化空間。此次對照不與較早排程環境不同的 bridge median 混算。</p>
+<p>AOT 再降至 11.224 ms。下表另列 guest body median，不含 process 啟動及 module／VM 準備，支持 readiness 去除等待後，interpreter／JSON framing 等工作仍有優化空間。此次對照不與較早排程環境不同的 bridge median 混算。</p>
 <p>上述 AOT 執行前另花約 2.74／2.76 秒編譯。若未來可信 artifact 可以重用，在此固定 100-echo workload 下，以 2.76 秒除以每次約 54.57 ms 的執行節省，約需 <strong>51 次</strong>才回收一次 AOT 編譯成本。這是固定程式與未來重用前提下的算術估算；目前每 cell 重編，沒有這個 amortization 收益。</p>
+<h3 id="guest-本體計時">Guest 本體計時</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>工作</th>
+<th>舊 polling body ms</th>
+<th>Readiness interpreter body ms</th>
+<th>Readiness AOT body ms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>一次 diff／ack</td>
+<td>12.211</td>
+<td>0.410</td>
+<td>0.160</td>
+</tr>
+<tr>
+<td>100 echo × 1 KiB</td>
+<td>639.344</td>
+<td>53.548</td>
+<td>3.207</td>
+</tr>
+</tbody>
+</table></div>
+<p>這是相同交錯控制樣本的另一個計時邊界。Body 與 process 的 median 不可直接相減，重建成個別 phase 耗時。</p>
+<p><a id="aot-details"></a></p>
+<h3 id="已實作的-aot-路徑">已實作的 AOT 路徑</h3>
+<p><code>rustCell.runtimeMode</code> 預設 <code>interpreter</code>，<code>aot</code> 是另加的第四組。AOT 先檢查 imports、移除 guest 所有 custom sections，再由 host compiler 以 <code>--interruptible</code> 及設定所需的 gas instrumentation 產生 native payload。Core Wasm 必須與檢查輸入相同，native payload 必須存在；驗證失敗就停止，不靜默回退 interpreter。每 cell 重編，沒有 AOT cache。Skill／library tests 仍使用 interpreter。</p>
+<p>剝除後 input、AOT output 與 SHA-256 provenance 保存於 host-only <code>.aot/</code>，不對 guest preopen。編譯與執行共用 timeout、cancellation、process-limit 設定。本次固定 WasmEdge 0.14.1 CLI 自動載入 AOT，flags 由保存的命令紀錄識別，未使用新版本的 run-mode flag。</p>
+<p><code>aot.command</code> 為 compiler spawn-to-close 時間，不包含 Node wrapper 自己的啟動；<code>cell.aot_compile</code> 另含 stripping、verification、provenance，與 runner <code>cell.execution</code> 不重疊。全部 Cargo capture 涵蓋初始化、cell、library gate、重試及 checker；扣除量依任務時間邊界裁切，命令重疊只計一次。</p>
 <p><a id="tasks"></a></p>
 <h2 id="3-opus-5-5-的完整任務結果">3. Opus 5.5 的完整任務結果</h2>
 <p>4 tasks × 4 variants × 1 repetition，16/16 通過共同 checker 與逐回合 cell 契約，共 70 次付費模型 requests。Route 為 <code>anthropic/claude-opus-5-5</code>，reasoning off；服務 advertised model ID 已保存，不可變 backend revision 未獨立驗證。</p>
@@ -3788,6 +3819,34 @@ L 478.72 160.062004
 <p>舊 host/replay、native-tool policy、runtime-only、完整 Cargo capture 和最新 AOT campaigns 各有不同控制，不混成總平均。首次 runtime campaign 的 bridge adapter 與 native-command adapter 失敗仍保存；最新固定程式矩陣通過的是列出的 6 cases，不是全部設計中的 16 cases。2026-08 的可行性研究、舊 12-task benchmark和 2026-10-07 microbenchmark為歷史背景，runtime／模型／環境不同，不併入此次速度結論。</p>
 <p>最新兩個 campaigns 共 5422 spans，schema／integrity 檢查皆無錯誤；Cargo 86 條、AOT 32 條命令 capture 完整。每次 paid response、生成程式、修錯、session、project outputs、checker、失敗 attempts 都保留。先前實際 key 掃描的已檢文字檔案沒有外洩；這是保存成果的指定掃描範圍，不是全系統秘密偵測。</p>
 <p>固定程式每組 n=3，付費任務每組 n=1；沒有 confidence intervals、跨平台複驗或完整 instrumentation overhead audit。結果足以說明本機 workload 的成本與修正效果，尚不足以估計跨任務穩定勝率。模型 ID 也不等於獨立驗證的 backend revision。</p>
+<p><a id="aot-validation"></a></p>
+<h3 id="aot-實作時保存的驗證">AOT 實作時保存的驗證</h3>
+<p>實作時的 root checks 與全 workspace build 通過；真實 interpreter／AOT integration 15 tests 通過，涵蓋 large UTF-8 bridge、禁止 socket imports、timeout 後 fresh handshake、gas exhaustion、memory-growth caps。Native bridge release tests 12/12 通過，其他相關 suites 86 tests 通過、3 個環境限定 tests 略過。這些是先前實作驗證，與上文安全重驗的 65 pass／14 skip 分開，不能合計成單一 suite。本次編輯報告沒有重跑 runtime tests。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>最新 campaign</th>
+<th>Schema-valid spans</th>
+<th>Cargo commands</th>
+<th>AOT commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>固定程式：72 runs</td>
+<td>3,822</td>
+<td>54</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Opus 任務：16 runs</td>
+<td>1,600</td>
+<td>32</td>
+<td>8</td>
+</tr>
+</tbody>
+</table></div>
+<p>全部 88 runs 均可計算 Cargo-only 與 Cargo-plus-AOT 扣除。付費 sources／library edits 已檢視 shell／subprocess 委派，修錯成本完整保留，所有 AOT compiler failure counts 均為 0。Wrappers 與小樣本仍限制效能主張。</p>
 <p><a id="next"></a></p>
 <h2 id="10-採用與下一步">10. 採用與下一步</h2>
 <p><strong>適合優先採用 Rust cell 的情境</strong>是需要明確 guest 能力邊界、受控資料存取、可檢查的型別化 helpers，以及可保存、可 review 的長期程式資產。需要更強 compiler／tree 隔離時，應在符合前提的 Linux 啟用相應 controls，再以負向測試驗證部署設定。任務是否受隔離仍取決於工具和 host handlers 的權限。</p>

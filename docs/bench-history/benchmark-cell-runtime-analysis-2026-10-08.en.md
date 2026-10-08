@@ -2,7 +2,7 @@
 
 This is the diagnosis **before** the AOT and readiness update. In its four paid cases, Rust/Wasm cell execution took longer. The main causes were a new WasmEdge CLI process per cell, forced interpreter mode, and bridge polling in some operations. Cargo was already excluded from the cell chart.
 
-The diagnosis used saved paid sources/traces and local fixed-program controls. It made **zero new paid requests** and did not change the product runtime or original paid records. See the [later AOT and bridge report](benchmark-aot-bridge-2026-10-08.en.md) for the implemented changes.
+The diagnosis used saved paid sources/traces and local fixed-program controls. It made **zero new paid requests** and did not change the product runtime or original paid records. See the [later AOT and bridge report](../rust-cell-report-2026-10-08.en.md#bridge) for the implemented changes.
 
 ## 1. Execution boundaries
 
@@ -14,7 +14,7 @@ The diagnosis used saved paid sources/traces and local fixed-program controls. I
 
 Rust `cell.execution` excludes Cargo, workspace initialization, the read-only probe, import inspection, snapshots, and bridge cleanup. It includes process startup, module load, VM setup, guest work, stdout/stdio bridge, and process exit. Python startup is separate and is reused. The chart measures actual per-cell product costs, not language-body execution alone.
 
-Relevant source is in the [cell runner](../packages/coding-agent/src/core/rust-cell/cell-runner.ts), [process runner](../packages/coding-agent/src/core/rust-cell/process.ts), pinned [Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts), and pinned [Python Rust-host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs).
+Relevant source is in the [cell runner](../../packages/coding-agent/src/core/rust-cell/cell-runner.ts), [process runner](../../packages/coding-agent/src/core/rust-cell/process.ts), pinned [Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts), and pinned [Python Rust-host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs).
 
 ## 2. Fixed cost for a near-empty cell
 
@@ -80,7 +80,7 @@ The 1 ms change was a diagnostic perturbation. The proposed product fix was fd r
 | E09 helper/state | 29.964, 30.873, 11.765 | The first two processes rebuild regex, scan logs, and read/write state. The third loads state and formats output without regex. |
 | E11 join/report | 9.455, 11.604 | Small fixture; two process starts matter. The larger 10,000-record diagnostic cannot replace these measurements. |
 
-`rlm::state` reads and writes [state files](../wasmedge-agent-runtime/template/rlm/src/state.rs). It does **not** use the host bridge. In the equivalent E09 diagnosis, regex creation took 4.347 ms, first captures/matching 3.399 ms, state write 0.640 ms, and log read 0.101 ms. A separate state write/read measured 0.582/0.132 ms.
+`rlm::state` reads and writes [state files](../../wasmedge-agent-runtime/template/rlm/src/state.rs). It does **not** use the host bridge. In the equivalent E09 diagnosis, regex creation took 4.347 ms, first captures/matching 3.399 ms, state write 0.640 ms, and log read 0.101 ms. A separate state write/read measured 0.582/0.132 ms.
 
 These timers do not partition the full guest. Load, allocation, destruction, output, and other work remain unsplit. The paid sources lacked body timers, so their exact breakdown cannot be recovered later. Different variants also used different programs and cell counts. Product charts describe those task paths; fixed-program controls explain mechanisms. Their values cannot be subtracted to fabricate an original run's startup or body time.
 

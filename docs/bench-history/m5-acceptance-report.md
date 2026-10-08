@@ -1,6 +1,6 @@
 # M5 驗收：fork 本體 bench 複跑報告
 
-日期：2026-08-07。對象：wasmedge-agent fork 本體（main @ WP1–WP9 全數合併後，`prime-agent.sh` from-source、內建 `rust`+`bash` 工具、無 extension）。對照：M1 量測（2026-08-06，`docs/m1-measurement-report.md`）之 A 組（upstream ipython baseline）與 B 組（upstream＋PoC rust extension）。
+日期：2026-08-07。對象：wasmedge-agent fork 本體（main @ WP1–WP9 全數合併後，`prime-agent.sh` from-source、內建 `rust`+`bash` 工具、無 extension）。對照：[M1 量測](m1-measurement-report.md)（2026-08-06）之 A 組（upstream ipython baseline）與 B 組（upstream＋PoC rust extension）。
 
 **引用範圍（2026-10-02 補註）**：72 是 12 個任務的重複 runs，不是 72 個不同任務。A/B 引用前一日的 M1 campaign；本報告也不同於 [August 10 同輪 A/F 對照](benchmark-comparison-2026-08-10.md)，不包含後續 runtime 修復。表格保留歷史 analyzer p50（偶數樣本取較高中間值，非中間兩值平均）；數字與 GO 判定未改，不能從這個跨日比較分離 compiler 或 prompt 的因果效果。
 

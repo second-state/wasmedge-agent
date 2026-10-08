@@ -12,6 +12,14 @@ export function reportLinks(text, extension) {
 	return [...markup.matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]);
 }
 
+export function reportDocuments(tracked) {
+	return [...tracked].filter(
+		(path) =>
+			/^(?:README\.md$|(?:DESIGN|REPORT)(?:\.en)?\.|examples\/showcase\/README\.md$|docs\/bench-history\/|docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|comparison)|runtime-microbenchmark|rust-cell-report)|poc\/bench\/three-way\/README)/.test(path) &&
+			/\.(?:md|html)$/.test(path),
+	);
+}
+
 export function standaloneErrors(text) {
 	const errors = [];
 	const markup = text.replace(/<!--[^]*?-->/g, "").replace(/<script\b[^>]*>[^]*?<\/script>/gi, (tag) => tag.slice(0, tag.indexOf(">") + 1));
@@ -72,7 +80,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 	const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 	const tracked = new Set(execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0"));
 	const standalone = ["docs/rust-cell-report-2026-10-08.html", "docs/rust-cell-report-2026-10-08.en.html"];
-	const documents = [...tracked].filter((path) => /^(?:docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|comparison)|runtime-microbenchmark|rust-cell-report)|(?:DESIGN|REPORT)\.en\.|poc\/bench\/three-way\/README)/.test(path) && /\.(?:md|html)$/.test(path));
+	const documents = reportDocuments(tracked);
 	const { errors, links } = checkReportLinks({ root, documents: [...documents, ...standalone], standalone, tracked });
 	for (const path of tracked) {
 		if (path.startsWith("poc/bench/results/") || /^docs\/assets\/rust-cell-report-2026-10-08\/.*\.(?:zip|png)$/.test(path)) errors.push(`Report payload must not be tracked: ${path}`);
