@@ -8,7 +8,31 @@ import { CELL_PHASES } from "../src/core/rust-cell/cell-timing.js";
 import type { CellResult } from "../src/core/rust-cell/types.js";
 import { WorkspaceHistory } from "../src/core/rust-cell/workspace-history.js";
 
-const simulated = vi.hoisted(() => ({ now: 0, buildExit: 0, runExit: 0, rejected: false, aborted: false }));
+const simulated = vi.hoisted(() => ({
+	now: 0,
+	buildExit: 0,
+	runExit: 0,
+	rejected: false,
+	aborted: false,
+	aotExit: 0,
+	aotTimeout: false,
+	calls: [] as string[][],
+}));
+vi.mock("../src/core/rust-cell/aot.js", () => ({
+	compileAot: async (_options: unknown, directory: string) => {
+		simulated.now += 1000;
+		return {
+			artifact: `${directory}/cell.aot.wasm`,
+			outcome: {
+				exitCode: simulated.aotExit,
+				stdout: "",
+				stderr: "compiler failed",
+				aborted: false,
+				timedOut: simulated.aotTimeout,
+			},
+		};
+	},
+}));
 vi.mock("../src/core/rust-cell/build-gate.js", () => ({
 	withBuildPermit: async (action: () => Promise<unknown>, signal: AbortSignal) => {
 		simulated.now += 20;
@@ -18,6 +42,7 @@ vi.mock("../src/core/rust-cell/build-gate.js", () => ({
 }));
 vi.mock("../src/core/rust-cell/process.js", () => ({
 	runProcess: async (bin: string, args: string[]) => {
+		simulated.calls.push(args);
 		const build = bin === "cargo";
 		const probe = args.at(-1)?.endsWith("probe.wasm");
 		simulated.now += build ? 100 : probe ? 3 : 40;
@@ -49,8 +74,17 @@ afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture() {
-	Object.assign(simulated, { now: 0, buildExit: 0, runExit: 0, rejected: false, aborted: false });
+function fixture(runtimeMode: "interpreter" | "aot" = "interpreter") {
+	Object.assign(simulated, {
+		now: 0,
+		buildExit: 0,
+		runExit: 0,
+		rejected: false,
+		aborted: false,
+		aotExit: 0,
+		aotTimeout: false,
+		calls: [],
+	});
 	vi.spyOn(performance, "now").mockImplementation(() => simulated.now);
 	// The wall clock must not affect measured phases or deadline arithmetic.
 	vi.spyOn(Date, "now").mockImplementation(() => 1_000_000 - simulated.now);
@@ -60,6 +94,7 @@ function fixture() {
 		mkdirSync(join(ws, dir), { recursive: true });
 	writeFileSync(join(ws, "cell/src/main.rs"), "fn main() {}");
 	writeFileSync(join(ws, "target/wasm32-wasip1/release/cell.wasm"), "fixture");
+	mkdirSync(join(ws, "project"));
 	const bridge = new BridgeServer({ handlers: {} });
 	vi.spyOn(bridge, "beginCell").mockImplementation(() => {
 		simulated.now += 2;
@@ -73,7 +108,7 @@ function fixture() {
 		return "commit";
 	});
 	const runner = new CellRunner({
-		cwd: ws,
+		cwd: join(ws, "project"),
 		workspaceDir: ws,
 		cargoBin: "cargo",
 		wasmedgeBin: "wasmedge",
@@ -81,6 +116,7 @@ function fixture() {
 		bridge,
 		history,
 		libraryTestGate: true,
+		runtimeMode,
 		validateSkills: async () => {
 			simulated.now += 13;
 		},
@@ -95,6 +131,26 @@ function partition(result: CellResult) {
 }
 
 describe("cell phase timing", () => {
+	it("keeps AOT compilation outside runtime execution and runs only the host artifact", async () => {
+		const { runner } = fixture("aot");
+		const result = await runner.execute({ code: "fn main() {}" });
+		partition(result);
+		expect(result).toMatchObject({ status: "ok", runtimeMode: "aot", compileMs: 120, runMs: 47 });
+		expect(result.timings).toMatchObject({ aotCompileMs: 1000, cargoMs: 100, executionMs: 40 });
+		expect(simulated.calls.at(-1)?.at(-1)).toMatch(/\.aot\/cell-.*\/cell\.aot\.wasm$/);
+		expect(simulated.calls.at(-1)).not.toContain("--force-interpreter");
+	});
+	it.each(["policy", "compiler", "timeout"])("does not execute AOT after %s failure", async (phase) => {
+		const { runner } = fixture("aot");
+		if (phase === "policy") simulated.rejected = true;
+		if (phase === "compiler") simulated.aotExit = 1;
+		if (phase === "timeout") simulated.aotTimeout = true;
+		const result = await runner.execute({ code: "fn main() {}" });
+		partition(result);
+		expect(result.status).toBe(phase === "timeout" ? "timeout" : "error");
+		expect(result.timings?.executionMs).toBe(0);
+		expect(result.aotCompileFailed).toBe(phase !== "policy");
+	});
 	it("separates admission, validation, execution, cleanup and snapshots without overlap", async () => {
 		const { runner } = fixture();
 		const first = await runner.execute({

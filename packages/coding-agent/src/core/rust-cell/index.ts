@@ -82,9 +82,14 @@ export {
 	type SyncRustSkillsResult,
 	syncRustSkills,
 } from "./workspace.js";
+
+import { normalizeRustCellRuntimeMode, type RustCellRuntimeMode } from "./runtime-mode.js";
+
+export type { RustCellRuntimeMode } from "./runtime-mode.js";
 export type { WorkspaceWritePolicy } from "./workspace-policy.js";
 
 export interface RustCellProvisionerOptions extends RuntimeResourceLimits {
+	runtimeMode?: RustCellRuntimeMode;
 	/** Linux Bubblewrap sandbox for runtime Cargo; defaults to off. */
 	cargoSandbox?: CargoSandbox;
 	/** Installed rustup toolchain for on-demand rustdoc JSON; disabled by default. */
@@ -153,6 +158,7 @@ export class RustCellProvisioner {
 			processLimits: runtimeProcessLimits(options.processLimits, options.cargoSandbox),
 			rustdocToolchain: normalizeRustdocToolchain(options.rustdocToolchain),
 			libraryTestGate: normalizeLibraryTestGate(options.libraryTestGate),
+			runtimeMode: normalizeRustCellRuntimeMode(options.runtimeMode),
 			preludeExtra: normalizePreludeExtra(options.preludeExtra),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(options.workspaceWritePolicy),
 		};
@@ -426,6 +432,7 @@ export class RustCellProvisioner {
 			cellMemoryPageLimit: this.options.cellMemoryPageLimit,
 		});
 		return new CellRunner({
+			runtimeMode: this.options.runtimeMode,
 			libraryTestGate: this.libraryTestGate,
 			workspaceWritePolicy: this.workspaceWritePolicy,
 			cwd: this.options.cwd,

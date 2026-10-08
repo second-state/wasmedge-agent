@@ -222,6 +222,7 @@ const FORBIDDEN = [
  *  a PI_* name rebranded into one of those two prefixes -- is what the pins in
  *  REQUIRED catch from the other side. */
 const PRODUCT_ENV_NAMES = new Set([
+	"WASMEDGE_AGENT_AOT_COMPILER",
 	"WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL",
 	"WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL",
 	"WASMEDGE_AGENT_BUILD_ID",

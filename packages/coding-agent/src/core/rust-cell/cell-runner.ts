@@ -2,10 +2,11 @@
  * -> structured result. DESIGN.md §2.3–§2.5. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compileAot } from "./aot.js";
 import { withBuildPermit } from "./build-gate.js";
 import { cargoArtifactPath, cargoCommand, cargoTargetDir, normalizeCargoSandbox } from "./cargo-sandbox.js";
 import { CellTimer } from "./cell-timing.js";
@@ -14,6 +15,7 @@ import { normalizeLibraryTestGate, testLibraryEdits } from "./library-tests.js";
 import { type ProcOutcome, runProcess } from "./process.js";
 import { runtimeProcessLimits } from "./process-limits.js";
 import { wasmedgeResourceArgs } from "./resource-limits.js";
+import { normalizeRustCellRuntimeMode } from "./runtime-mode.js";
 import { type CellInput, type CellResult, type PerCallOptions, type RunnerOptions, truncate } from "./types.js";
 import { validateWasiImports } from "./wasm-imports.js";
 import { type AppliedLib, applyLib, createScratchDir, ensureStateDir, revertLib } from "./workspace.js";
@@ -47,6 +49,8 @@ export class CellRunner {
 	private readonly shutdown = new AbortController();
 	private mountLibReadonly = true;
 	private probed = false;
+	private aotArtifact: string | undefined;
+	private aotCompileFailed = false;
 	private readonly opts: RunnerOptions;
 	private readonly resourceArgs: string[];
 
@@ -59,6 +63,7 @@ export class CellRunner {
 			processLimits: runtimeProcessLimits(opts.processLimits, opts.cargoSandbox),
 			workspaceWritePolicy: normalizeWorkspaceWritePolicy(opts.workspaceWritePolicy),
 			libraryTestGate: normalizeLibraryTestGate(opts.libraryTestGate),
+			runtimeMode: normalizeRustCellRuntimeMode(opts.runtimeMode),
 		};
 	}
 
@@ -67,6 +72,8 @@ export class CellRunner {
 		const queuedAt = performance.now();
 		const submitted = { code: input.code, lib: input.lib?.map((file) => ({ ...file })) };
 		const run = this.queue.then(async () => {
+			this.aotArtifact = undefined;
+			this.aotCompileFailed = false;
 			const timer = new CellTimer();
 			const result = await this.executeInner(submitted, per, timer);
 			return Object.assign(result, timer.finish(timer.started - queuedAt));
@@ -231,10 +238,12 @@ export class CellRunner {
 				: [];
 		const attachments: CellResult["attachments"] = [];
 		const sentAgentMessages: CellResult["sentAgentMessages"] = [];
+		let validatedWasm: Buffer<ArrayBuffer> | undefined;
 		try {
 			await timer.measure("importPolicyMs", async () => {
 				const wasm = await readFile(this.cellArtifact(), { signal });
 				await validateWasiImports(wasm, "cell", signal);
+				validatedWasm = wasm;
 			});
 		} catch (error) {
 			return this.result(signal.aborted ? interruptedStatus() : "error", {
@@ -260,6 +269,39 @@ export class CellRunner {
 				diffs,
 				stderr: truncate(`readonly preopen probe failed; the cell did not run\n${probe.stderr}${probe.stdout}`),
 			});
+		}
+
+		if (this.opts.runtimeMode === "aot") {
+			let aotInterrupted = false;
+			try {
+				if (!validatedWasm) throw new Error("AOT requires an inspected Wasm module");
+				const store = join(ws, ".aot");
+				assertHarnessMountsIsolated(
+					{ "/workspace": this.opts.cwd, "/agent/state": join(ws, "state"), "/scratch": createScratchDir(ws) },
+					[store],
+				);
+				mkdirSync(store, { recursive: true, mode: 0o700 });
+				const directory = mkdtempSync(join(store, "cell-"));
+				const compiled = await timer.measure("aotCompileMs", () =>
+					compileAot(this.opts, directory, validatedWasm!, remainingMs(), signal),
+				);
+				if (compiled.outcome.exitCode !== 0 || compiled.outcome.aborted || compiled.outcome.timedOut) {
+					aotInterrupted = compiled.outcome.aborted || compiled.outcome.timedOut;
+					throw new Error(`AOT compilation failed\n${compiled.outcome.stderr}${compiled.outcome.stdout}`);
+				}
+				this.aotArtifact = compiled.artifact;
+			} catch (error) {
+				this.aotCompileFailed = true;
+				return this.result(signal.aborted || aotInterrupted ? interruptedStatus() : "error", {
+					started,
+					compileMs,
+					runMs: 0,
+					libApplied,
+					libReverted: false,
+					diffs,
+					stderr: truncate(`cell did not run: ${error instanceof Error ? error.message : String(error)}`),
+				});
+			}
 		}
 
 		const bridge = this.opts.bridge;
@@ -346,7 +388,11 @@ export class CellRunner {
 	private wasmedgeArgs(cellEnv: Record<string, string> = {}): string[] {
 		const ws = this.opts.workspaceDir;
 		this.checkMounts();
-		const args: string[] = ["run", "--force-interpreter", ...this.resourceArgs];
+		const args: string[] = [
+			"run",
+			...(this.opts.runtimeMode === "aot" ? [] : ["--force-interpreter"]),
+			...this.resourceArgs,
+		];
 		const projectAccess = this.opts.workspaceWritePolicy === "ro" ? ":readonly" : "";
 		args.push("--dir", `/workspace:${realpathSync(this.opts.cwd)}${projectAccess}`);
 		if (this.mountLibReadonly) {
@@ -357,7 +403,8 @@ export class CellRunner {
 		for (const [name, value] of Object.entries(cellEnv)) {
 			args.push("--env", `${name}=${value}`);
 		}
-		args.push(this.cellArtifact());
+		if (this.opts.runtimeMode === "aot" && !this.aotArtifact) throw new Error("AOT artifact is not ready");
+		args.push(this.aotArtifact ?? this.cellArtifact());
 		return args;
 	}
 
@@ -423,6 +470,8 @@ export class CellRunner {
 	): CellResult {
 		return {
 			status,
+			runtimeMode: this.opts.runtimeMode,
+			aotCompileFailed: this.aotCompileFailed,
 			stdout: partial.stdout ?? "",
 			stderr: partial.stderr ?? "",
 			compileDiagnostics: partial.compileDiagnostics,
