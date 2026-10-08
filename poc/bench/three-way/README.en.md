@@ -4,7 +4,7 @@ Compare `prime-ts`, `prime-rust`, `wasmedge` (interpreter), and `wasmedge-aot`. 
 
 Start with the [English safety and performance report](../../../docs/rust-cell-report-2026-10-08.en.html), also available as [Markdown](../../../docs/rust-cell-report-2026-10-08.en.md). It covers architecture, safety tests, fixed programs, Opus tasks, Cargo, AOT, and the bridge.
 
-[Download the offline English package](../../../docs/assets/rust-cell-report-2026-10-08/english-report-set.zip) to read the saved dashboards and linked CSV tables. Extract it and open `docs/rust-cell-report-2026-10-08.en.html`. Raw evidence links require the original local run directories.
+[Standalone English report](../../../docs/rust-cell-report-2026-10-08.en.html). Download that one HTML file and open it locally. It includes conclusions, charts, key tables, and timing definitions. No ZIP or other files are required.
 
 ## Requirements and commands
 
@@ -90,4 +90,6 @@ Charts show either per-run totals or the average per successful cell, in ms, the
 uv run --with markdown==3.10.2 python poc/bench/english-report.py
 ```
 
-This creates additional `.en.md`/`.en.html` reports, `report.en.html` dashboard copies, a validation record, and an offline ZIP. It does not modify Chinese reports, reanalyze measurements, or call models. Dashboard data scripts are copied byte-for-byte. Raw traces and code keep their original language. Start with `docs/rust-cell-report-2026-10-08.en.html` after extracting the ZIP. Raw evidence/source links require the full repository archive.
+This rebuilds both standalone reports and the nine English supporting readers. It reads tracked prose, aggregate data, and SVGs; it does not rerun experiments or call a model. Share `docs/rust-cell-report-2026-10-08.en.html` directly. Original dashboards, screenshots, provider records, and generated task outputs stay local.
+
+`poc/bench/results/` stays ignored. Git keeps the standalone readers, compact aggregate data, SVGs, templates, and scripts. PNG screenshots, raw traces, generated outputs, and dashboards remain local. `npm run check:benchmark-reports` validates links and the standalone readers. Rebuild with `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py`; it needs no raw results and makes no model calls.

@@ -2,9 +2,9 @@
 
 新增 `wasmedge-aot` 第四組；原 `wasmedge` 維持 interpreter。兩組均使用更新後的 bridge，原三組 campaign 與其原始檔案保留。
 
-- [四組固定程式圖形報表](../poc/bench/results/four-way-aot-bridge-runtime-01/report.html)：6 cases × 4 variants × 3 repetitions，72/72 通過，0 付費 requests。
-- [四組 Opus 5.5 圖形報表](../poc/bench/results/four-way-opus55-aot-bridge-01/report.html)：4 tasks × 4 variants × 1 repetition，16/16 通過，共 70 次模型 requests；完整付費來源、SSE、工具與 checker 紀錄保留。
-- [Bridge 前後交錯量測](../poc/bench/results/bridge-readiness-diagnostic-20261008-01/measurements.json)、[median CSV](../poc/bench/results/bridge-readiness-diagnostic-20261008-01/summary.csv)。
+- [固定程式統整圖表](rust-cell-report-2026-10-08.md#runtime)：6 cases × 4 variants × 3 repetitions，72/72 通過，0 付費 requests。
+- [Opus 任務統整圖表](rust-cell-report-2026-10-08.md#tasks)：4 tasks × 4 variants × 1 repetition，16/16 通過，共 70 次模型 requests；完整付費來源、SSE、工具與 checker 紀錄保留。
+- Bridge 前後交錯量測（本機保存的證據）、median CSV（本機保存的證據）。
 
 ## 固定程式的 cell 執行時間
 

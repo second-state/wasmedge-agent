@@ -4,7 +4,7 @@ Runner、trace collector、runtime adapters 與可篩選 HTML/CSV 已實作。�
 
 協定修正：首輪 `three-way-opus55-smoke-01` 允許 native tools，WasmEdge 的 E03/E08/E11 只走 bash；這些結果不能回答 Python cell/runtime 對 Rust cell/Wasm runtime 的問題。其原始資料保留，但整輪排除於 cell 對照。下方舊圖形與扣除驗證數字是修正前的歷史紀錄；目前重新生成的舊報表已顯示排除原因。新實驗改為每回合強制 cell、禁止 shell 委派，並把共同 checker 時間獨立列出。
 
-操作方式見 [runner README](../poc/bench/three-way/README.md)，完整設計見 [實驗設計](benchmark-three-way-design-2026-10-08.md)。原始資料與付費產出保存在 gitignored `poc/bench/results/`，以下連結指向本機保存的檔案。
+操作方式見 [runner README](../poc/bench/three-way/README.md)，完整設計見 [實驗設計](benchmark-three-way-design-2026-10-08.md)。結論、圖表與重要數據見 [單檔統整報告](rust-cell-report-2026-10-08.html)。歷史 dashboard、CSV、診斷、PNG、provider requests、SSE、sessions 與生成的任務產出保留於本機。
 
 ## 固定輸入
 
@@ -24,11 +24,11 @@ Prime Rust 的改寫範圍是 host，其 cell runtime 仍為 Python。R lane 的
 
 | Campaign | Slots | 結果 | 付費 requests | 報表 |
 |---|---:|---|---:|---|
-| `three-way-local-02` | 57 | R 48/48；H 6 pass、2 fail、1 不適用 | 0 | [H/R report](../poc/bench/results/three-way-local-02/report.html) |
-| `three-way-opus55-smoke-01` | 12 | 4 tasks × 3 variants，全數通過 checker | 54 | [Opus report](../poc/bench/results/three-way-opus55-smoke-01/report.html) |
-| `three-way-opus55-cell-smoke-01` | 12 | 4 tasks × 3 variants；checker 與逐回合 cell 契約皆 12/12 通過 | 50 | [Cell 對照 report](../poc/bench/results/three-way-opus55-cell-smoke-01/report.html) |
-| `three-way-command-profile-check` | 1 | fork R01 通過，保存 48 個 Cargo/rustc command spans | 0 | [profiling report](../poc/bench/results/three-way-command-profile-check/report.html) |
-| `three-way-edit-phase-check` | 3 | R06 三版本通過；read/transform/write/verify 四段皆量測到 | 0 | [edit report](../poc/bench/results/three-way-edit-phase-check/report.html) |
+| `three-way-local-02` | 57 | R 48/48；H 6 pass、2 fail、1 不適用 | 0 | H/R report（本機保存的證據） |
+| `three-way-opus55-smoke-01` | 12 | 4 tasks × 3 variants，全數通過 checker | 54 | Opus report（本機保存的證據） |
+| `three-way-opus55-cell-smoke-01` | 12 | 4 tasks × 3 variants；checker 與逐回合 cell 契約皆 12/12 通過 | 50 | Cell 對照 report（本機保存的證據） |
+| `three-way-command-profile-check` | 1 | fork R01 通過，保存 48 個 Cargo/rustc command spans | 0 | profiling report（本機保存的證據） |
+| `three-way-edit-phase-check` | 3 | R06 三版本通過；read/transform/write/verify 四段皆量測到 | 0 | edit report（本機保存的證據） |
 
 付費 tasks 為 `03-fix-bug`、`08-rust-rename`、`09-helper-accumulation`、`11-join-report`。12/12 是 12 個 runs 的 correctness，並非全部 12 種 E tasks 已實跑。其餘 E cases 仍需另建 plan 執行。
 
@@ -37,10 +37,10 @@ Prime Rust 的改寫範圍是 host，其 cell runtime 仍為 Python。R lane 的
 - `benchmark-three-way.test.ts` 15/15 通過；使用 faux HTTP/SSE，不呼叫付費 provider。
 - 以上 73 slots 的 6,187 個 spans 全數通過 Draft 2020-12 schema；report 的跨 span/parent/clock integrity errors 為 0。
 - R06 四段 duration 總和均落在 inclusive edit transaction 內；寫入段只包含 write/close，沒有包含 read/match/verification，也沒有宣稱 fsync durability。
-- 報表的 variant/case/phase/state 篩選已用瀏覽器驗證，保存 [篩選截圖](../poc/bench/results/three-way-opus55-smoke-01/report-filtered.png)。
+- 報表的 variant/case/phase/state 篩選已用瀏覽器驗證，保存 篩選截圖。
 - 675 個付費實驗檔案檢查到實際 API key 的次數為 0；檢查略過 build outputs。憑證不寫入 agent config、child env、manifest 或 command line。
 
-機器可讀驗證紀錄：[trace/stream/edit audit](../poc/bench/results/three-way-validation-2026-10-08.json)、[credential audit](../poc/bench/results/three-way-opus55-smoke-01/credential-artifact-audit.json)。各 run 保留原始 SSE、decoded tool arguments、CLI/session logs、修改後專案、checker 與 failure records。
+機器可讀驗證紀錄：trace/stream/edit audit（本機保存的證據）、credential audit（本機保存的證據）。各 run 保留原始 SSE、decoded tool arguments、CLI/session logs、修改後專案、checker 與 failure records。
 
 ## 已觀測的失敗與比較限制
 
@@ -60,7 +60,7 @@ H03 在 native Rust CLI 不適用：該版僅公開 runtime tool，沒有獨立 
 
 12 根 Opus latency bars 與原 report 的成功 median 完全一致；H02 兩個 failure 保持 `null` success median，penalized mean 各為 90,000 ms；H03 native Rust 保持 N/A。390px、320px 的頁面無橫向溢出，寬圖表在區塊內滑動；熱圖、時間軸點選與 SVG 下載通過實際瀏覽器驗證。新增的圖表資料與 HTML 嵌入測試使 collector tests 為 18/18。
 
-保存 [桌面截圖](../poc/bench/results/three-way-opus55-smoke-01/report-charts-desktop.png)、[階段熱圖](../poc/bench/results/three-way-opus55-smoke-01/report-phase-heatmap.png)、[手機截圖](../poc/bench/results/three-way-opus55-smoke-01/report-charts-mobile.png)、[SVG](../poc/bench/results/three-way-opus55-smoke-01/latency-chart.svg) 與 [圖表核對紀錄](../poc/bench/results/three-way-opus55-smoke-01/report-visual-audit.json)。
+保存 桌面截圖、階段熱圖、手機截圖、SVG（本機保存的證據） 與 圖表核對紀錄（本機保存的證據）。
 
 ## 扣除 compilation 比較
 
@@ -70,7 +70,7 @@ H03 在 native Rust CLI 不適用：該版僅公開 runtime tool，沒有獨立 
 
 25/25 collector tests 與 `npm run check` 通過；測試涵蓋逐次扣除後 median、原始樣本配對、編譯失敗嘗試、inclusive/child 防重複、缺失/重複 observations、重疊 clocks、負值與 export。桌面 12 根 bars 與原始資料完全一致，user/log 切換、compile trace drill-down、案例聚焦、重設與 SVG 匯出通過瀏覽器驗證；390px、320px 無頁面橫向溢出，圖表與表格在區塊內滑動。未新增付費 requests。
 
-保存 [桌面截圖](../poc/bench/results/three-way-opus55-smoke-01/report-without-compilation-desktop.png)、[手機截圖](../poc/bench/results/three-way-opus55-smoke-01/report-without-compilation-mobile.png)、[SVG](../poc/bench/results/three-way-opus55-smoke-01/compilation-chart.svg)、[逐次 CSV](../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-runs.csv) 與 [核對紀錄](../poc/bench/results/three-way-opus55-smoke-01/compilation-adjusted-audit.json)。
+保存 桌面截圖、手機截圖、SVG（本機保存的證據）、逐次 CSV（本機保存的證據） 與 核對紀錄（本機保存的證據）。
 
 ## 修正後的 Python cell / Rust cell 控制實驗
 
@@ -91,13 +91,13 @@ H03 在 native Rust CLI 不適用：該版僅公開 runtime tool，沒有獨立 
 
 29/29 collector tests 與 `npm run check` 通過。新 1,008 個 spans 全數通過 trace schema，跨 span/parent/clock integrity errors 為 0；12 個 runs 的 JSON/CSV 扣除算術全部一致，checker 起點皆在 agent elapsed 終點之後。5,354 個非 build/runtime-cache 檔案未找到實際 API key。
 
-已用瀏覽器驗證十二組 agent/linear 長條、E11 user/log 長條、編譯 trace drill-down、案例篩選、重設與 SVG 匯出；390px/320px 沒有頁面橫向溢出，寬圖表與明細在區塊內滑動。保存 [完整圖](../poc/bench/results/three-way-opus55-cell-smoke-01/report-cell-all-cases.png)、[表格與扣除說明](../poc/bench/results/three-way-opus55-cell-smoke-01/report-cell-compilation-desktop.png)、[手機圖](../poc/bench/results/three-way-opus55-cell-smoke-01/report-cell-compilation-mobile-390.png)、[SVG](../poc/bench/results/three-way-opus55-cell-smoke-01/compilation-chart.svg)、[cell/trace/credential 稽核](../poc/bench/results/three-way-opus55-cell-smoke-01/cell-runtime-audit.json) 與 [視覺核對](../poc/bench/results/three-way-opus55-cell-smoke-01/report-visual-audit.json)。所有付費 response、生成程式碼、events、專案產物與 checker logs 保存於此新 campaign；沒有覆寫舊原始 run。
+已用瀏覽器驗證十二組 agent/linear 長條、E11 user/log 長條、編譯 trace drill-down、案例篩選、重設與 SVG 匯出；390px/320px 沒有頁面橫向溢出，寬圖表與明細在區塊內滑動。保存 完整圖、表格與扣除說明、手機圖、SVG（本機保存的證據）、cell/trace/credential 稽核（本機保存的證據） 與 視覺核對（本機保存的證據）。所有付費 response、生成程式碼、events、專案產物與 checker logs 保存於此新 campaign；沒有覆寫舊原始 run。
 
 ## 慢因分析：初始化編譯與模型 trajectory
 
 本輪四個 WasmEdge runs 在 task 開始至第一個 gateway request 間花 5.195–5.916 s；Prime TS 為 0.510–0.538 s、Prime Rust 為 0.032–0.037 s。這段初始化包含於 agent elapsed，但不在 `cell.compile` 的 scope。主 agent 在 session creation 開啟 `prewarmRustWorkspace`；同步 toolchain/workspace/skill 處理會阻塞同一 Node event loop，即使入口是 fire-and-forget prewarm，也未在模型呼叫前完成背景並行。
 
-檢查實際 workspace 發現，預置 template 未含內建 `websearch` skill，正式 session 的 agent_lib 卻掛載此 skill。`syncRustSkills` 在新 workspace 執行 `cargo build --release -p agent_lib` 的 probe build。無付費模型的獨立診斷用正式 RustCellProvisioner，在六個全新、各自隔離的 workspace 交替測試三次無 skill、三次同一 websearch skill：無 skill 初始化 0.346–0.389 s；掛 skill 4.612–5.048 s，其中 probe Cargo 4.241–4.650 s。Cargo stderr 顯示 regex、serde、rlm、websearch、agent_lib 等重編，template 預暖並沒有讓這次 build 全部命中 cache。保存並重開既有 workspace 約 0.049–0.055 s（掛 skill 的三筆），不重新執行 probe Cargo。診斷有 wrappers，沒有做 overhead audit，不能把其時間直接從原付費 run 扣除或宣告普遍 speedup。[診斷原始資料](../poc/bench/results/startup-diagnostic-20261008-01/startup-profile.json)
+檢查實際 workspace 發現，預置 template 未含內建 `websearch` skill，正式 session 的 agent_lib 卻掛載此 skill。`syncRustSkills` 在新 workspace 執行 `cargo build --release -p agent_lib` 的 probe build。無付費模型的獨立診斷用正式 RustCellProvisioner，在六個全新、各自隔離的 workspace 交替測試三次無 skill、三次同一 websearch skill：無 skill 初始化 0.346–0.389 s；掛 skill 4.612–5.048 s，其中 probe Cargo 4.241–4.650 s。Cargo stderr 顯示 regex、serde、rlm、websearch、agent_lib 等重編，template 預暖並沒有讓這次 build 全部命中 cache。保存並重開既有 workspace 約 0.049–0.055 s（掛 skill 的三筆），不重新執行 probe Cargo。診斷有 wrappers，沒有做 overhead audit，不能把其時間直接從原付費 run 扣除或宣告普遍 speedup。診斷原始資料（本機保存的證據）
 
 E11 的兩個 Node host 對照如下，單位為秒。模型欄是完整 HTTP request 等待＋串流，不是服務端純生成時間。區間均裁切於 task.agent_elapsed，HTTP 取 union，工具窗口排除與 HTTP 的重疊，其餘保留為未細分等待；不把嵌套 cell/compiler 子步驟再加上去。
 
@@ -111,7 +111,7 @@ E11 的兩個 Node host 對照如下，單位為秒。模型欄是完整 HTTP re
 
 WasmEdge E11 的 0.483 s 工具窗口內，cell Cargo 合計 0.353 s、execution 0.021 s、snapshot 0.076 s；execution 含程序啟動、I/O 與 host handlers，不能當純 guest CPU。Python 的 kernel execute summaries 合計 4 ms，也不是同一個拆分契約。Wasm 執行本身沒有解釋 8.663 s 的整體差距。模型 trajectory 也不同：E11 兩者各三次 HTTP calls，Rust cell requests 的輸出合計 774 tokens，Python 合計 341（含 tool arguments），整輪分別 876/439。Rust 首次 prompt 9,241 tokens，Python 11,520，不能把本輪模型較慢概括成 Rust prompt 較長；API 排隊、cache、prefill 與 generation 尚無服務端獨立 hooks。
 
-E08 Rust 首次使用未直接可見的 `walkdir::WalkDir` 而編譯失敗，隨後改 std::fs 修正，多一次 cell/model request；Rust 3 calls、Python 2 calls。E09 則 Rust 三個 cells 無失敗、6 次 HTTP，Prime TS 八個 cells 含兩次 API 錯誤、11 次 HTTP，Rust 27.863 s 比 TS 38.656 s 快；並非每個案例 Rust 都較慢。產生 cell 的編譯、模型修正成本、初始化編譯與 warm-session 執行必須分開評分。[十二個 runs 的完整分段與 usage](../poc/bench/results/three-way-opus55-cell-smoke-01/latency-attribution.json)
+E08 Rust 首次使用未直接可見的 `walkdir::WalkDir` 而編譯失敗，隨後改 std::fs 修正，多一次 cell/model request；Rust 3 calls、Python 2 calls。E09 則 Rust 三個 cells 無失敗、6 次 HTTP，Prime TS 八個 cells 含兩次 API 錯誤、11 次 HTTP，Rust 27.863 s 比 TS 38.656 s 快；並非每個案例 Rust 都較慢。產生 cell 的編譯、模型修正成本、初始化編譯與 warm-session 執行必須分開評分。十二個 runs 的完整分段與 usage（本機保存的證據）
 
 Smoke 的 12 runs 是四案例 × 三版本 × 一次，不是每組十二次。它可支持本輪 latency、錯誤與初始化機制的診斷，不能估計每組模型/排隊變異或穩定勝率；`median` 在 n=1 時就是單筆值。正式單 Opus 比較需更多 tasks 與配對 repetitions，依 pilot variance 決定樣本、報 confidence intervals，並先完成量測 overhead 審核與初始化 Cargo coverage。這不撤回已觀測的慢因與正確性結果。
 
@@ -151,11 +151,11 @@ Cell 表的數字單位 ms；合計包含 runtime 失敗成本，compile 失敗�
 
 30 個針對 benchmark 的測試與 root npm run check 通過，包含並行 Cargo 聯集、跨邊界裁切、歷史資料不可補零、缺失／重複 command 與 clock proof、Python sub-resolution 與 Rust runtime/compile failures。這次每組仍只有一次，overhead 未審核；保存實測數字，不宣告普遍效能勝負。
 
-[新版離線圖形報表](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.html) · [Cargo/Cell 逐筆驗證](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/all-cargo-cell-audit.json) · [全部 Cargo 扣除 CSV](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/compilation-adjusted-runs.csv) · [Cell 執行 CSV](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-runs.csv)。
+新版離線圖形報表（本機保存的證據） · Cargo/Cell 逐筆驗證（本機保存的證據） · 全部 Cargo 扣除 CSV（本機保存的證據） · Cell 執行 CSV（本機保存的證據）。
 
-圖形報表已以隔離 agent-browser 實際檢查桌面 1440px 與手機 390px / 320px，無整頁水平溢出、JavaScript errors 為零。期間切換與 E08 checker 位於 agent 期間外的零扣除原因已核對；cell 表可點入對應 runtime trace。[畫面驗證](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report-visual-audit.json) · [Cargo 桌面截圖](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cargo-report-desktop.png) · [Cell 執行表截圖](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-desktop.png)。
+圖形報表已以隔離 agent-browser 實際檢查桌面 1440px 與手機 390px / 320px，無整頁水平溢出、JavaScript errors 為零。期間切換與 E08 checker 位於 agent 期間外的零扣除原因已核對；cell 表可點入對應 runtime trace。畫面驗證（本機保存的證據） · Cargo 桌面截圖 · Cell 執行表截圖。
 
-Cell 表已補上三版本並排長條圖，可切換每 run 執行合計與成功 cell 平均（先逐 run 計算、再取 median），固定 ms 並提供 linear/log、案例／版本篩選、點長條聚焦與 SVG 匯出。兩種指標的 12 組圖表數值全部對照既有 runtime rows 一致，1440px / 390px / 320px 無整頁水平溢出，JavaScript errors 為零；這次只重新產生離線報表，沒有新增付費模型 requests。[Cell 圖表驗證](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-chart-visual-audit.json) · [桌面圖表截圖](../poc/bench/results/three-way-opus55-all-cargo-smoke-01/cell-execution-chart-desktop.png)。
+Cell 表已補上三版本並排長條圖，可切換每 run 執行合計與成功 cell 平均（先逐 run 計算、再取 median），固定 ms 並提供 linear/log、案例／版本篩選、點長條聚焦與 SVG 匯出。兩種指標的 12 組圖表數值全部對照既有 runtime rows 一致，1440px / 390px / 320px 無整頁水平溢出，JavaScript errors 為零；這次只重新產生離線報表，沒有新增付費模型 requests。Cell 圖表驗證（本機保存的證據） · 桌面圖表截圖。
 
 ## Cell runtime 慢因診斷
 

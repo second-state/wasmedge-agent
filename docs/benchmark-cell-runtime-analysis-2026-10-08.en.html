@@ -1,6 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Why Rust/Wasm Cells Took Longer</title><style>
-:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Why Rust/Wasm Cells Took Longer</title><style>:root{color-scheme:light;--ink:#203043;--muted:#53677c;--line:#dbe3ec;--accent:#167d57}
 *{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif}
 a{color:#146950;text-underline-offset:3px}a:hover{color:#0c4f6f}.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 5%;background:#203043;color:white;font-size:14px}
 .layout{max-width:1600px;margin:auto;display:grid;grid-template-columns:235px minmax(0,1fr);gap:40px;padding:34px 32px}
@@ -17,9 +16,17 @@ li{margin:9px 0}ul{padding-left:25px}footer{padding:20px;text-align:center;color
 @media(max-width:560px){.layout{padding:12px}main{padding:22px 18px}h1{font-size:29px}h2{font-size:23px}body{font-size:15px}.panel{padding:12px 8px;margin-left:-4px;margin-right:-4px}.controls{gap:12px}label{max-width:100%}}
 @media print{body{background:white}.topbar,nav,.controls,footer{display:none}.layout{display:block;padding:0}main{border:0;padding:0}.chart svg{min-width:0}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}h2{break-after:avoid}figure,tr{break-inside:avoid}}
 
-main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}pre code{display:block;width:max-content;padding:0;background:transparent;white-space:pre;overflow-wrap:normal}</style></head>
-<body><div class="topbar">WasmEdge Agent · English Report<button type="button" class="print" onclick="window.print()">Print</button></div>
-<div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#1-execution-boundaries">1. Execution boundaries</a><a href="#2-fixed-cost-for-a-near-empty-cell">2. Fixed cost for a near-empty cell</a><a href="#3-interpreter-costs-inside-the-program">3. Interpreter costs inside the program</a><a href="#4-reproducible-bridge-polling-delay">4. Reproducible bridge polling delay</a><a href="#5-explanation-of-the-paid-cases">5. Explanation of the paid cases</a><a href="#6-priorities-and-saved-evidence">6. Priorities and saved evidence</a></nav><main><h1 id="why-rust-wasm-cells-took-longer">Why Rust/Wasm Cells Took Longer</h1>
+main{overflow-wrap:anywhere}main>p:nth-of-type(2){background:none;border:0;padding:0}
+.overview{border:1px solid #b2d4c3;border-radius:8px;padding:20px;background:#edf6f1;margin:20px 0}
+.overview table{min-width:0}.overview th{background:#dcefe4}.overview td{padding:12px}
+.cell-chart{display:grid;grid-template-columns:1fr 1fr;gap:24px}.cell-case{min-width:0}.cell-case h4{margin:0 0 8px}.cell-row{margin:12px 0}.cell-label{display:flex;justify-content:space-between;gap:10px;font-size:13px}.cell-track{background:#eef2f6;border-radius:3px;height:12px;margin-top:4px}.cell-bar{height:100%;border-radius:3px}
+details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:16px;background:#eef2f6}pre code{white-space:pre;overflow-wrap:normal}
+@media(max-width:560px){.overview{padding:12px}.overview table{font-size:13px}.overview td,.overview th{padding:8px}.cell-chart{grid-template-columns:1fr}.chart svg{min-width:640px}}
+@media print{details{display:block}.overview{break-inside:avoid}.cell-chart{grid-template-columns:1fr 1fr}}
+.overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
+@media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
+@media(max-width:560px){.overview thead{display:none}.overview tr{display:block;border-bottom:1px solid var(--line)}.overview tr:last-child{border:0}.overview td{display:block;border:0;padding:6px 0}.overview td:first-child{font-weight:700;padding-top:12px}.overview td:last-child{padding-bottom:14px;color:var(--muted)}}
+</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">Print</button></div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#1-execution-boundaries">1. Execution boundaries</a><a href="#2-fixed-cost-for-a-near-empty-cell">2. Fixed cost for a near-empty cell</a><a href="#3-interpreter-costs-inside-the-program">3. Interpreter costs inside the program</a><a href="#4-reproducible-bridge-polling-delay">4. Reproducible bridge polling delay</a><a href="#5-explanation-of-the-paid-cases">5. Explanation of the paid cases</a><a href="#6-priorities-and-saved-evidence">6. Priorities and saved evidence</a></nav><main><h1 id="why-rust-wasm-cells-took-longer">Why Rust/Wasm Cells Took Longer</h1>
 <p>This is the diagnosis <strong>before</strong> the AOT and readiness update. In its four paid cases, Rust/Wasm cell execution took longer. The main causes were a new WasmEdge CLI process per cell, forced interpreter mode, and bridge polling in some operations. Cargo was already excluded from the cell chart.</p>
 <p>The diagnosis used saved paid sources/traces and local fixed-program controls. It made <strong>zero new paid requests</strong> and did not change the product runtime or original paid records. See the <a href="benchmark-aot-bridge-2026-10-08.en.html">later AOT and bridge report</a> for the implemented changes.</p>
 <h2 id="1-execution-boundaries">1. Execution boundaries</h2>
@@ -50,7 +57,7 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 </tbody>
 </table></div>
 <p>Rust <code>cell.execution</code> excludes Cargo, workspace initialization, the read-only probe, import inspection, snapshots, and bridge cleanup. It includes process startup, module load, VM setup, guest work, stdout/stdio bridge, and process exit. Python startup is separate and is reused. The chart measures actual per-cell product costs, not language-body execution alone.</p>
-<p>Relevant source is in the <a href="../packages/coding-agent/src/core/rust-cell/cell-runner.ts">cell runner</a>, <a href="../packages/coding-agent/src/core/rust-cell/process.ts">process runner</a>, and the saved pinned upstream kernels under <code>poc/bench/results/three-way-inputs/</code>.</p>
+<p>Relevant source is in the <a href="../packages/coding-agent/src/core/rust-cell/cell-runner.ts">cell runner</a>, <a href="../packages/coding-agent/src/core/rust-cell/process.ts">process runner</a>, pinned <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts">Python TS kernel</a>, and pinned <a href="https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs">Python Rust-host kernel</a>.</p>
 <h2 id="2-fixed-cost-for-a-near-empty-cell">2. Fixed cost for a near-empty cell</h2>
 <p>R16 ran 100 marker-only cells in each variant without a model:</p>
 <div class="table-scroll"><table>
@@ -229,8 +236,6 @@ main{overflow-wrap:anywhere}pre{overflow-x:auto;padding:16px;background:#eef2f6}
 <li>Test trusted AOT/reuse for JSON and regex, or native host services. Report compilation and amortization separately. Host services still incur bridge and serialization costs.</li>
 <li>Define lifetimes for reusable helpers, data, and compiled regex. Persistent Python and new Wasm processes have different cache behavior.</li>
 </ol>
-<p>Evidence: <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/measurements.json">main measurements</a>, <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/diagnostic-source.mjs">reproducible source</a>, <a href="../poc/bench/results/cell-runtime-diagnostic-20261008-02/aot-control/measurements.json">same-artifact AOT control</a>, and <a href="../poc/bench/results/three-way-opus55-all-cargo-smoke-01/report.en.html">original paid dashboard</a>.</p>
+<p>Evidence: main measurements (retained local evidence), reproducible source (retained local evidence), same-artifact AOT control (retained local evidence), and original paid dashboard (retained local evidence).</p>
 <p>The main diagnosis saved 272 Rust/process and 136 Python samples, including warmups. The AOT control saved 136 samples. Each comparison excludes two warmups and uses the median of 15 measured samples.</p>
-<p><code>cell-runtime-diagnostic-20261008-01</code> stopped after a regex-escape error in the diagnostic script. It is saved and excluded. Valid controls come from <code>-02</code>, with hashes, output, assertions, and completion markers. No profiler-overhead audit or cross-machine validation was done. The results concern these programs on this host with WasmEdge 0.14.1.</p></main></div>
-<footer>English reading edition. Values and evidence come from saved reports. Raw traces and code keep their original language.</footer>
-</body></html>
+<p><code>cell-runtime-diagnostic-20261008-01</code> stopped after a regex-escape error in the diagnostic script. It is saved and excluded. Valid controls come from <code>-02</code>, with hashes, output, assertions, and completion markers. No profiler-overhead audit or cross-machine validation was done. The results concern these programs on this host with WasmEdge 0.14.1.</p></main></div><footer>Standalone report. All decision tables and charts are embedded; no model calls were made to build this reader.</footer></body></html>

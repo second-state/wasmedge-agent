@@ -11,6 +11,7 @@ wasmedge-agent-runtime/template.prepare-owner*
 !examples/showcase/project/logs/*.log
 .DS_Store
 poc/bench/results/
+docs/assets/rust-cell-report-2026-10-08/*.zip
 *.tsbuildinfo
 # packages/*/node_modules/
 packages/*/dist/

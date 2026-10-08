@@ -743,6 +743,14 @@ const ALLOWLIST = [
 			"the three-version experiment names the two upstream products and links their pinned source revisions (rule R1); only the upstream product label and upstream source URLs are exempt, not this fork's own branding",
 	},
 	{
+		glob: "docs/benchmark-cell-runtime-analysis-2026-10-08.*",
+		allow: [
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/7d442aafa985f9342134fac16c2ef41f03fb45c1\/packages\/coding-agent\/src\/core\/kernel\/repl-manager\.ts/,
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/blob\/967eb13fd488507af5f590e9c6ea8b2672f1fc05\/crates\/pa-core\/src\/kernel\/manager\/requests\.rs/,
+		],
+		reason: "the runtime diagnosis cites the exact upstream kernel sources measured by the two Python baselines (rule R1); public pinned URLs replace links into ignored local upstream checkouts",
+	},
+	{
 		glob: "docs/benchmark-three-way-plan.json",
 		allow: [/"https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent"/],
 		reason:
