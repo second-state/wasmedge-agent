@@ -1,3 +1,5 @@
+import type { WorkloadSpec } from "./workloads/cases.js";
+
 export const VARIANTS = ["prime-ts", "prime-rust", "wasmedge", "wasmedge-aot"] as const;
 export type VariantId = (typeof VARIANTS)[number];
 export const isWasmVariant = (id: string): boolean => id === "wasmedge" || id === "wasmedge-aot";
@@ -25,7 +27,7 @@ export interface Variant {
 }
 
 export interface Provider {
-	api: "openai-completions";
+	api: "openai-completions" | "anthropic-messages";
 	baseUrl: string;
 	modelId: string;
 	modelIdentity: "advertised-id-not-independent-revision-verification";
@@ -71,6 +73,7 @@ export interface ReplayStep {
 }
 
 export interface Case {
+	workload?: WorkloadSpec;
 	id: string;
 	lane: Lane;
 	scale: string;
@@ -81,13 +84,19 @@ export interface Case {
 	fixture: Record<string, string>;
 	replay?: Partial<Record<VariantId, ReplayStep[]>>;
 	tools?: "none" | "bash" | "native" | "runtime-only";
-	check: { kind: "existing" } | { kind: "file"; path: string; content: string } | { kind: "marker"; value: string };
+	check:
+		| { kind: "existing" }
+		| { kind: "workload" }
+		| { kind: "file"; path: string; content: string }
+		| { kind: "marker"; value: string };
 	expectedCellOutcomes?: string[];
 	parameters: Record<string, unknown>;
 	runtime?: Partial<Record<VariantId, RuntimeStep[]>>;
 }
 
 export interface RuntimeStep {
+	workloadBatch?: number;
+	warmup?: boolean;
 	op: "execute" | "snapshot" | "restore" | "restart" | "clear-target";
 	code?: string;
 	lib?: { path: string; content: string }[];

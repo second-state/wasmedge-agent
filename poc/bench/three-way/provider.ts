@@ -20,15 +20,24 @@ export function credentials(env: NodeJS.ProcessEnv = process.env): { baseUrl: st
 
 export async function discoverProvider(
 	requestedId?: string,
+	api: Provider["api"] = "openai-completions",
 ): Promise<{ provider: Provider; discovery: Record<string, unknown> }> {
 	const { baseUrl, apiKey } = credentials();
-	const bases = [...new Set([baseUrl, ...(baseUrl.endsWith("/v1") ? [] : [`${baseUrl}/v1`, `${baseUrl}/api/v1`])])];
+	const bases =
+		api === "anthropic-messages"
+			? [baseUrl.replace(/\/v1$/, "")]
+			: baseUrl.endsWith("/v1")
+				? [baseUrl]
+				: [`${baseUrl}/v1`, `${baseUrl}/api/v1`, baseUrl];
 	const probes: Record<string, unknown>[] = [];
 	for (const candidate of bases) {
 		let response: Response;
 		try {
-			response = await fetch(`${candidate}/models`, {
-				headers: { Authorization: `Bearer ${apiKey}` },
+			response = await fetch(`${candidate}${api === "anthropic-messages" ? "/v1" : ""}/models`, {
+				headers:
+					api === "anthropic-messages"
+						? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+						: { Authorization: `Bearer ${apiKey}` },
 				signal: AbortSignal.timeout(30_000),
 			});
 		} catch {
@@ -62,7 +71,7 @@ export async function discoverProvider(
 		}
 		return {
 			provider: {
-				api: "openai-completions",
+				api,
 				baseUrl: candidate,
 				modelId,
 				modelIdentity: "advertised-id-not-independent-revision-verification",
@@ -70,6 +79,7 @@ export async function discoverProvider(
 				maxTokens: 16_384,
 			},
 			discovery: {
+				api,
 				discoveredAt: new Date().toISOString(),
 				endpointSha256: sha256(candidate),
 				modelId,
@@ -83,14 +93,27 @@ export async function discoverProvider(
 	throw new Error(`No JSON model catalog at the provider base URL; probes: ${JSON.stringify(probes)}`);
 }
 
-export function modelsConfig(baseUrl: string, modelId: string, maxTokens = 16_384): Record<string, unknown> {
+export function modelsConfig(
+	baseUrl: string,
+	modelId: string,
+	maxTokens = 16_384,
+	api: Provider["api"] = "openai-completions",
+): Record<string, unknown> {
 	return {
 		providers: {
 			benchmark: {
-				api: "openai-completions",
+				api,
 				baseUrl,
 				apiKey: "BENCH_GATEWAY_TOKEN",
-				compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+				...(api === "openai-completions"
+					? {
+							compat: {
+								supportsDeveloperRole: false,
+								supportsReasoningEffort: false,
+								maxTokensField: "max_tokens",
+							},
+						}
+					: {}),
 				models: [
 					{ id: modelId, name: modelId, reasoning: false, input: ["text"], contextWindow: 200_000, maxTokens },
 				],

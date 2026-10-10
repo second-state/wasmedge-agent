@@ -1,5 +1,11 @@
 # Four-Way Agent Benchmark Runner
 
+Use `--suite workloads-e2e` or `E-N01-graph,E-N03-events,E-N04-simulation` for model-generated versions of the new workloads. No reference solution is supplied. Independent checkers validate all outputs and input integrity. Numeric packages are excluded. E2E currently supports cold workspaces only; warm is rejected until a model warmup policy is defined. Analysis adds `workloads-e2e.html/json`, separate from preserved fixed-program results. See the [Opus E2E record](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md).
+
+Workload readers, task explanations and column definitions are in English. E2E includes five charts: full validated time, minus Cargo/AOT, minus Cargo/AOT and model requests, model request sum, and runtime execution. Deductions merge verified intervals per run before taking medians, so compiler/model overlap is counted once. The model-excluded remainder retains host, I/O, snapshots and validation; it is not a model-free rerun or pure compute. Analyze reuses saved traces without making model requests.
+
+For Claude Platform use `discover --api anthropic-messages --model claude-opus-5-5` with the service root base URL (a trailing `/v1` is accepted; omit `/messages`). Native Messages requests and SSE are forwarded unchanged using x-api-key authentication. Original usage is retained; input totals include uncached, cache creation and cache read tokens. Default OpenAI-compatible discovery prefers `/v1`, then `/api/v1`, then the original base. A working root model catalog does not prove the root completion endpoint works. Requests retain HTTP status, SSE model/completion IDs and usage. These are service-advertised identity evidence, not independent backend revision verification.
+
 Compare `prime-ts`, `prime-rust`, `wasmedge` (interpreter), and `wasmedge-aot`. The model route is `anthropic/claude-opus-5-5`, with reasoning off. This ID comes from the service catalog. An immutable backend revision is not independently verified. The older A/B/F harness and D20/D21 rules remain separate.
 
 Start with the [English safety and performance report](../../../docs/rust-cell-report-2026-10-08.en.html), also available as [Markdown](../../../docs/rust-cell-report-2026-10-08.en.md). It covers architecture, safety tests, fixed programs, Opus tasks, Cargo, AOT, and the bridge.
@@ -25,6 +31,29 @@ npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/three-way-sm
 The default smoke has 44 slots: 12 host, 16 direct-runtime, and 16 paid task slots. One H03 slot is not applicable. Select `--suite host`, `runtime`, `end-to-end`, `all`, or comma-separated lanes/case IDs. Use `--variants prime-ts,prime-rust,wasmedge,wasmedge-aot`, `--reps N`, and `--seed N` to set the matrix.
 
 The single-Opus 12-task pilot has 144 runs (four variants × three repetitions). A ten-repetition formal plan has 480 runs. Prepare, discover, plan, and analyze do not generate paid responses. Only end-to-end slots in `run` use paid calls. Each run permits at most 64 HTTP requests, including retries, and has a task-specific total deadline.
+
+## Larger workloads without model calls
+
+The opt-in `workloads` suite implements N01 dependency-graph BFS, N03 streaming event transitions, and N04 u32 queue simulation. Existing `runtime` and `all` selections remain unchanged. Run a small correctness smoke before the scale pilot:
+
+All 180 reference runs in the [first standalone pilot report](../../../docs/benchmark-rust-cell-workloads-2026-10-10.html) passed. Large N04 reference has a median paired AOT roundtrip speedup of 1.779×, including Cargo/AOT. Graph/events and the interpreter did not win full roundtrip. This is descriptive, without formal ranking.
+
+```sh
+npx tsx poc/bench/three-way/cli.ts plan --suite workloads --scales small --reps 1 --out poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts run --plan poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts plan --suite workloads --scales small,medium,large --reps 5 --seed 20261010 --out poc/bench/results/workloads-pilot
+npx tsx poc/bench/three-way/cli.ts run --plan poc/bench/results/workloads-pilot
+npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/workloads-pilot
+```
+
+Select families with `--suite N01-graph,N03-events,N04-simulation`, or exact condition IDs. `--batches 1,4,16,64` partitions the same total work. `--cache cold,warm --warmups 2` chooses fresh workspaces or full warmup cycles in the same workspace. Cold retains prepared toolchain/template and OS caches. Each Rust cell still compiles; graph/event state uses blobs while Python retains resident objects. `--event-format binary,jsonl` and `--simulation-mode prng,events` create separate controls. The comparison fixes identical algorithms, Python standard library and Rust.
+
+Each cell must produce fresh output; prior batch output is removed before submission. Host-only oracles check complete output after each cell and input hashes after the final cell. Graphs use 4V edges and 64/128/256 queries. Event decode/I/O/transitions share a streaming phase. OMP/OpenBLAS/MKL/NumExpr thread limits are fixed at one. `workloads.html/json/csv` show scale curves, all planned slots, failures, and phase medians. Warmups are excluded from measured roundtrip/phase totals; validated total includes startup, warmups, checks, and disposal. Runtime execution is measured directly from runtime phases, excluding Cargo/AOT, initialization and snapshots; process/VM startup and I/O remain. Roundtrip and validated total include compilation. Historical non-reference conditions are excluded from comparisons; raw records are retained. This descriptive pilot has no formal ranking or audited confidence intervals. See the [design and implementation record](../../../docs/benchmark-rust-cell-workloads-2026-10-10.md).
+
+The standalone report explains all 13 columns, cache conditions, units, medians and missing values. A timing selector provides three workload charts for each of five boundaries: roundtrip minus Cargo/AOT, directly measured runtime execution, guest compute, validated total minus Cargo/AOT, and raw roundtrip. Deductions merge verified command intervals per run, clip to the selected period, subtract once, then take medians. Incomplete capture or clocks remain unavailable; chart n counts successful runs with that metric.
+
+This timing pilot contains cold only. Warm correctness smokes are separate. For a paired cold/hot experiment, create a new plan using identical source, fixture seeds, work and cell counts with `--cache cold,warm --warmups 2`. Warm still performs the same algorithmic work. Rust starts a fresh process/VM per cell and AOT recompiles each cell; there is no artifact cache. Validated total retains warmup costs.
 
 ## Cell-only task rules
 

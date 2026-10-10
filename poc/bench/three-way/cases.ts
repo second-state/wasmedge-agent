@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { record } from "./files.js";
 import type { Case, RuntimeStep, VariantId } from "./types.js";
+import { type WorkloadOptions, workloadCases } from "./workloads/cases.js";
+import { workloadE2eCases } from "./workloads/e2e.js";
 
 const py = (code: string, marker = "BENCH_OK"): RuntimeStep => ({
 	op: "execute",
@@ -23,7 +25,11 @@ const both = (python: RuntimeStep[], wasm: RuntimeStep[]): Partial<Record<Varian
 	"wasmedge-aot": wasm,
 });
 
-export function cases(root: string, suite: string): Case[] {
+export function cases(root: string, suite: string, workloadOptions?: WorkloadOptions): Case[] {
+	if (suite === "workloads-e2e" || suite.split(",").every((id) => /^E-N(?:01|03|04)-/.test(id)))
+		return workloadE2eCases(root, suite, workloadOptions);
+	if (suite === "workloads" || suite.split(",").every((id) => /^N(?:01|03|04)-/.test(id)))
+		return workloadCases(root, suite, workloadOptions);
 	const result: Case[] = [];
 	function runtime(
 		id: string,

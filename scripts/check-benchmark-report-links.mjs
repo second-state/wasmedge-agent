@@ -15,7 +15,7 @@ export function reportLinks(text, extension) {
 export function reportDocuments(tracked) {
 	return [...tracked].filter(
 		(path) =>
-			/^(?:README\.md$|(?:DESIGN|REPORT)(?:\.en)?\.|examples\/showcase\/README\.md$|docs\/bench-history\/|docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|comparison)|runtime-microbenchmark|rust-cell-report)|poc\/bench\/three-way\/README)/.test(path) &&
+			/^(?:README\.md$|(?:DESIGN|REPORT)(?:\.en)?\.|examples\/showcase\/README\.md$|docs\/bench-history\/|docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|rust-cell-(?:workloads|e2e)|comparison)|runtime-microbenchmark|rust-cell-report)|poc\/bench\/three-way\/README)/.test(path) &&
 			/\.(?:md|html)$/.test(path),
 	);
 }
@@ -67,7 +67,7 @@ export function checkReportLinks({ root, documents, tracked, standalone = [] }) 
 			links++;
 			const linked = checkFile(relative(root, resolve(dirname(absolute), decodeURIComponent(base))), `${path} → ${target}`);
 			const fragment = target.split("#", 2)[1];
-			if (linked && fragment && /rust-cell-report-2026-10-08/.test(linked)) {
+			if (linked && fragment && (/rust-cell-report-2026-10-08/.test(linked) || /benchmark-rust-cell-.*\.html$/.test(linked))) {
 				const content = readFileSync(linked, "utf8");
 				if (![...content.matchAll(/\bid="([^"]+)"/g)].some((match) => match[1] === fragment)) errors.push(`${path}: missing report anchor: ${fragment}`);
 			}

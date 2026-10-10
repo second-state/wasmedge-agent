@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { record, sha256 } from "./files.js";
@@ -9,6 +9,9 @@ import { killOwned, type OwnedProcess } from "./process.js";
 import type { Trace } from "./trace.js";
 import type { Case, Outcome, VariantId } from "./types.js";
 import { isWasmVariant } from "./types.js";
+import { verifyFixtureInputs, verifyWorkload } from "./workloads/fixtures.js";
+
+export class RuntimeDeadlineError extends Error {}
 
 export function importCell(trace: Trace, value: unknown, attributes: Record<string, unknown>): void {
 	if (!record(value)) return;
@@ -98,6 +101,20 @@ export function importCell(trace: Trace, value: unknown, attributes: Record<stri
 		}
 	if (typeof value.stdout === "string")
 		for (const line of value.stdout.split("\n")) {
+			const marker = ["BENCH_COUNTERS:", "BENCH_LIBRARY:"].find((prefix) => line.startsWith(prefix));
+			if (marker) {
+				try {
+					const details: unknown = JSON.parse(line.slice(marker.length));
+					if (record(details))
+						trace.event(marker === "BENCH_COUNTERS:" ? "workload_counters" : "workload_library", {
+							...attributes,
+							...details,
+						});
+				} catch {
+					// Raw stdout retains malformed markers for inspection.
+				}
+				continue;
+			}
 			if (!line.startsWith("BENCH_PHASE:")) continue;
 			let phase: unknown;
 			try {
@@ -187,7 +204,11 @@ export async function directRuntime(
 			pending.clear();
 		})
 		.catch(() => {});
-	async function call(op: string, fields: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+	async function call(
+		op: string,
+		fields: Record<string, unknown> = {},
+		attributes: Record<string, unknown> = {},
+	): Promise<Record<string, unknown>> {
 		const id = randomUUID();
 		currentCell = id;
 		const stop = trace.start(op === "execute" ? "cell.roundtrip" : `runtime.${op.replaceAll("-", "_")}`, {
@@ -195,6 +216,7 @@ export async function directRuntime(
 			inputSha256: typeof fields.code === "string" ? sha256(fields.code) : null,
 			op,
 			adapterPid: child.pid,
+			...attributes,
 		});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
@@ -203,7 +225,7 @@ export async function directRuntime(
 				timer = setTimeout(
 					() => {
 						pending.delete(id);
-						reject(new Error("Runtime request deadline exceeded"));
+						reject(new RuntimeDeadlineError("Runtime request deadline exceeded"));
 					},
 					Math.max(1, deadline - Date.now()),
 				);
@@ -214,10 +236,10 @@ export async function directRuntime(
 					? (value.status as Outcome)
 					: "error",
 			);
-			if (op === "execute") importCell(trace, value.result, { cellId: id, adapterPid: child.pid });
+			if (op === "execute") importCell(trace, value.result, { cellId: id, adapterPid: child.pid, ...attributes });
 			return value;
 		} catch (error) {
-			stop("error");
+			stop(error instanceof RuntimeDeadlineError ? "timeout" : "error");
 			throw error;
 		} finally {
 			if (timer) clearTimeout(timer);
@@ -228,13 +250,33 @@ export async function directRuntime(
 		if (start.status !== "ok") throw new Error("Runtime bootstrap failed; inspect runtime.jsonl");
 		let pass = true;
 		for (const step of item.runtime?.[variant] ?? []) {
-			const value = await call(step.op, { code: step.code, lib: step.lib, abortAfterMs: step.abortAfterMs });
+			if (step.workloadBatch !== undefined) {
+				if (item.workload)
+					rmSync(
+						join(project, `result-${step.workloadBatch}.${item.workload.kind === "events" ? "json" : "bin"}`),
+						{ force: true },
+					);
+				writeFileSync(join(project, "batch-index.txt"), `${step.workloadBatch}\n`);
+			}
+			const attributes = { warmup: step.warmup ?? false, batch: step.workloadBatch ?? null };
+			const value = await call(
+				step.op,
+				{ code: step.code, lib: step.lib, abortAfterMs: step.abortAfterMs },
+				attributes,
+			);
 			const details = record(value.result) ? value.result : {};
 			const output = String(details.stdout ?? "");
-			const correct =
+			let correct =
 				step.expectedStatus.includes(String(value.status)) &&
 				(!step.stdoutIncludes || output.includes(step.stdoutIncludes)) &&
 				!details.workspaceCommitError;
+			if (item.workload && step.workloadBatch !== undefined) {
+				const checked = trace.start("task.workload_check", { cellId: currentCell, ...attributes });
+				const oracle = verifyWorkload(project, join(trace.directory, "oracle"), item.workload, step.workloadBatch);
+				checked(oracle.pass && correct ? "ok" : "error");
+				trace.event("workload_oracle", { cellId: currentCell, ...attributes, ...oracle, runtimePass: correct });
+				correct &&= oracle.pass;
+			}
 			trace.event("runtime_oracle", {
 				cellId: currentCell,
 				pass: correct,
@@ -242,6 +284,13 @@ export async function directRuntime(
 				actualStatus: value.status,
 			});
 			pass &&= correct;
+			if (item.workload && !correct) break;
+		}
+		if (item.workload) {
+			const checked = trace.start("task.fixture_check");
+			const intact = verifyFixtureInputs(project, join(trace.directory, "oracle"));
+			checked(intact ? "ok" : "error");
+			pass &&= intact;
 		}
 		await call("dispose");
 		child.stdin?.end();

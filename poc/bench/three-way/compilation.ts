@@ -212,3 +212,47 @@ export function subtractCompilation(
 		validatedWithoutAllCompilationMs: compilerDeductions ? result.validatedMs! - compilerDeductions[2] : null,
 	};
 }
+
+export function subtractCompilationAndModel(run: RunResult, spans: readonly Span[]) {
+	const compilation = subtractCompilation(run, spans);
+	const unavailable = (reason: string) => ({
+		validatedWithoutCompilationAndModelMs: null as number | null,
+		validatedModelMs: null as number | null,
+		validatedCompilerAndModelMs: null as number | null,
+		validatedCompilerModelOverlapMs: null as number | null,
+		reason,
+	});
+	if (compilation.validatedWithoutAllCompilationMs === null)
+		return unavailable(`compilation-unavailable:${compilation.reason}`);
+	const local = spans.filter((span) => span.runId === run.runId);
+	const requests = local.filter((span) => span.name === "llm.request");
+	if (!Number.isInteger(run.requestCount) || run.requestCount <= 0 || requests.length !== run.requestCount)
+		return unavailable("missing-model-request-intervals");
+	const task = interval(local.find((span) => span.name === "run.validated_elapsed")!);
+	const model = requests.map(interval);
+	if (
+		!task ||
+		model.some((bound) => !bound || bound.clock !== task.clock) ||
+		requests.some((span) => !span.requestId || span.attributes.timingBoundary !== "gateway-receipt") ||
+		new Set(requests.map((span) => span.requestId)).size !== requests.length
+	)
+		return unavailable("invalid-model-clock-or-identity");
+	const clip = (bounds: Interval[]) =>
+		bounds.flatMap((bound) => {
+			const start = bound.start > task.start ? bound.start : task.start;
+			const end = bound.end < task.end ? bound.end : task.end;
+			return end > start ? [{ start, end }] : [];
+		});
+	const compiler = local.filter((span) => ["cargo.command", "aot.command"].includes(span.name)).map(interval);
+	// subtractCompilation has already verified every compiler interval and capture count.
+	const modelIntervals = clip(model as Interval[]);
+	const excluded = unionMs([...modelIntervals, ...clip(compiler as Interval[])]);
+	const modelMs = unionMs(modelIntervals);
+	return {
+		validatedWithoutCompilationAndModelMs: compilation.validatedMs! - excluded,
+		validatedModelMs: modelMs,
+		validatedCompilerAndModelMs: excluded,
+		validatedCompilerModelOverlapMs: compilation.validatedCompilerMs! + modelMs - excluded,
+		reason: "compiler-and-model-union-clipped-to-validated",
+	};
+}

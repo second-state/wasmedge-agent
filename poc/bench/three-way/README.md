@@ -1,5 +1,9 @@
 # Three-version benchmark
 
+N01／N03／N04 的真模型驗證另用 `--suite workloads-e2e`，或 `E-N01-graph,E-N03-events,E-N04-simulation`。模型自行產生 cells，沒有嵌入 reference source；完整輸出及輸入完整性由獨立 checker 驗證，不使用數值套件。只支援 cold workspace，未定義模型暖機策略時會拒絕 warm。操作及結果見 [Opus e2e 紀錄](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md)。分析新增 `workloads-e2e.html/json`，原有無模型資料保留且不混池。
+
+Claude Platform 使用 `discover --api anthropic-messages --model claude-opus-5-5`，base URL 為服務根路徑（可接受尾端 `/v1`，不要包含 `/messages`）。原生 Messages API 透傳 request／SSE，以 x-api-key 認證；usage 保留原值並將 uncached／cache creation／cache read 合計為 input tokens。預設 OpenAI-compatible discovery 優先檢查 `/v1`、再檢查 `/api/v1` 和原 base；根路徑能回傳模型清單不代表同一路徑能生成回覆。每次真請求另存 HTTP status、SSE 回傳 model IDs、completion IDs 與 usage，模型身分仍僅為服務端宣告。
+
 [English instructions and report links](README.en.md) · [English consolidated report](../../../docs/rust-cell-report-2026-10-08.en.html)
 
 可執行的 runner 比較 `prime-ts`、`prime-rust`、`wasmedge`（interpreter）、`wasmedge-aot`。標準模型 route 為 `anthropic/claude-opus-5-5`；這是服務實際列出的 ID，服務端不可變 backend revision 尚未獨立驗證。主量測不開 reasoning。原有 A/B/F harness 與 DESIGN D20/D21 放行規則保持原契約。
@@ -19,6 +23,27 @@ npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/three-way-sm
 ```
 
 `smoke` 共 44 slots：12 host、16 direct-runtime、16 paid end-to-end。其中一個 H03 slot 不適用。`--suite host`、`runtime`、`end-to-end`、`all` 或逗號分隔 lanes/case IDs 可選工作負載；`--variants prime-ts,prime-rust,wasmedge,wasmedge-aot`、`--reps N`、`--seed N` 可控制矩陣。單一 Opus 模型的 12-task pilot 為 144 runs（4 versions × 3 reps），formal 為 480 runs（4 versions × 10 reps）；prepare/discover/plan/analyze 不呼叫付費生成，只有 run 的 end-to-end slots 會付費。每 run 最多 64 HTTP requests，包含 retry，總 deadline 依 task 固定。
+
+新 `workloads` suite 實作 [N01／N03／N04 設計](../../../docs/benchmark-rust-cell-workloads-2026-10-10.md)：依賴圖 BFS、串流事件狀態機、u32 整數模擬。使用正式 cell engine，沒有模型呼叫；原有 `runtime`／`all` 的案例集合不變。先以小規模驗證，再跑三種規模的配對 pilot：
+
+首輪 [180-run 離線報表](../../../docs/benchmark-rust-cell-workloads-2026-10-10.html)全部通過。大型 N04 reference 的 AOT 完整 cell 配對 speedup median 為 1.779×；N01／N03 與 interpreter 未有完整 cell 優勢。這是描述性 pilot，沒有正式 ranking。
+
+```sh
+npx tsx poc/bench/three-way/cli.ts plan --suite workloads --scales small --reps 1 --out poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts run --plan poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/workloads-smoke
+npx tsx poc/bench/three-way/cli.ts plan --suite workloads --scales small,medium,large --reps 5 --seed 20261010 --out poc/bench/results/workloads-pilot
+npx tsx poc/bench/three-way/cli.ts run --plan poc/bench/results/workloads-pilot
+npx tsx poc/bench/three-way/cli.ts analyze --plan poc/bench/results/workloads-pilot
+```
+
+可用 `--suite N01-graph,N03-events,N04-simulation` 或完整 condition ID 選案例；`--batches 1,4,16,64` 固定總工作量，切成不同 cell 數；`--cache cold,warm --warmups 2` 選 fresh workspace 或同 workspace 先跑完整暖機。Cold 仍使用已準備好的 toolchain／template，沒有清 OS cache。每批 Rust 都重新走 Cargo／AOT；圖索引和事件狀態經 state blob 保留，Python 使用常駐記憶體。`--event-format binary,jsonl` 與 `--simulation-mode prng,events` 是獨立條件。比較固定為相同算法的 Python stdlib 與 Rust。
+
+Fixture／oracle 生成另行計時；oracle 位於 guest preopen 以外。每次提交前移除該批舊輸出，然後驗證完整 bitmap／per-key 摘要／terminal states，全部結束後確認 fixture hashes 未變。Graph 固定 4V edges，queries 為 64／128／256；event decode 和 transition 在 streaming phase 合併計時。OMP／OpenBLAS／MKL／NumExpr thread limits 固定為 1。分析另產生 `workloads.html/json/csv`，保留所有 planned slots、失敗及 timeout；暖機從正式 phase／roundtrip 統計排除，完整 validated total 仍包含暖機和 disposal。Runtime execution 直接取正式 runtime phases，不含 Cargo／AOT、初始化和 snapshots，仍包含 process／VM 啟動和 I/O；Roundtrip 與 Validated total 保留編譯成本。歷史非 reference 條件不納入比較，原始 records 保留。報表提供 scale 曲線與全部條件表；這是描述性 pilot，CI 和 instrumentation overhead audit 尚未完成。
+
+報表新增 13 個欄位的詳細說明、cold／warm 定義與讀表示例。圖表可切換扣除 Cargo／AOT 的 Roundtrip、直接量測的 Runtime execution、Compute、扣除編譯的 Validated total，以及原始 Roundtrip；每種各有三個 workload 圖。扣除逐 run 合併已校準 command intervals 並截取到所選期間，再取 median；capture／clock 缺失不補 0。圖上的 n 表示該指標的有效成功樣本數。
+
+本輪只有 cold timing；warm smokes 不混入比較。新增 cold／hot 實驗請建立新 plan，以相同 source、fixture seeds、Work 和 cell 數使用 `--cache cold,warm --warmups 2`；warm 仍重新執行同量算法，每個 Rust cell 仍新啟 process／VM、每個 AOT cell 仍編譯，沒有 artifact cache。暖機保留在 Validated total。
 
 預設 E 為 `--tool-policy runtime-only`，比較 Python cell + Python runtime 與 Rust cell + Wasm runtime：TS 僅啟用 ipython，fork 僅啟用 rust，native Rust 維持其唯一的 ipython 工具。每回合至少一次成功的 cell，讀檔、解析、計算、修改與寫檔必須在 cell 內完成，不得透過 shell/subprocess 代做。原始 fixture 的 `node --test`、`cargo test` 等驗收由共同 checker 在 agent 結束後執行、另行計時；這是新的控制實驗，不等同原生工具的測試迴圈。
 

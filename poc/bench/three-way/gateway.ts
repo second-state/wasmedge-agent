@@ -71,6 +71,7 @@ export async function startGateway(options: {
 	signal: AbortSignal;
 }) {
 	const { trace, modelId, provider, replay, limit, signal } = options;
+	const anthropic = provider?.api === "anthropic-messages";
 	const token = randomUUID();
 	const apiKey = provider ? credentials().apiKey : null;
 	const sanitize = (value: string) => (apiKey ? value.replaceAll(apiKey, "[REDACTED]") : value);
@@ -82,9 +83,9 @@ export async function startGateway(options: {
 		void operation.finally(() => inflight.delete(operation)).catch(() => {});
 		async function handle(res: ServerResponse): Promise<void> {
 			if (
-				request.url !== "/v1/chat/completions" ||
+				request.url !== (anthropic ? "/v1/messages" : "/v1/chat/completions") ||
 				request.method !== "POST" ||
-				request.headers.authorization !== `Bearer ${token}`
+				(anthropic ? request.headers["x-api-key"] !== token : request.headers.authorization !== `Bearer ${token}`)
 			) {
 				res.writeHead(404).end();
 				return;
@@ -116,14 +117,40 @@ export async function startGateway(options: {
 			for (const kind of ["byte", "token", "text", "reasoning", "tool_arguments"])
 				firstStops.set(kind, trace.start(`llm.time_to_first_${kind}`, attributes, total.spanId));
 			const observed = new Set<string>();
+			const responseModelIds = new Set<string>();
+			const completionIds = new Set<string>();
 			let usage: unknown = null,
 				upstreamStatus: number | null = null,
 				done = false;
+			const nativeUsage: Record<string, unknown> = {};
 			const first = (kind: string) => {
 				if (!observed.has(kind)) {
 					observed.add(kind);
 					firstStops.get(kind)?.();
 				}
+			};
+			const appendTool = (index: number, fragment: string, name = "", id: string | null = null) => {
+				const tool = tools.get(index) ?? {
+					name: "",
+					id: null,
+					arguments: "",
+					first: null,
+					last: null,
+					fragments: [],
+				};
+				tool.name += name;
+				tool.id = id ?? tool.id;
+				if (fragment.length) {
+					const now = process.hrtime.bigint(),
+						begin = tool.arguments.length;
+					tool.arguments += fragment;
+					tool.fragments.push({ begin, end: tool.arguments.length, time: now });
+					tool.first ??= now;
+					tool.last = now;
+					first("tool_arguments");
+					first("token");
+				}
+				tools.set(index, tool);
 			};
 			const decoder = new SseDecoder((data) => {
 				if (data === "[DONE]") {
@@ -137,6 +164,54 @@ export async function startGateway(options: {
 					throw new Error("Invalid upstream SSE JSON");
 				}
 				if (!record(value)) return;
+				if (anthropic) {
+					if (value.type === "error") throw new Error("Upstream Anthropic stream error; inspect SSE artifact");
+					if (value.type === "message_start" && record(value.message)) {
+						if (typeof value.message.model === "string") responseModelIds.add(sanitize(value.message.model));
+						if (typeof value.message.id === "string") completionIds.add(sanitize(value.message.id));
+						if (record(value.message.usage)) Object.assign(nativeUsage, value.message.usage);
+					}
+					if (record(value.usage)) Object.assign(nativeUsage, value.usage);
+					if (typeof nativeUsage.input_tokens === "number" && typeof nativeUsage.output_tokens === "number") {
+						const prompt =
+							nativeUsage.input_tokens +
+							Number(nativeUsage.cache_creation_input_tokens ?? 0) +
+							Number(nativeUsage.cache_read_input_tokens ?? 0);
+						usage = {
+							prompt_tokens: prompt,
+							completion_tokens: nativeUsage.output_tokens,
+							total_tokens: prompt + nativeUsage.output_tokens,
+						};
+					}
+					if (value.type === "message_stop") done = true;
+					if (value.type === "content_block_start" && record(value.content_block)) {
+						const block = value.content_block;
+						if (block.type === "tool_use" && typeof block.name === "string")
+							appendTool(
+								Number(value.index),
+								record(block.input) && Object.keys(block.input).length ? JSON.stringify(block.input) : "",
+								block.name,
+								typeof block.id === "string" ? block.id : null,
+							);
+					}
+					if (value.type === "content_block_delta" && record(value.delta)) {
+						const delta = value.delta;
+						if (delta.type === "input_json_delta" && typeof delta.partial_json === "string")
+							appendTool(Number(value.index), delta.partial_json);
+						for (const [field, kind] of [
+							["text", "text"],
+							["thinking", "reasoning"],
+						]) {
+							if (typeof delta[field] === "string" && delta[field].length) {
+								first(kind);
+								first("token");
+							}
+						}
+					}
+					return;
+				}
+				if (typeof value.model === "string") responseModelIds.add(sanitize(value.model));
+				if (typeof value.id === "string") completionIds.add(sanitize(value.id));
 				if (value.usage) usage = value.usage;
 				if (!Array.isArray(value.choices)) return;
 				for (const choice of value.choices) {
@@ -155,27 +230,12 @@ export async function startGateway(options: {
 					if (!Array.isArray(delta.tool_calls)) continue;
 					for (const call of delta.tool_calls) {
 						if (!record(call) || !record(call.function)) continue;
-						const key = Number(call.index ?? 0),
-							tool = tools.get(key) ?? {
-								name: "",
-								id: null,
-								arguments: "",
-								first: null,
-								last: null,
-								fragments: [],
-							};
-						if (typeof call.id === "string") tool.id = call.id;
-						if (typeof call.function.name === "string") tool.name += call.function.name;
-						if (typeof call.function.arguments === "string" && call.function.arguments.length) {
-							const begin = tool.arguments.length;
-							tool.arguments += call.function.arguments;
-							tool.fragments.push({ begin, end: tool.arguments.length, time: process.hrtime.bigint() });
-							tool.first ??= process.hrtime.bigint();
-							tool.last = process.hrtime.bigint();
-							first("tool_arguments");
-							first("token");
-						}
-						tools.set(key, tool);
+						appendTool(
+							Number(call.index ?? 0),
+							typeof call.function.arguments === "string" ? call.function.arguments : "",
+							typeof call.function.name === "string" ? call.function.name : "",
+							typeof call.id === "string" ? call.id : null,
+						);
 					}
 				}
 			});
@@ -217,9 +277,18 @@ export async function startGateway(options: {
 					upstreamStatus = 200;
 				} else {
 					if (!provider || !apiKey) throw new Error("Provider missing");
-					const upstream = await fetch(`${provider.baseUrl}/chat/completions`, {
+					const upstreamHeaders: Record<string, string> = anthropic
+						? {
+								"x-api-key": apiKey,
+								"anthropic-version": String(request.headers["anthropic-version"] ?? "2023-06-01"),
+								"Content-Type": "application/json",
+							}
+						: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
+					if (anthropic && typeof request.headers["anthropic-beta"] === "string")
+						upstreamHeaders["anthropic-beta"] = request.headers["anthropic-beta"];
+					const upstream = await fetch(`${provider.baseUrl}${anthropic ? "/v1/messages" : "/chat/completions"}`, {
 						method: "POST",
-						headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+						headers: upstreamHeaders,
 						body,
 						signal,
 					});
@@ -244,6 +313,7 @@ export async function startGateway(options: {
 						if (!res.destroyed) res.write(chunk);
 					}
 					decoder.push(new Uint8Array(), true);
+					if (anthropic && !done) throw new Error("Anthropic stream ended before message_stop");
 					// Some compliant providers terminate after finish_reason without [DONE].
 					streaming();
 					total();
@@ -352,8 +422,17 @@ export async function startGateway(options: {
 				writeJson(join(trace.directory, `${requestId}.json`), {
 					requestId,
 					upstreamStatus,
+					responseModelIds: [...responseModelIds],
+					completionIds: [...completionIds],
 					doneMarker: done,
 					usage,
+					...(anthropic
+						? {
+								api: provider.api,
+								nativeUsage,
+								inputTokenAccounting: "input + cache_creation_input + cache_read_input",
+							}
+						: {}),
 					responseBytes: Buffer.concat(chunks).length,
 					toolCount: tools.size,
 				});
@@ -367,7 +446,7 @@ export async function startGateway(options: {
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Gateway address unavailable");
 	return {
-		baseUrl: `http://127.0.0.1:${address.port}/v1`,
+		baseUrl: `http://127.0.0.1:${address.port}${anthropic ? "" : "/v1"}`,
 		token,
 		requestCount: () => count,
 		close: async () => {

@@ -5,6 +5,8 @@ import { buildChartData } from "./charts.js";
 import { dashboard } from "./dashboard.js";
 import { readJson, record, writeJson } from "./files.js";
 import type { Manifest, RunResult, Span } from "./types.js";
+import { workloadE2eReport } from "./workloads/e2e-report.js";
+import { workloadReport } from "./workloads/report.js";
 
 export function quantile(values: number[], q: number): number | null {
 	if (!values.length) return null;
@@ -24,7 +26,13 @@ export function csv(rows: Record<string, unknown>[], columns: string[]): string 
 }
 
 export function analyze(directory: string): Record<string, unknown> {
-	const manifest = readJson(join(directory, "manifest.json")) as Manifest;
+	const sourceManifest = readJson(join(directory, "manifest.json")) as Manifest;
+	const cases = sourceManifest.cases.filter((c) => !c.workload || c.workload.implementation === "reference");
+	const manifest = {
+		...sourceManifest,
+		cases,
+		runs: sourceManifest.runs.filter((s) => cases.some((c) => c.id === s.caseId)),
+	};
 	const runs: RunResult[] = [],
 		spans: Span[] = [],
 		requests: Record<string, unknown>[] = [];
@@ -154,6 +162,7 @@ export function analyze(directory: string): Record<string, unknown> {
 		unexecuted,
 		integrityErrors,
 		plannedRuns: manifest.runs.length,
+		excludedPlannedRuns: sourceManifest.runs.length - manifest.runs.length,
 		recordedRuns: runs.length,
 		paidRequests: runs
 			.filter((run) => run.modelId !== "replay-fixed-v1" && run.modelId !== "none-direct-runtime")
@@ -326,5 +335,7 @@ export function analyze(directory: string): Record<string, unknown> {
 		{ mode: 0o600 },
 	);
 	writeFileSync(join(directory, "report.html"), dashboard(report, manifest, runs, spans, charts), { mode: 0o600 });
+	workloadReport(directory, sourceManifest, runs, spans);
+	workloadE2eReport(directory, manifest, runs, spans, requests);
 	return report;
 }
