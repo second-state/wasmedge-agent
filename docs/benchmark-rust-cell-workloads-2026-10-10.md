@@ -1,5 +1,7 @@
 # Benchmark workloads for evaluating Rust cell advantages
 
+[Documentation guide](README.md) · Fixed-program campaign without model calls
+
 Date: 2026-10-10. Status: N01/N03/N04 are implemented, and all 180 fixed-algorithm pilot runs across four variants passed. N02/N05/N06 remain designs.
 
 [Offline charts and complete conditions](benchmark-rust-cell-workloads-2026-10-10.html) · [Portable aggregates and source hashes](bench-data/workloads-pilot-2026-10-10.json) · [Runner instructions](../poc/bench/three-way/README.en.md)

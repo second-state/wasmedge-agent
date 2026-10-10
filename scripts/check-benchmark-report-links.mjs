@@ -15,7 +15,7 @@ export function reportLinks(text, extension) {
 export function reportDocuments(tracked) {
 	return [...tracked].filter(
 		(path) =>
-			/^(?:README\.md$|(?:DESIGN|REPORT)(?:\.en)?\.|examples\/showcase\/README\.md$|docs\/bench-history\/|docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|rust-cell-(?:workloads|e2e)|comparison)|runtime-microbenchmark|rust-cell-report)|poc\/bench\/three-way\/README)/.test(path) &&
+			/^(?:README\.md$|(?:DESIGN|REPORT)(?:\.en)?\.|examples\/showcase\/README\.md$|docs\/README\.md$|docs\/bench-history\/|docs\/(?:benchmark-(?:aot-bridge|cell-runtime-analysis|three-way-(?:design|validation)|rust-cell-(?:workloads|e2e)|comparison)|runtime-microbenchmark|rust-cell-report)|poc\/bench\/three-way\/README)/.test(path) &&
 			/\.(?:md|html)$/.test(path),
 	);
 }

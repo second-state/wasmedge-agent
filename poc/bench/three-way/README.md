@@ -1,5 +1,7 @@
 # Three-version benchmark
 
+報告選擇、建議閱讀順序與耗時定義請從 [English documentation guide](../../../docs/README.md) 開始；本檔案說明 runner 的操作與分析。
+
 N01／N03／N04 的真模型驗證另用 `--suite workloads-e2e`，或 `E-N01-graph,E-N03-events,E-N04-simulation`。模型自行產生 cells，沒有嵌入 reference source；完整輸出及輸入完整性由獨立 checker 驗證，不使用數值套件。只支援 cold workspace，未定義模型暖機策略時會拒絕 warm。操作及結果見 [Opus e2e 紀錄](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md)。分析新增 `workloads-e2e.html/json`，原有無模型資料保留且不混池。
 
 Claude Platform 使用 `discover --api anthropic-messages --model claude-opus-5-5`，base URL 為服務根路徑（可接受尾端 `/v1`，不要包含 `/messages`）。原生 Messages API 透傳 request／SSE，以 x-api-key 認證；usage 保留原值並將 uncached／cache creation／cache read 合計為 input tokens。預設 OpenAI-compatible discovery 優先檢查 `/v1`、再檢查 `/api/v1` 和原 base；根路徑能回傳模型清單不代表同一路徑能生成回覆。每次真請求另存 HTTP status、SSE 回傳 model IDs、completion IDs 與 usage，模型身分仍僅為服務端宣告。
@@ -8,7 +10,7 @@ Claude Platform 使用 `discover --api anthropic-messages --model claude-opus-5-
 
 可執行的 runner 比較 `prime-ts`、`prime-rust`、`wasmedge`（interpreter）、`wasmedge-aot`。標準模型 route 為 `anthropic/claude-opus-5-5`；這是服務實際列出的 ID，服務端不可變 backend revision 尚未獨立驗證。主量測不開 reasoning。原有 A/B/F harness 與 DESIGN D20/D21 放行規則保持原契約。
 
-[安全性與效率統整報告](../../../docs/rust-cell-report-2026-10-08.html)（[Markdown](../../../docs/rust-cell-report-2026-10-08.md)）是最新成果入口，包含架構、安全控制、負向測試、固定程式／Opus 結果、Cargo／AOT 與 bridge 分析。使用 `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py` 從 Git 中的 aggregate、模板與 SVG 重建，不需要原始 traces、不呼叫模型。歷史分析與驗證紀錄見 [歷史索引](../../../docs/bench-history/README.md)。
+[10 月 8 日安全性與效率統整報告](../../../docs/rust-cell-report-2026-10-08.html)（[Markdown](../../../docs/rust-cell-report-2026-10-08.md)）包含架構、安全控制、負向測試、較早的固定程式／Opus 結果、Cargo／AOT 與 bridge 分析，早於 10 月 10 日的 workload campaigns。使用 `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py` 從 Git 中的 aggregate、模板與 SVG 重建，不需要原始 traces、不呼叫模型。歷史分析與驗證紀錄見 [歷史索引](../../../docs/bench-history/README.md)。
 
 需要 Node 22.8+、npm、Cargo、rustup `wasm32-wasip1`、uv，以及 WasmEdge 0.14.1 interpreter / AOT。執行前依專案 README 安裝 WasmEdge，或指定既有 `WASMEDGE_AGENT_WASMEDGE`。Rust host 與 adapter 都以 `--release --locked` 編譯。prepare 下載固定 SHA 的外部 source archive，build Node bundle，建立各自的 upstream runtime environment，vendor 並 warm 獨立 WASI template。所有輸入、bootstrap log、paid output 都留在 gitignored `poc/bench/results/`；不修改使用者的 agent 設定。
 

@@ -39,12 +39,14 @@ retains host permissions by default; host bash and handlers do so in either mode
 
 Evidence and design:
 
-- **Current report:** [English](docs/rust-cell-report-2026-10-08.en.html) / [繁體中文](docs/rust-cell-report-2026-10-08.html). Download either HTML file and open it locally. Each file includes conclusions, charts, key tables, safety evidence, and separate Cargo/AOT costs.
+- **Start here:** [Documentation guide](docs/README.md) — the English reading order, report purposes, timing boundaries and data links.
+- **Latest benchmarks (October 10):** [real-model E2E results](docs/benchmark-rust-cell-e2e-2026-10-10.md) and [fixed-program workloads](docs/benchmark-rust-cell-workloads-2026-10-10.md), each with charts and task explanations.
+- **Architecture, safety and earlier results (October 8):** [English](docs/rust-cell-report-2026-10-08.en.html) / [繁體中文](docs/rust-cell-report-2026-10-08.html). Download either standalone HTML file and open it locally for conclusions, charts, key tables, safety evidence, and separate Cargo/AOT costs.
 - **Methods:** [benchmark protocol](docs/benchmark-three-way-design-2026-10-08.en.md) and [runner instructions](poc/bench/three-way/README.en.md).
 - **Historical evidence:** [campaigns and diagnostic records](docs/bench-history/README.md). These use different controls and are kept separate from the current results.
 - **Project design:** [feasibility study](REPORT.md), [design decisions](DESIGN.md), and [runtime reference](packages/coding-agent/docs/rlm-runtime.md).
 
-Rebuild the primary reports with `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py`. The English exporter also regenerates the nine supporting HTML readers. It uses saved data and makes no model calls.
+Rebuild the October 8 standalone reports with `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py`. The English exporter also regenerates their nine supporting HTML readers. It uses saved data and makes no model calls. For the October 10 workload reports, use the runner's `analyze` command described in the [documentation guide](docs/README.md).
 
 ## Try it
 

@@ -69,6 +69,15 @@ test("checks the root report entry point even when an old ZIP still exists local
 	assert.match(checkReportLinks(input).errors.join("\n"), /README.md.*target is not in Git/);
 });
 
+test("checks the docs entry point and rejects a missing report", (t) => {
+	const report = "docs/benchmark-rust-cell-e2e-2026-10-10.md";
+	const input = fixture(t, { "docs/README.md": "[E2E](benchmark-rust-cell-e2e-2026-10-10.md)", [report]: "# E2E" });
+	input.documents = reportDocuments(input.tracked);
+	assert.deepEqual(checkReportLinks(input), { errors: [], links: 1 });
+	input.tracked.delete(report);
+	assert.match(checkReportLinks(input).errors.join("\n"), /docs\/README.md.*target is not in Git/);
+});
+
 test("checks archived evidence and rejects links to a removed duplicate", (t) => {
 	const source = "docs/bench-history/runtime-microbenchmark-2026-10-07.md";
 	const input = fixture(t, { [source]: "[Old duplicate](../runtime-microbenchmark-2026-10-07.en.md)" });

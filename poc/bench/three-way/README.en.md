@@ -1,5 +1,7 @@
 # Four-Way Agent Benchmark Runner
 
+For report selection and timing definitions, start with the [English documentation guide](../../../docs/README.md). This file covers running and analyzing the benchmarks.
+
 Use `--suite workloads-e2e` or `E-N01-graph,E-N03-events,E-N04-simulation` for model-generated versions of the new workloads. No reference solution is supplied. Independent checkers validate all outputs and input integrity. Numeric packages are excluded. E2E currently supports cold workspaces only; warm is rejected until a model warmup policy is defined. Analysis adds `workloads-e2e.html/json`, separate from preserved fixed-program results. See the [Opus E2E record](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md).
 
 Workload readers, task explanations and column definitions are in English. E2E includes five charts: full validated time, minus Cargo/AOT, minus Cargo/AOT and model requests, model request sum, and runtime execution. Deductions merge verified intervals per run before taking medians, so compiler/model overlap is counted once. The model-excluded remainder retains host, I/O, snapshots and validation; it is not a model-free rerun or pure compute. Analyze reuses saved traces without making model requests.
@@ -8,7 +10,7 @@ For Claude Platform use `discover --api anthropic-messages --model claude-opus-5
 
 Compare `prime-ts`, `prime-rust`, `wasmedge` (interpreter), and `wasmedge-aot`. The model route is `anthropic/claude-opus-5-5`, with reasoning off. This ID comes from the service catalog. An immutable backend revision is not independently verified. The older A/B/F harness and D20/D21 rules remain separate.
 
-Start with the [English safety and performance report](../../../docs/rust-cell-report-2026-10-08.en.html), also available as [Markdown](../../../docs/rust-cell-report-2026-10-08.en.md). It covers architecture, safety tests, fixed programs, Opus tasks, Cargo, AOT, and the bridge.
+For architecture, safety tests and earlier experiments, see the [October 8 English safety and performance report](../../../docs/rust-cell-report-2026-10-08.en.html), also available as [Markdown](../../../docs/rust-cell-report-2026-10-08.en.md). It predates the October 10 workload campaigns and covers fixed programs, Opus tasks, Cargo, AOT, and the bridge.
 
 [Standalone English report](../../../docs/rust-cell-report-2026-10-08.en.html). Download that one HTML file and open it locally. It includes conclusions, charts, key tables, and timing definitions. No ZIP or other files are required.
 

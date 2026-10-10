@@ -1,5 +1,7 @@
 # Opus 5.5: Rust cell workload end-to-end validation
 
+[Documentation guide](README.md) · Real-model E2E campaign
+
 Date: 2026-10-10. The existing [180-run fixed-program results](benchmark-rust-cell-workloads-2026-10-10.html) are preserved. The new `workloads-e2e` suite asks the same model to read fixtures, generate Python/Rust cells, execute them and repair errors. No solution source is supplied, and numeric packages are excluded. Existing independent oracles validate every output element and input integrity.
 
 **Status: the 12-run smoke and 36-run large/cold pilot both passed completely. All 164 real model requests returned HTTP 200, complete streams and usage; SSE identified `claude-opus-5-5`.** [Large pilot charts and comparison](benchmark-rust-cell-e2e-2026-10-10.html) · [Smoke report](benchmark-rust-cell-e2e-smoke-2026-10-10.html). Two earlier HTTP 500 campaigns remain infrastructure evidence and are excluded from successful timings.
