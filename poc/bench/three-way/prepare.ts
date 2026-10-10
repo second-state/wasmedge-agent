@@ -197,6 +197,12 @@ export async function prepare(
 			logicalCpus: cpus().length,
 			memoryBytes: totalmem(),
 			node: process.version,
+			python: Object.fromEntries(
+				["prime-ts", "prime-rust"].map((id) => [
+					id,
+					execFileSync(join(inputs, `${id}-venv/bin/python`), ["--version"], { encoding: "utf8" }).trim(),
+				]),
+			),
 			wasmedge: execFileSync(wasm, ["--version"], { encoding: "utf8" }).trim(),
 			cargo: execFileSync("cargo", ["--version"], { encoding: "utf8" }).trim(),
 			rustc: execFileSync("rustc", ["-vV"], { encoding: "utf8" }).trim(),

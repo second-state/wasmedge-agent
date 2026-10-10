@@ -5,6 +5,7 @@ import { discoverProvider } from "./provider.js";
 import { analyze } from "./report.js";
 import { plan, runPlan } from "./runner.js";
 import type { Provider } from "./types.js";
+import type { WorkloadOptions, WorkloadScale } from "./workloads/cases.js";
 
 function options(argv: string[]): Map<string, string> {
 	const values = new Map<string, string>();
@@ -26,6 +27,19 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (command === "plan") {
+		if (args.has("numpy")) throw new Error("--numpy is no longer supported; workloads compare fixed algorithms only");
+		const workloadOptions: WorkloadOptions = {
+			scales: args.has("scales") ? (args.get("scales")!.split(",") as WorkloadScale[]) : undefined,
+			batches: args.has("batches") ? args.get("batches")!.split(",").map(Number) : undefined,
+			cache: args.has("cache") ? (args.get("cache")!.split(",") as ("cold" | "warm")[]) : undefined,
+			warmups: args.has("warmups") ? Number(args.get("warmups")) : undefined,
+			formats: args.has("event-format")
+				? (args.get("event-format")!.split(",") as ("binary" | "jsonl")[])
+				: undefined,
+			simulationModes: args.has("simulation-mode")
+				? (args.get("simulation-mode")!.split(",") as ("prng" | "events")[])
+				: undefined,
+		};
 		if (args.has("tool-policy") && !["native", "runtime-only"].includes(args.get("tool-policy")!))
 			throw new Error("--tool-policy must be native or runtime-only");
 		if (args.has("profile-commands") && !["true", "false"].includes(args.get("profile-commands")!))
@@ -48,6 +62,7 @@ async function main(): Promise<void> {
 			args.get("variants"),
 			args.get("profile-commands") === "true",
 			args.get("tool-policy") === "native" ? "native" : "runtime-only",
+			workloadOptions,
 		);
 		console.log(
 			JSON.stringify({
@@ -78,7 +93,10 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (command === "discover") {
-		const result = await discoverProvider(args.get("model"));
+		const api = args.get("api") ?? "openai-completions";
+		if (api !== "openai-completions" && api !== "anthropic-messages")
+			throw new Error("--api must be openai-completions or anthropic-messages");
+		const result = await discoverProvider(args.get("model"), api);
 		const out = resolve(args.get("out") ?? "poc/bench/results/three-way-provider.json");
 		writeJson(out, result);
 		console.log(

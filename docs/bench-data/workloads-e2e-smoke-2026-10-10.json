@@ -1,0 +1,3231 @@
+{
+  "requestLedger": [
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-r1-8b1afd7f-6c32-49c9-aa09-f9930f4be55b",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5jpsGstvgVqDi3qhAK"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4627,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9706,
+        "completion_tokens": 188,
+        "total_tokens": 9894
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9702,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9702,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-r1-8b1afd7f-6c32-49c9-aa09-f9930f4be55b",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5kFjzu9YkZAD9AFPWA"
+      ],
+      "doneMarker": true,
+      "responseBytes": 16185,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10091,
+        "completion_tokens": 752,
+        "total_tokens": 10843
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 387,
+        "cache_read_input_tokens": 9702,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 387,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 752,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 77
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-r1-8b1afd7f-6c32-49c9-aa09-f9930f4be55b",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5kjcJCCvFwcYaRn57s"
+      ],
+      "doneMarker": true,
+      "responseBytes": 9425,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 10790,
+        "completion_tokens": 337,
+        "total_tokens": 11127
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 699,
+        "cache_read_input_tokens": 10089,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 699,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 337,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d6b24c30-6540-4931-80ff-595c914a8561",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5m6BKCatTYN1kRNxuy"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4831,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9702,
+        "completion_tokens": 188,
+        "total_tokens": 9890
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9025,
+        "cache_read_input_tokens": 673,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9025,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d6b24c30-6540-4931-80ff-595c914a8561",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5mfiRVvBUdchWueSDj"
+      ],
+      "doneMarker": true,
+      "responseBytes": 15988,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10087,
+        "completion_tokens": 706,
+        "total_tokens": 10793
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 387,
+        "cache_read_input_tokens": 9698,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 387,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 706,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 78
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d6b24c30-6540-4931-80ff-595c914a8561",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5nG5PuybPArDpsWgZt"
+      ],
+      "doneMarker": true,
+      "responseBytes": 8317,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 10739,
+        "completion_tokens": 288,
+        "total_tokens": 11027
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 652,
+        "cache_read_input_tokens": 10085,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 652,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 288,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-ts-r1-0aa74f77-3b19-4f1d-a26a-10fae64039cc",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5nbfd4Ufafi1Qv9pXw"
+      ],
+      "doneMarker": true,
+      "responseBytes": 3281,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 11971,
+        "completion_tokens": 103,
+        "total_tokens": 12074
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 11967,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 11967,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 103,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-ts-r1-0aa74f77-3b19-4f1d-a26a-10fae64039cc",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5nrEUABJa8qWGWm4HY"
+      ],
+      "doneMarker": true,
+      "responseBytes": 11812,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 12384,
+        "completion_tokens": 529,
+        "total_tokens": 12913
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 415,
+        "cache_read_input_tokens": 11967,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 415,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 529,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 74
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-ts-r1-0aa74f77-3b19-4f1d-a26a-10fae64039cc",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5oFG4qLZGvSEGc1PWz"
+      ],
+      "doneMarker": true,
+      "responseBytes": 8189,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 12859,
+        "completion_tokens": 300,
+        "total_tokens": 13159
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 475,
+        "cache_read_input_tokens": 12382,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 475,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 300,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-rust-r1-02315bba-e333-4ed0-86ea-9ca72dc93914",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5ogvetWCe74PRFbLLN"
+      ],
+      "doneMarker": true,
+      "responseBytes": 2715,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 15998,
+        "completion_tokens": 97,
+        "total_tokens": 16095
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 15994,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 15994,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 97,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-rust-r1-02315bba-e333-4ed0-86ea-9ca72dc93914",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5ovXU5BX5U6JykU4Uj"
+      ],
+      "doneMarker": true,
+      "responseBytes": 12152,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 16275,
+        "completion_tokens": 542,
+        "total_tokens": 16817
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 279,
+        "cache_read_input_tokens": 15994,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 279,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 542,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 79
+        }
+      }
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-rust-r1-02315bba-e333-4ed0-86ea-9ca72dc93914",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5pK7m2SuPHGeNQpGCs"
+      ],
+      "doneMarker": true,
+      "responseBytes": 7997,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 16758,
+        "completion_tokens": 301,
+        "total_tokens": 17059
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 483,
+        "cache_read_input_tokens": 16273,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 483,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 301,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-ts-r1-9ac9a156-8c30-4a8f-8449-6ddddeb92b6d",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5phf64wrCVWcE5j75y"
+      ],
+      "doneMarker": true,
+      "responseBytes": 2936,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 12248,
+        "completion_tokens": 86,
+        "total_tokens": 12334
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 12244,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 12244,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 86,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-ts-r1-9ac9a156-8c30-4a8f-8449-6ddddeb92b6d",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5pwLrho7CdvY1XLcbK"
+      ],
+      "doneMarker": true,
+      "responseBytes": 11961,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 12514,
+        "completion_tokens": 529,
+        "total_tokens": 13043
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 268,
+        "cache_read_input_tokens": 12244,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 268,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 529,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-ts-r1-9ac9a156-8c30-4a8f-8449-6ddddeb92b6d",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5qHb2Hh8SZyxjYq3yQ"
+      ],
+      "doneMarker": true,
+      "responseBytes": 12060,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 13091,
+        "completion_tokens": 458,
+        "total_tokens": 13549
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 577,
+        "cache_read_input_tokens": 12512,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 577,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 458,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 53
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-rust-r1-83122e4a-8ca2-4c5a-bfa2-611169d8f40f",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5qnuNjoC3fQMoJ5QAG"
+      ],
+      "doneMarker": true,
+      "responseBytes": 2875,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 16274,
+        "completion_tokens": 103,
+        "total_tokens": 16377
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 16270,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 16270,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 103,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-rust-r1-83122e4a-8ca2-4c5a-bfa2-611169d8f40f",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5qwDCCtyfTzD1ozGyM"
+      ],
+      "doneMarker": true,
+      "responseBytes": 14253,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 16557,
+        "completion_tokens": 674,
+        "total_tokens": 17231
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 285,
+        "cache_read_input_tokens": 16270,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 285,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 674,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 120
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-rust-r1-83122e4a-8ca2-4c5a-bfa2-611169d8f40f",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5rZkPN57Ru61mJZSAa"
+      ],
+      "doneMarker": true,
+      "responseBytes": 11538,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 17185,
+        "completion_tokens": 381,
+        "total_tokens": 17566
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 628,
+        "cache_read_input_tokens": 16555,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 628,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 381,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 27
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d2b17688-c2e4-4766-9605-f0670fcfa37e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5rz3PHvFZeCwHtyve8"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4804,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9982,
+        "completion_tokens": 188,
+        "total_tokens": 10170
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9305,
+        "cache_read_input_tokens": 673,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9305,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d2b17688-c2e4-4766-9605-f0670fcfa37e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5sW2vb5moxw9ggmegF"
+      ],
+      "doneMarker": true,
+      "responseBytes": 23492,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10368,
+        "completion_tokens": 1066,
+        "total_tokens": 11434
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 388,
+        "cache_read_input_tokens": 9978,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 388,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 1066,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 68
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d2b17688-c2e4-4766-9605-f0670fcfa37e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5tHPgi4Gjp2r7z77Tw"
+      ],
+      "doneMarker": true,
+      "responseBytes": 10241,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 11385,
+        "completion_tokens": 356,
+        "total_tokens": 11741
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 1017,
+        "cache_read_input_tokens": 10366,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 1017,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 356,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 67
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-r1-b3bd205d-b681-4f57-82d4-1fe10959e09e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5tfiriegbvRz3moHr3"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4553,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9975,
+        "completion_tokens": 168,
+        "total_tokens": 10143
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9298,
+        "cache_read_input_tokens": 673,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9298,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 168,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-r1-b3bd205d-b681-4f57-82d4-1fe10959e09e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5u2iv8Y66kYqKZoNim"
+      ],
+      "doneMarker": true,
+      "responseBytes": 23225,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10341,
+        "completion_tokens": 1054,
+        "total_tokens": 11395
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 368,
+        "cache_read_input_tokens": 9971,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 368,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 1054,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 65
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-r1-b3bd205d-b681-4f57-82d4-1fe10959e09e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5uhiCnhW96d9gWbEFo"
+      ],
+      "doneMarker": true,
+      "responseBytes": 21237,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 11459,
+        "completion_tokens": 1027,
+        "total_tokens": 12486
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 1118,
+        "cache_read_input_tokens": 10339,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 1118,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 1027,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 50
+        }
+      }
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-r1-b3bd205d-b681-4f57-82d4-1fe10959e09e",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-4",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5w2U6Fu8BT7Rbx2s4v"
+      ],
+      "doneMarker": true,
+      "responseBytes": 9079,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 12477,
+        "completion_tokens": 317,
+        "total_tokens": 12794
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 1018,
+        "cache_read_input_tokens": 11457,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 1018,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 317,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-ts-r1-8e58e41b-8af3-4ae3-871e-5c484c83b0f7",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5wQn2Xm6BCSGEvp2mk"
+      ],
+      "doneMarker": true,
+      "responseBytes": 2558,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 12066,
+        "completion_tokens": 86,
+        "total_tokens": 12152
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 12062,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 12062,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 86,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-ts-r1-8e58e41b-8af3-4ae3-871e-5c484c83b0f7",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5wXcnUbJZNU4dvpkj7"
+      ],
+      "doneMarker": true,
+      "responseBytes": 7301,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 12336,
+        "completion_tokens": 317,
+        "total_tokens": 12653
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 272,
+        "cache_read_input_tokens": 12062,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 272,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 317,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-ts-r1-8e58e41b-8af3-4ae3-871e-5c484c83b0f7",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5wmaApq7eXJqh9fWkq"
+      ],
+      "doneMarker": true,
+      "responseBytes": 6819,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 12664,
+        "completion_tokens": 234,
+        "total_tokens": 12898
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 328,
+        "cache_read_input_tokens": 12334,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 328,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 234,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-rust-r1-3c293af9-2abc-427b-a8dd-1789dda41c81",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5x7g9dcevkHziwSKEx"
+      ],
+      "doneMarker": true,
+      "responseBytes": 2557,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 16088,
+        "completion_tokens": 86,
+        "total_tokens": 16174
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 16084,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 16084,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 86,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-rust-r1-3c293af9-2abc-427b-a8dd-1789dda41c81",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5xDiJHqQeeMjAUPfnB"
+      ],
+      "doneMarker": true,
+      "responseBytes": 8015,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 16358,
+        "completion_tokens": 329,
+        "total_tokens": 16687
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 272,
+        "cache_read_input_tokens": 16084,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 272,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 329,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-rust-r1-3c293af9-2abc-427b-a8dd-1789dda41c81",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5xStoqojz4HZucuQ8q"
+      ],
+      "doneMarker": true,
+      "responseBytes": 7192,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 16723,
+        "completion_tokens": 243,
+        "total_tokens": 16966
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 365,
+        "cache_read_input_tokens": 16356,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 365,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 243,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-r1-ea59d1b9-8f66-4d4f-937e-36c073f4a503",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5xp3mwu8HACw2qnSco"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4836,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9801,
+        "completion_tokens": 188,
+        "total_tokens": 9989
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9124,
+        "cache_read_input_tokens": 673,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9124,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-r1-ea59d1b9-8f66-4d4f-937e-36c073f4a503",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5yCQwpRYagPzoRKtL5"
+      ],
+      "doneMarker": true,
+      "responseBytes": 11085,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10190,
+        "completion_tokens": 516,
+        "total_tokens": 10706
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 391,
+        "cache_read_input_tokens": 9797,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 391,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 516,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-r1-ea59d1b9-8f66-4d4f-937e-36c073f4a503",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5yZZvf5ebMR7tRWBhJ"
+      ],
+      "doneMarker": true,
+      "responseBytes": 6868,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 10726,
+        "completion_tokens": 234,
+        "total_tokens": 10960
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 536,
+        "cache_read_input_tokens": 10188,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 536,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 234,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-19f1f6f6-595d-4dd1-b3da-5c24f7cf9b1c",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-1",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5yrkHhsPi6K1bmQcCZ"
+      ],
+      "doneMarker": true,
+      "responseBytes": 4787,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 9814,
+        "completion_tokens": 188,
+        "total_tokens": 10002
+      },
+      "nativeUsage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 9137,
+        "cache_read_input_tokens": 673,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 9137,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-19f1f6f6-595d-4dd1-b3da-5c24f7cf9b1c",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-2",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5zMgKieQJcAxSGkU5W"
+      ],
+      "doneMarker": true,
+      "responseBytes": 10130,
+      "toolCount": 1,
+      "usage": {
+        "prompt_tokens": 10203,
+        "completion_tokens": 467,
+        "total_tokens": 10670
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 391,
+        "cache_read_input_tokens": 9810,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 391,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 467,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-19f1f6f6-595d-4dd1-b3da-5c24f7cf9b1c",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "requestId": "request-3",
+      "upstreamStatus": 200,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "completionIds": [
+        "msg_011Cft5zmfTv1YkbVfraiUvj"
+      ],
+      "doneMarker": true,
+      "responseBytes": 7439,
+      "toolCount": 0,
+      "usage": {
+        "prompt_tokens": 10690,
+        "completion_tokens": 249,
+        "total_tokens": 10939
+      },
+      "nativeUsage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 487,
+        "cache_read_input_tokens": 10201,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 487,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 249,
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    }
+  ],
+  "fixturePairs": [
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "variants": [
+        "wasmedge",
+        "wasmedge-aot",
+        "prime-ts",
+        "prime-rust"
+      ],
+      "sameAcrossVariants": true,
+      "offlineMatched": true,
+      "seed": 2674696771,
+      "inputs": [
+        {
+          "path": "workload.json",
+          "bytes": 340,
+          "sha256": "f69fc70d4dee6c49b21cb3273f8e5ee50ab0c8ae5456d912789cb493b0b5a923"
+        },
+        {
+          "path": "graph.bin",
+          "bytes": 32268,
+          "sha256": "fee611d72d4137b0375d37df4c6ce25a11947d0de10152dddf87df35aa329fa5"
+        }
+      ],
+      "expected": [
+        {
+          "path": "result-0.bin",
+          "bytes": 8000,
+          "sha256": "8db093b53e2bd41112e81b9175b64b4151cbdaa6878a6e88f3e372124ff31fb1"
+        }
+      ]
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "variants": [
+        "prime-ts",
+        "prime-rust",
+        "wasmedge-aot",
+        "wasmedge"
+      ],
+      "sameAcrossVariants": true,
+      "offlineMatched": true,
+      "seed": 2674696771,
+      "inputs": [
+        {
+          "path": "workload.json",
+          "bytes": 341,
+          "sha256": "9cfb831901cd7c49c5d7d7808d73bd4dcbccd57dd7de1e651aa80fc18e792ed5"
+        },
+        {
+          "path": "events-0.bin",
+          "bytes": 3200000,
+          "sha256": "1ba232e4b586af4bef57a2539d545b98378fa1b1760127ccbcedeb56030f17c3"
+        }
+      ],
+      "expected": [
+        {
+          "path": "result-0.json",
+          "bytes": 1042,
+          "sha256": "dfdd86b31aa1bf7b1970885093d2151769746dff80aae499d37c56120ddb5846"
+        }
+      ]
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "variants": [
+        "prime-ts",
+        "prime-rust",
+        "wasmedge",
+        "wasmedge-aot"
+      ],
+      "sameAcrossVariants": true,
+      "offlineMatched": true,
+      "seed": 2674696771,
+      "inputs": [
+        {
+          "path": "workload.json",
+          "bytes": 345,
+          "sha256": "a00bdc73675f2e5513585bc035212964ecf86d907066bfee11473f40d42835ea"
+        },
+        {
+          "path": "seeds-0.bin",
+          "bytes": 40000,
+          "sha256": "a1e579275b910c57920a5130ac35dcdd075e3ff8a4f374abbb316af8dc122189"
+        }
+      ],
+      "expected": [
+        {
+          "path": "result-0.bin",
+          "bytes": 160000,
+          "sha256": "8056c71a91780e9f493ebfbb63db2f1904dab14c4392e8f79a735ba24f263a9b"
+        }
+      ]
+    }
+  ],
+  "pairedComparisons": [
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.8920537781033095,
+          "validatedWithoutAllCompilationMs": 1.216121106237641,
+          "validatedWithoutCompilationAndModelMs": 1.745260538034448,
+          "executionMs": 0.3857141715428976
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.8920537781033095,
+        "validatedWithoutAllCompilationMs": 1.216121106237641,
+        "validatedWithoutCompilationAndModelMs": 1.745260538034448,
+        "executionMs": 0.3857141715428976
+      }
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.7564379734918123,
+          "validatedWithoutAllCompilationMs": 1.2341089909041218,
+          "validatedWithoutCompilationAndModelMs": 1.4373710926753664,
+          "executionMs": 1.3735100780752303
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.7564379734918123,
+        "validatedWithoutAllCompilationMs": 1.2341089909041218,
+        "validatedWithoutCompilationAndModelMs": 1.4373710926753664,
+        "executionMs": 1.3735100780752303
+      }
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.7538122409970068,
+          "validatedWithoutAllCompilationMs": 1.0276588686905244,
+          "validatedWithoutCompilationAndModelMs": 0.11374572088356753,
+          "executionMs": 0.30857133723431807
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.7538122409970068,
+        "validatedWithoutAllCompilationMs": 1.0276588686905244,
+        "validatedWithoutCompilationAndModelMs": 0.11374572088356753,
+        "executionMs": 0.30857133723431807
+      }
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.6392128120184485,
+          "validatedWithoutAllCompilationMs": 1.0428591716140387,
+          "validatedWithoutCompilationAndModelMs": 0.09367931466421185,
+          "executionMs": 1.0988080624601841
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.6392128120184485,
+        "validatedWithoutAllCompilationMs": 1.0428591716140387,
+        "validatedWithoutCompilationAndModelMs": 0.09367931466421185,
+        "executionMs": 1.0988080624601841
+      }
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.4118493042709351,
+          "validatedWithoutAllCompilationMs": 0.4622329093713615,
+          "validatedWithoutCompilationAndModelMs": 1.659903149785521,
+          "executionMs": 0.26397984228806587
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.4118493042709351,
+        "validatedWithoutAllCompilationMs": 0.4622329093713615,
+        "validatedWithoutCompilationAndModelMs": 1.659903149785521,
+        "executionMs": 0.26397984228806587
+      }
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.6712846462106887,
+          "validatedWithoutAllCompilationMs": 0.9996385410966043,
+          "validatedWithoutCompilationAndModelMs": 1.4261290928441885,
+          "executionMs": 1.624156622836993
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.6712846462106887,
+        "validatedWithoutAllCompilationMs": 0.9996385410966043,
+        "validatedWithoutCompilationAndModelMs": 1.4261290928441885,
+        "executionMs": 1.624156622836993
+      }
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.41760801282855,
+          "validatedWithoutAllCompilationMs": 0.4686961098264897,
+          "validatedWithoutCompilationAndModelMs": 0.10557506107183835,
+          "executionMs": 0.2375818580592593
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.41760801282855,
+        "validatedWithoutAllCompilationMs": 0.4686961098264897,
+        "validatedWithoutCompilationAndModelMs": 0.10557506107183835,
+        "executionMs": 0.2375818580592593
+      }
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.6806709256013319,
+          "validatedWithoutAllCompilationMs": 1.0136160492808788,
+          "validatedWithoutCompilationAndModelMs": 0.09070629578165765,
+          "executionMs": 1.4617409605532936
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.6806709256013319,
+        "validatedWithoutAllCompilationMs": 1.0136160492808788,
+        "validatedWithoutCompilationAndModelMs": 0.09070629578165765,
+        "executionMs": 1.4617409605532936
+      }
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.7122726527482884,
+          "validatedWithoutAllCompilationMs": 1.0316380509090504,
+          "validatedWithoutCompilationAndModelMs": 1.6680938522627562,
+          "executionMs": 0.6408038940467734
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.7122726527482884,
+        "validatedWithoutAllCompilationMs": 1.0316380509090504,
+        "validatedWithoutCompilationAndModelMs": 1.6680938522627562,
+        "executionMs": 0.6408038940467734
+      }
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-ts",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.6189913681509632,
+          "validatedWithoutAllCompilationMs": 1.0982613741846772,
+          "validatedWithoutCompilationAndModelMs": 1.5421717316594006,
+          "executionMs": 5.5597725906150925
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.6189913681509632,
+        "validatedWithoutAllCompilationMs": 1.0982613741846772,
+        "validatedWithoutCompilationAndModelMs": 1.5421717316594006,
+        "executionMs": 5.5597725906150925
+      }
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.5269508367006411,
+          "validatedWithoutAllCompilationMs": 0.7632225272178947,
+          "validatedWithoutCompilationAndModelMs": 0.1903528689996356,
+          "executionMs": 0.6166226150261404
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.5269508367006411,
+        "validatedWithoutAllCompilationMs": 0.7632225272178947,
+        "validatedWithoutCompilationAndModelMs": 0.1903528689996356,
+        "executionMs": 0.6166226150261404
+      }
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "baseline": "prime-rust",
+      "variant": "wasmedge-aot",
+      "ratioDirection": "baseline duration / variant duration; above 1 means the variant was faster",
+      "observations": [
+        {
+          "repetition": 1,
+          "valid": true,
+          "validatedMs": 0.4579398325894921,
+          "validatedWithoutAllCompilationMs": 0.8125115400817305,
+          "validatedWithoutCompilationAndModelMs": 0.17598339158992496,
+          "executionMs": 5.349969851346598
+        }
+      ],
+      "medianRatios": {
+        "validatedMs": 0.4579398325894921,
+        "validatedWithoutAllCompilationMs": 0.8125115400817305,
+        "validatedWithoutCompilationAndModelMs": 0.17598339158992496,
+        "executionMs": 5.349969851346598
+      }
+    }
+  ],
+  "version": 1,
+  "campaign": "workloads-e2e-smoke-2026-10-10",
+  "seed": 20261010,
+  "modelId": "claude-opus-5-5",
+  "modelIdentity": "advertised-id-not-independent-revision-verification",
+  "comparison": "model-generated-cell-runtime-e2e",
+  "rankingAllowed": false,
+  "planned": 12,
+  "passed": 12,
+  "requests": 37,
+  "upstream200Requests": 37,
+  "tasks": [
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "title": "N01 graph: dependency change impact",
+      "purpose": "Find every component that directly or indirectly depends on a changed component and needs to be processed again.",
+      "work": "1,000 nodes, 4,000 dependency edges, 64 independent queries.",
+      "input": "graph.bin contains node, edge and query counts, (depender, dependency) pairs, and query roots, all encoded as little-endian u32 values.",
+      "task": "Build reverse dependency adjacency once, then run a separate BFS for every root. Include the root, handle cycles and repeated edges, and visit each reachable node once per query. Cached answers or component-level shortcuts cannot replace the required traversals.",
+      "output": "Concatenate one affected-node bitmap per query in query order. The checker compares every bit, including unused trailing bits.",
+      "focus": "Graph traversal, index access, integer conditions and bitmap updates."
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "title": "N03 events: streaming transaction state machine",
+      "purpose": "Process transaction events for multiple accounts or sessions, maintain independent state, and reject duplicate or invalid events.",
+      "work": "100,000 events, 10 independent keys; 32 bytes per record, 3,200,000 input bytes.",
+      "input": "Each record contains timestamp, key, sequence, amount and kind. Read in file order using bounded chunks rather than loading the entire event file.",
+      "task": "Maintain START/CHARGE/COMMIT/CANCEL state per key. Deduplicate by sequence first, process timeouts beyond 30,000 time units next, then apply the event. Negative charges and illegal transitions count as invalid. Retain state across batches.",
+      "output": "Emit final state, pending amount, last sequence, and duplicate/timeout/invalid/completed/cancelled/total fields in key order. The checker compares every field.",
+      "focus": "Streaming file I/O and decoding, conditional branches, and repeated updates to a small state table."
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "title": "N04 simulation: integer queue trajectories",
+      "purpose": "Simulate many independent work queues with capacity 64 and count completed, expired and capacity-rejected work.",
+      "work": "10,000 trajectories × 256 steps, 2,560,000 state updates in total.",
+      "input": "Initial u32 seeds are stored in seeds-{batch}.bin; the program generates events with its PRNG.",
+      "task": "At each step, perform the u32 PRNG multiply/add modulo 2^32, then enqueue, complete or expire work. Record rejection when the queue is full. Execute every step of every trajectory; cached answers or formulas cannot skip the loops.",
+      "output": "Emit [final queue length, completed, expired, rejected] as four little-endian u32 values per trajectory. The checker compares every value in original seed order.",
+      "focus": "Large volumes of u32 arithmetic, wrapping semantics and loops with frequent branches."
+    }
+  ],
+  "rows": [
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-r1-8b1afd7f-6c32-49c9-aa09-f9930f4be55b",
+      "variantId": "wasmedge",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "3942fe1139dbd51bc988f700cf2dfba9e3d51af419b13f30925df6112b844341",
+      "modelId": "claude-opus-5-5",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 30587,
+      "outputTokens": 1277,
+      "agentMs": 17010.339708,
+      "userMs": 17271.100042,
+      "validatedMs": 17272.031084,
+      "validatedWithoutAllCompilationMs": 12669.445916999997,
+      "validatedWithoutCompilationAndModelMs": 1307.1898339999989,
+      "validatedModelMs": 12483.68375,
+      "validatedCompilerAndModelMs": 15964.84125,
+      "validatedCompilerModelOverlapMs": 1121.4276670000017,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 12483.68375,
+      "codeEmissionMs": 4883.480083,
+      "codeReadyMedianMs": 4231.6810000000005,
+      "executionMs": 64.81483399999888,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 4602.585167,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d6b24c30-6540-4931-80ff-595c914a8561",
+      "variantId": "wasmedge-aot",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "3942fe1139dbd51bc988f700cf2dfba9e3d51af419b13f30925df6112b844341",
+      "modelId": "claude-opus-5-5",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 30528,
+      "outputTokens": 1182,
+      "agentMs": 20112.024416,
+      "userMs": 20368.066917,
+      "validatedMs": 20368.597458,
+      "validatedWithoutAllCompilationMs": 12484.781083,
+      "validatedWithoutCompilationAndModelMs": 1587.1940409999988,
+      "validatedModelMs": 12142.904542,
+      "validatedCompilerAndModelMs": 18781.403417,
+      "validatedCompilerModelOverlapMs": 1245.3174999999974,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 12142.904542,
+      "codeEmissionMs": 5184.233792,
+      "codeReadyMedianMs": 4125.234375,
+      "executionMs": 18.20154100000036,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 4563.042625,
+      "aotMs": 3320.77375
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-ts-r1-0aa74f77-3b19-4f1d-a26a-10fae64039cc",
+      "variantId": "prime-ts",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "3942fe1139dbd51bc988f700cf2dfba9e3d51af419b13f30925df6112b844341",
+      "modelId": "claude-opus-5-5",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 37214,
+      "outputTokens": 932,
+      "agentMs": 15149.987375,
+      "userMs": 15407.080958,
+      "validatedMs": 15407.580584,
+      "validatedWithoutAllCompilationMs": 15407.580584,
+      "validatedWithoutCompilationAndModelMs": 2281.3868329999987,
+      "validatedModelMs": 13126.193751,
+      "validatedCompilerAndModelMs": 13126.193751,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 13126.193750999999,
+      "codeEmissionMs": 3136.494083,
+      "codeReadyMedianMs": 4253.575291499999,
+      "executionMs": 25,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N01-graph-small-b1-cold-reference-binary-prng-prime-rust-r1-02315bba-e333-4ed0-86ea-9ca72dc93914",
+      "variantId": "prime-rust",
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "3942fe1139dbd51bc988f700cf2dfba9e3d51af419b13f30925df6112b844341",
+      "modelId": "claude-opus-5-5",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 49031,
+      "outputTokens": 940,
+      "agentMs": 12962.272292,
+      "userMs": 13018.782875,
+      "validatedMs": 13019.868458,
+      "validatedWithoutAllCompilationMs": 13019.868458,
+      "validatedWithoutCompilationAndModelMs": 148.68725000000086,
+      "validatedModelMs": 12871.181208,
+      "validatedCompilerAndModelMs": 12871.181208,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 12871.181208,
+      "codeEmissionMs": 3048.9857079999997,
+      "codeReadyMedianMs": 4107.2772085,
+      "executionMs": 20,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-ts-r1-9ac9a156-8c30-4a8f-8449-6ddddeb92b6d",
+      "variantId": "prime-ts",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "16e5d6cc01741c74a9bb26fcd13b510f013cf35c125e88bb084605c873945734",
+      "modelId": "claude-opus-5-5",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 37853,
+      "outputTokens": 1073,
+      "agentMs": 15054.294916,
+      "userMs": 15260.471125,
+      "validatedMs": 15264.43225,
+      "validatedWithoutAllCompilationMs": 15264.43225,
+      "validatedWithoutCompilationAndModelMs": 2210.0040420000005,
+      "validatedModelMs": 13054.428208,
+      "validatedCompilerAndModelMs": 13054.428208,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 13054.428208,
+      "codeEmissionMs": 3140.3483739999997,
+      "codeReadyMedianMs": 3625.4249790000003,
+      "executionMs": 30,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-prime-rust-r1-83122e4a-8ca2-4c5a-bfa2-611169d8f40f",
+      "variantId": "prime-rust",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "16e5d6cc01741c74a9bb26fcd13b510f013cf35c125e88bb084605c873945734",
+      "modelId": "claude-opus-5-5",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 50016,
+      "outputTokens": 1158,
+      "agentMs": 15421.895584,
+      "userMs": 15475.807792,
+      "validatedMs": 15477.868125,
+      "validatedWithoutAllCompilationMs": 15477.868125,
+      "validatedWithoutCompilationAndModelMs": 140.5632080000014,
+      "validatedModelMs": 15337.304917,
+      "validatedCompilerAndModelMs": 15337.304917,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 15337.304917000001,
+      "codeEmissionMs": 3998.961876,
+      "codeReadyMedianMs": 5141.6258545,
+      "executionMs": 27,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-d2b17688-c2e4-4766-9605-f0670fcfa37e",
+      "variantId": "wasmedge-aot",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "16e5d6cc01741c74a9bb26fcd13b510f013cf35c125e88bb084605c873945734",
+      "modelId": "claude-opus-5-5",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 31735,
+      "outputTokens": 1610,
+      "agentMs": 22532.100209,
+      "userMs": 22737.423417,
+      "validatedMs": 22739.135084,
+      "validatedWithoutAllCompilationMs": 15269.951710000001,
+      "validatedWithoutCompilationAndModelMs": 1549.6521690000009,
+      "validatedModelMs": 15260.399374,
+      "validatedCompilerAndModelMs": 21189.482915,
+      "validatedCompilerModelOverlapMs": 1540.0998330000002,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 15260.399374,
+      "codeEmissionMs": 7177.120207999999,
+      "codeReadyMedianMs": 5394.050729,
+      "executionMs": 18.47112500000003,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 4162.698708,
+      "aotMs": 3306.484666
+    },
+    {
+      "runId": "E-N03-events-small-b1-cold-reference-binary-prng-wasmedge-r1-b3bd205d-b681-4f57-82d4-1fe10959e09e",
+      "variantId": "wasmedge",
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "16e5d6cc01741c74a9bb26fcd13b510f013cf35c125e88bb084605c873945734",
+      "modelId": "claude-opus-5-5",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 4,
+      "recordedRequests": 4,
+      "upstream200Requests": 4,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 4,
+      "inputTokens": 44252,
+      "outputTokens": 2566,
+      "agentMs": 36855.738458,
+      "userMs": 37061.407333,
+      "validatedMs": 37063.149292,
+      "validatedWithoutAllCompilationMs": 33023.248541,
+      "validatedWithoutCompilationAndModelMs": 1331.405415000001,
+      "validatedModelMs": 33944.872793,
+      "validatedCompilerAndModelMs": 35731.743877,
+      "validatedCompilerModelOverlapMs": 2253.0296670000025,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 33944.872793,
+      "codeEmissionMs": 18158.316042,
+      "codeReadyMedianMs": 8970.202916,
+      "executionMs": 113.64504099999704,
+      "cellCalls": 3,
+      "compileFailures": 1,
+      "runtimeFailures": 0,
+      "cargoMs": 4039.900751,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-ts-r1-8e58e41b-8af3-4ae3-871e-5c484c83b0f7",
+      "variantId": "prime-ts",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "19d887cda498c87804bac06b4fcfa93c7d32f2eb32283ca694e5990faf632975",
+      "modelId": "claude-opus-5-5",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 37066,
+      "outputTokens": 637,
+      "agentMs": 9819.375125,
+      "userMs": 10025.801375,
+      "validatedMs": 10026.435541,
+      "validatedWithoutAllCompilationMs": 10026.435541,
+      "validatedWithoutCompilationAndModelMs": 2377.936667000001,
+      "validatedModelMs": 7648.498874,
+      "validatedCompilerAndModelMs": 7648.498874,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 7648.498874000001,
+      "codeEmissionMs": 2126.654917,
+      "codeReadyMedianMs": 2220.0967295,
+      "executionMs": 159,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-prime-rust-r1-3c293af9-2abc-427b-a8dd-1789dda41c81",
+      "variantId": "prime-rust",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "19d887cda498c87804bac06b4fcfa93c7d32f2eb32283ca694e5990faf632975",
+      "modelId": "claude-opus-5-5",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 49169,
+      "outputTokens": 658,
+      "agentMs": 7362.49475,
+      "userMs": 7416.232042,
+      "validatedMs": 7417.719292,
+      "validatedWithoutAllCompilationMs": 7417.719292,
+      "validatedWithoutCompilationAndModelMs": 271.3558750000002,
+      "validatedModelMs": 7146.363417,
+      "validatedCompilerAndModelMs": 7146.363417,
+      "validatedCompilerModelOverlapMs": 0,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "complete-capture-no-cargo",
+      "llmMs": 7146.3634170000005,
+      "codeEmissionMs": 1868.848,
+      "codeReadyMedianMs": 2126.909604,
+      "executionMs": 153,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 0,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-r1-ea59d1b9-8f66-4d4f-937e-36c073f4a503",
+      "variantId": "wasmedge",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "19d887cda498c87804bac06b4fcfa93c7d32f2eb32283ca694e5990faf632975",
+      "modelId": "claude-opus-5-5",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 30717,
+      "outputTokens": 938,
+      "agentMs": 13868.251125,
+      "userMs": 14076.031167,
+      "validatedMs": 14076.681875,
+      "validatedWithoutAllCompilationMs": 9718.947001,
+      "validatedWithoutCompilationAndModelMs": 1425.5412930000002,
+      "validatedModelMs": 9757.8195,
+      "validatedCompilerAndModelMs": 12651.140582,
+      "validatedCompilerModelOverlapMs": 1464.4137919999994,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 9757.819500000001,
+      "codeEmissionMs": 4138.334667,
+      "codeReadyMedianMs": 3208.5009165,
+      "executionMs": 248.12583300000097,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 4357.734874,
+      "aotMs": 0
+    },
+    {
+      "runId": "E-N04-simulation-small-b1-cold-reference-binary-prng-wasmedge-aot-r1-19f1f6f6-595d-4dd1-b3da-5c24f7cf9b1c",
+      "variantId": "wasmedge-aot",
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "repetition": 1,
+      "caseHash": "19d887cda498c87804bac06b4fcfa93c7d32f2eb32283ca694e5990faf632975",
+      "modelId": "claude-opus-5-5",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "passed": true,
+      "status": "completed",
+      "timedOut": false,
+      "error": null,
+      "cellContract": "compliant",
+      "requestCount": 3,
+      "recordedRequests": 3,
+      "upstream200Requests": 3,
+      "responseModelIds": [
+        "claude-opus-5-5"
+      ],
+      "usageRequests": 3,
+      "inputTokens": 30707,
+      "outputTokens": 904,
+      "agentMs": 15990.622208,
+      "userMs": 16197.39425,
+      "validatedMs": 16198.021583,
+      "validatedWithoutAllCompilationMs": 9129.371001,
+      "validatedWithoutCompilationAndModelMs": 1541.940251,
+      "validatedModelMs": 9060.334625,
+      "validatedCompilerAndModelMs": 14656.081332,
+      "validatedCompilerModelOverlapMs": 1472.903875,
+      "compilationAndModelAdjustmentReason": "compiler-and-model-union-clipped-to-validated",
+      "compilationAdjustmentReason": "all-cargo-union-clipped-to-elapsed",
+      "llmMs": 9060.334625,
+      "codeEmissionMs": 3056.5465830000003,
+      "codeReadyMedianMs": 2745.4394585,
+      "executionMs": 28.598291999998764,
+      "cellCalls": 2,
+      "compileFailures": 0,
+      "runtimeFailures": 0,
+      "cargoMs": 3906.632041,
+      "aotMs": 3162.018541
+    }
+  ],
+  "groups": [
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-ts",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 15407.580584,
+      "validatedWithoutAllCompilationMs": 15407.580584,
+      "validatedWithoutCompilationAndModelMs": 2281.3868329999987,
+      "llmMs": 13126.193750999999,
+      "executionMs": 25,
+      "codeEmissionMs": 3136.494083,
+      "codeReadyMedianMs": 4253.575291499999,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 37214,
+      "outputTokens": 932,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-rust",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 13019.868458,
+      "validatedWithoutAllCompilationMs": 13019.868458,
+      "validatedWithoutCompilationAndModelMs": 148.68725000000086,
+      "llmMs": 12871.181208,
+      "executionMs": 20,
+      "codeEmissionMs": 3048.9857079999997,
+      "codeReadyMedianMs": 4107.2772085,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 49031,
+      "outputTokens": 940,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 17272.031084,
+      "validatedWithoutAllCompilationMs": 12669.445916999997,
+      "validatedWithoutCompilationAndModelMs": 1307.1898339999989,
+      "llmMs": 12483.68375,
+      "executionMs": 64.81483399999888,
+      "codeEmissionMs": 4883.480083,
+      "codeReadyMedianMs": 4231.6810000000005,
+      "cargoMs": 4602.585167,
+      "aotMs": 0,
+      "inputTokens": 30587,
+      "outputTokens": 1277,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N01-graph-small-b1-cold-reference-binary-prng",
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge-aot",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 20368.597458,
+      "validatedWithoutAllCompilationMs": 12484.781083,
+      "validatedWithoutCompilationAndModelMs": 1587.1940409999988,
+      "llmMs": 12142.904542,
+      "executionMs": 18.20154100000036,
+      "codeEmissionMs": 5184.233792,
+      "codeReadyMedianMs": 4125.234375,
+      "cargoMs": 4563.042625,
+      "aotMs": 3320.77375,
+      "inputTokens": 30528,
+      "outputTokens": 1182,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-ts",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 15264.43225,
+      "validatedWithoutAllCompilationMs": 15264.43225,
+      "validatedWithoutCompilationAndModelMs": 2210.0040420000005,
+      "llmMs": 13054.428208,
+      "executionMs": 30,
+      "codeEmissionMs": 3140.3483739999997,
+      "codeReadyMedianMs": 3625.4249790000003,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 37853,
+      "outputTokens": 1073,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-rust",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 15477.868125,
+      "validatedWithoutAllCompilationMs": 15477.868125,
+      "validatedWithoutCompilationAndModelMs": 140.5632080000014,
+      "llmMs": 15337.304917000001,
+      "executionMs": 27,
+      "codeEmissionMs": 3998.961876,
+      "codeReadyMedianMs": 5141.6258545,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 50016,
+      "outputTokens": 1158,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 4,
+      "validatedMs": 37063.149292,
+      "validatedWithoutAllCompilationMs": 33023.248541,
+      "validatedWithoutCompilationAndModelMs": 1331.405415000001,
+      "llmMs": 33944.872793,
+      "executionMs": 113.64504099999704,
+      "codeEmissionMs": 18158.316042,
+      "codeReadyMedianMs": 8970.202916,
+      "cargoMs": 4039.900751,
+      "aotMs": 0,
+      "inputTokens": 44252,
+      "outputTokens": 2566,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 3,
+      "compileFailuresAllRuns": 1
+    },
+    {
+      "caseId": "E-N03-events-small-b1-cold-reference-binary-prng",
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge-aot",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 22739.135084,
+      "validatedWithoutAllCompilationMs": 15269.951710000001,
+      "validatedWithoutCompilationAndModelMs": 1549.6521690000009,
+      "llmMs": 15260.399374,
+      "executionMs": 18.47112500000003,
+      "codeEmissionMs": 7177.120207999999,
+      "codeReadyMedianMs": 5394.050729,
+      "cargoMs": 4162.698708,
+      "aotMs": 3306.484666,
+      "inputTokens": 31735,
+      "outputTokens": 1610,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-ts",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 10026.435541,
+      "validatedWithoutAllCompilationMs": 10026.435541,
+      "validatedWithoutCompilationAndModelMs": 2377.936667000001,
+      "llmMs": 7648.498874000001,
+      "executionMs": 159,
+      "codeEmissionMs": 2126.654917,
+      "codeReadyMedianMs": 2220.0967295,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 37066,
+      "outputTokens": 637,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "prime-rust",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 7417.719292,
+      "validatedWithoutAllCompilationMs": 7417.719292,
+      "validatedWithoutCompilationAndModelMs": 271.3558750000002,
+      "llmMs": 7146.3634170000005,
+      "executionMs": 153,
+      "codeEmissionMs": 1868.848,
+      "codeReadyMedianMs": 2126.909604,
+      "cargoMs": 0,
+      "aotMs": 0,
+      "inputTokens": 49169,
+      "outputTokens": 658,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 14076.681875,
+      "validatedWithoutAllCompilationMs": 9718.947001,
+      "validatedWithoutCompilationAndModelMs": 1425.5412930000002,
+      "llmMs": 9757.819500000001,
+      "executionMs": 248.12583300000097,
+      "codeEmissionMs": 4138.334667,
+      "codeReadyMedianMs": 3208.5009165,
+      "cargoMs": 4357.734874,
+      "aotMs": 0,
+      "inputTokens": 30717,
+      "outputTokens": 938,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    },
+    {
+      "caseId": "E-N04-simulation-small-b1-cold-reference-binary-prng",
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "variantId": "wasmedge-aot",
+      "planned": 1,
+      "passed": 1,
+      "failedOrMissing": 0,
+      "timeouts": 0,
+      "requestsAllRuns": 3,
+      "validatedMs": 16198.021583,
+      "validatedWithoutAllCompilationMs": 9129.371001,
+      "validatedWithoutCompilationAndModelMs": 1541.940251,
+      "llmMs": 9060.334625,
+      "executionMs": 28.598291999998764,
+      "codeEmissionMs": 3056.5465830000003,
+      "codeReadyMedianMs": 2745.4394585,
+      "cargoMs": 3906.632041,
+      "aotMs": 3162.018541,
+      "inputTokens": 30707,
+      "outputTokens": 904,
+      "metricSamples": {
+        "validatedMs": 1,
+        "validatedWithoutAllCompilationMs": 1,
+        "validatedWithoutCompilationAndModelMs": 1,
+        "llmMs": 1,
+        "executionMs": 1,
+        "codeEmissionMs": 1,
+        "codeReadyMedianMs": 1,
+        "cargoMs": 1,
+        "aotMs": 1,
+        "inputTokens": 1,
+        "outputTokens": 1
+      },
+      "medianCellCalls": 2,
+      "compileFailuresAllRuns": 0
+    }
+  ],
+  "timingBoundaries": {
+    "validatedMs": "daemon startup through model generation, all cells/repairs/final replies and external checker; excludes fixture generation and teardown",
+    "validatedWithoutAllCompilationMs": "per-run union of verified Cargo/AOT command intervals clipped to validated boundary then deducted once; includes LLM; arithmetic deduction, not a compiler-free run",
+    "validatedWithoutCompilationAndModelMs": "For each run, clip verified Cargo/AOT commands and all gateway model-request intervals to the validated boundary, merge them and deduct once, then take the median of successful samples. Overlap is not deducted twice. The remainder includes host startup/dispatch, runtime/I/O, snapshots, the checker and inter-request gaps. This is an arithmetic adjustment of the original E2E trace, not a model-free run or pure compute. Missing complete intervals, unique request IDs or a shared clock make the value unavailable.",
+    "adjustmentEvidence": "In JSON, validatedModelMs is the model-request interval union within the validated boundary; validatedCompilerAndModelMs is the combined deduction; validatedCompilerModelOverlapMs is their overlap. The LLM request sum may count concurrent requests and must not be subtracted directly.",
+    "llmMs": "sum of all gateway request receipt-to-stream-end durations, including errors/retries; excludes gaps between requests; may overlap cell execution",
+    "codeEmissionMs": "sum of generated code field first-to-last SSE event intervals; nested within LLM time, not additional time or provider CPU",
+    "codeReadyMedianMs": "within-run median request receipt-to-last-source-field SSE event, including wait before first code byte",
+    "executionMs": "sum of runtime-reported execution durations across all measured cells, including runtime errors, excluding Cargo/AOT; generated code and cell count can differ",
+    "cargoMs": "union of captured Cargo command intervals within validated boundary, including initialization and failed builds",
+    "aotMs": "union of captured AOT command intervals within validated boundary; union with Cargo only deducted once",
+    "tokens": "provider-reported input/output usage summed over every request; Anthropic input includes uncached, cache creation and cache read tokens, with native usage retained; unavailable if any request lacks valid usage"
+  },
+  "providerApi": "anthropic-messages",
+  "manifestHash": "518d06996174f3faa3aae68090282139041b521c285d16a9e0e04b86a5b22152",
+  "collectorSourceHash": "6a1f3eba767d8cc55d3f689f5c5cf000e20641528bca8a3e06739cea38f4eeec",
+  "variants": [
+    {
+      "id": "prime-ts",
+      "baseRevision": "7d442aafa985f9342134fac16c2ef41f03fb45c1",
+      "inputsHash": "913e22da8dfeb344b8182fc610ff5d4d19ae8e70099808299f2b65b883da1dbd",
+      "launcherHash": "87d110de3c54fb96302ca4d5f459660d2bd2af203cedbe7cc7f8d5761760dea6"
+    },
+    {
+      "id": "prime-rust",
+      "baseRevision": "967eb13fd488507af5f590e9c6ea8b2672f1fc05",
+      "inputsHash": "7939050a0b98e2a00134bde10db1c3aae16a6ac1147f8107f9fe643c68312463",
+      "launcherHash": "7a4410a816ea4a48a4390d6f55f147604ae9c07ec7b837da3bd29a107812daf2"
+    },
+    {
+      "id": "wasmedge",
+      "baseRevision": "7cdbc7a85724a02f5c6555f446eac080e8e55c69",
+      "inputsHash": "d618cfd59de87a69fa36c78466c4da56527826f88a08781f86e41bfbb371e37f",
+      "launcherHash": "db6fcf79b9bdbc0077f11dd57b80ede123080965d1b07e904ca2b6d58b48200c",
+      "runtimeMode": "interpreter"
+    },
+    {
+      "id": "wasmedge-aot",
+      "baseRevision": "7cdbc7a85724a02f5c6555f446eac080e8e55c69",
+      "inputsHash": "d618cfd59de87a69fa36c78466c4da56527826f88a08781f86e41bfbb371e37f",
+      "launcherHash": "db6fcf79b9bdbc0077f11dd57b80ede123080965d1b07e904ca2b6d58b48200c",
+      "runtimeMode": "aot"
+    }
+  ],
+  "comparisonLimits": "Generated programs and cell counts vary; offline versus e2e runtime differences do not establish a language speed ratio.",
+  "offlineComparison": [
+    {
+      "caseId": "N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "version": 1,
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 17.083459,
+      "roundtripWithoutAllCompilationMs": 17.083459,
+      "validatedWithoutAllCompilationMs": 164.008375,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 17,
+      "computeMs": 13.9885,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 164.008375
+    },
+    {
+      "caseId": "N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "version": 1,
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 16.288209,
+      "roundtripWithoutAllCompilationMs": 16.288209,
+      "validatedWithoutAllCompilationMs": 65.181333,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 16,
+      "computeMs": 13.971375,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 65.181333
+    },
+    {
+      "caseId": "N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "version": 1,
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 4750.292291,
+      "roundtripWithoutAllCompilationMs": 445.0715,
+      "validatedWithoutAllCompilationMs": 1174.9519579999996,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 52.020416999999725,
+      "computeMs": 37.487,
+      "cargoMs": 4644.13225,
+      "aotMs": null,
+      "snapshotMs": 37.41691700000047,
+      "validatedMs": 5496.0195
+    },
+    {
+      "caseId": "N01-graph-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "version": 1,
+      "kind": "graph",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 8097.765334,
+      "roundtripWithoutAllCompilationMs": 743.4995830000007,
+      "validatedWithoutAllCompilationMs": 1417.029625000001,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 9.149124999999913,
+      "computeMs": 0.794,
+      "cargoMs": 4863.651917,
+      "aotMs": 2950.1190830000005,
+      "snapshotMs": 36.00004199999967,
+      "validatedMs": 8771.359791
+    },
+    {
+      "caseId": "N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "version": 1,
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 14.089584,
+      "roundtripWithoutAllCompilationMs": 14.089584,
+      "validatedWithoutAllCompilationMs": 167.097791,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 14,
+      "computeMs": 11.638958,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 167.097791
+    },
+    {
+      "caseId": "N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "version": 1,
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 13.437333,
+      "roundtripWithoutAllCompilationMs": 13.437333,
+      "validatedWithoutAllCompilationMs": 62.533459,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 13,
+      "computeMs": 11.52975,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 62.533459
+    },
+    {
+      "caseId": "N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "version": 1,
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 4746.597209,
+      "roundtripWithoutAllCompilationMs": 480.14966700000014,
+      "validatedWithoutAllCompilationMs": 1127.940458,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 84.85812499999975,
+      "computeMs": 72.505,
+      "cargoMs": 4604.791125000001,
+      "aotMs": null,
+      "snapshotMs": 38.93958399999974,
+      "validatedMs": 5456.119333
+    },
+    {
+      "caseId": "N03-events-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "version": 1,
+      "kind": "events",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 8547.778708,
+      "roundtripWithoutAllCompilationMs": 747.1667069999994,
+      "validatedWithoutAllCompilationMs": 1436.7745000000004,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 10.96441699999923,
+      "computeMs": 2.343,
+      "cargoMs": 4727.762125,
+      "aotMs": 3610.6000830000003,
+      "snapshotMs": 35.77158299999974,
+      "validatedMs": 9181.331333
+    },
+    {
+      "caseId": "N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-ts",
+      "version": 1,
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 144.214292,
+      "roundtripWithoutAllCompilationMs": 144.214292,
+      "validatedWithoutAllCompilationMs": 294.40075,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 144,
+      "computeMs": 141.607291,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 294.40075
+    },
+    {
+      "caseId": "N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "prime-rust",
+      "version": 1,
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 144.977667,
+      "roundtripWithoutAllCompilationMs": 144.977667,
+      "validatedWithoutAllCompilationMs": 194.641834,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 144,
+      "computeMs": 142.575542,
+      "cargoMs": null,
+      "aotMs": null,
+      "snapshotMs": null,
+      "validatedMs": 194.641834
+    },
+    {
+      "caseId": "N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge",
+      "version": 1,
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 5356.148375,
+      "roundtripWithoutAllCompilationMs": 637.7686249999997,
+      "validatedWithoutAllCompilationMs": 1346.2664169999998,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 238.36849999999959,
+      "computeMs": 226.86999999999998,
+      "cargoMs": 5075.493208,
+      "aotMs": null,
+      "snapshotMs": 39.01716699999997,
+      "validatedMs": 6043.52525
+    },
+    {
+      "caseId": "N04-simulation-small-b1-cold-reference-binary-prng",
+      "variantId": "wasmedge-aot",
+      "version": 1,
+      "kind": "simulation",
+      "scale": "small",
+      "batches": 1,
+      "cache": "cold",
+      "warmups": 0,
+      "implementation": "reference",
+      "format": "binary",
+      "simulationMode": "prng",
+      "nodes": 1000,
+      "edges": 4000,
+      "queries": 64,
+      "events": 100000,
+      "keys": 10,
+      "trajectories": 10000,
+      "steps": 256,
+      "planned": 5,
+      "passed": 5,
+      "timeouts": 0,
+      "failedOrMissing": 0,
+      "roundtripMs": 7556.170334,
+      "roundtripWithoutAllCompilationMs": 741.0025850000002,
+      "validatedWithoutAllCompilationMs": 1386.8785429999998,
+      "adjustedRoundtripSamples": 5,
+      "adjustedValidatedSamples": 5,
+      "executionSamples": 5,
+      "computeSamples": 5,
+      "executionMs": 15.283666999999696,
+      "computeMs": 6.715,
+      "cargoMs": 4841.682459,
+      "aotMs": 2590.5258750000003,
+      "snapshotMs": 35.743790999999874,
+      "validatedMs": 8192.566916
+    }
+  ]
+}

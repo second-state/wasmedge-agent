@@ -27,7 +27,7 @@ import {
 	waitDaemon,
 } from "./process.js";
 import { modelsConfig } from "./provider.js";
-import { directRuntime, importCell } from "./runtime.js";
+import { directRuntime, importCell, RuntimeDeadlineError } from "./runtime.js";
 import { type StopSpan, Trace } from "./trace.js";
 import {
 	type Case,
@@ -39,6 +39,9 @@ import {
 	VARIANTS,
 	type VariantId,
 } from "./types.js";
+import type { WorkloadOptions } from "./workloads/cases.js";
+import { checkWorkloadTask, workloadOracleDirectory } from "./workloads/e2e.js";
+import { generateFixture } from "./workloads/fixtures.js";
 
 export function randomizedSlots(
 	items: Case[],
@@ -89,6 +92,7 @@ export function plan(
 	selected: string = VARIANTS.join(","),
 	commandProfiling = false,
 	toolPolicy: "native" | "runtime-only" = "runtime-only",
+	workloadOptions?: WorkloadOptions,
 ): Manifest {
 	if (!Number.isSafeInteger(repetitions) || repetitions < 1 || repetitions > 1000)
 		throw new Error("Repetitions must be 1..1000");
@@ -96,7 +100,7 @@ export function plan(
 	const variants = selected.split(",") as VariantId[];
 	if (!variants.length || new Set(variants).size !== variants.length || variants.some((id) => !VARIANTS.includes(id)))
 		throw new Error("Variants must be distinct supported IDs");
-	const items = cases(root, suite);
+	const items = cases(root, suite, workloadOptions);
 	for (const id of variants) {
 		if (!prepared.variants.some((variant) => variant.id === id)) throw new Error(`Prepare missing variant: ${id}`);
 		for (const item of items) {
@@ -227,6 +231,9 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 		PI_PACKAGE_DIR: slot.variantId === "prime-rust" ? variant.sourceRoot : undefined,
 		CARGO_TARGET_DIR: join(directory, "project-target"),
 		CARGO_BUILD_BUILD_DIR: join(directory, "project-target"),
+		...(item.workload
+			? { OMP_NUM_THREADS: "1", OPENBLAS_NUM_THREADS: "1", MKL_NUM_THREADS: "1", NUMEXPR_NUM_THREADS: "1" }
+			: {}),
 	});
 	captureCargo(trace, manifest.variants.find((value) => isWasmVariant(value.id))?.sourceRoot ?? resolve("."), env);
 	if (manifest.profileCommands)
@@ -245,6 +252,20 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 	let controller: AbortController | undefined;
 	try {
 		fixture(item, project);
+		if (item.workload) {
+			const stopFixture = trace.start("task.fixture_generate", {
+				kind: item.workload.kind,
+				scale: item.workload.scale,
+			});
+			const generated = generateFixture(
+				project,
+				join(directory, "oracle"),
+				item.workload,
+				(manifest.seed + Math.imul(slot.repetition, 2654435761)) >>> 0,
+			);
+			stopFixture();
+			trace.event("workload_fixture", { ...generated, oracleVisibility: "host-only-outside-guest-preopens" });
+		}
 		mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 		if (isWasmVariant(slot.variantId))
 			writeJson(join(agentDir, "settings.json"), {
@@ -280,7 +301,8 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 				}),
 			);
 			result.checkPass = passes.every(Boolean);
-			result.agentElapsedMs = task(result.checkPass ? "ok" : "error").durationMs;
+			result.timedOut = trace.spans.some((s) => s.name === "cell.roundtrip" && s.outcome === "timeout");
+			result.agentElapsedMs = task(result.timedOut ? "timeout" : result.checkPass ? "ok" : "error").durationMs;
 		} else {
 			controller = new AbortController();
 			abortTimer = setTimeout(() => controller?.abort(), Math.max(1, deadline - Date.now()));
@@ -295,7 +317,12 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 			env.BENCH_GATEWAY_TOKEN = gateway.token;
 			writeJson(
 				join(agentDir, "models.json"),
-				modelsConfig(gateway.baseUrl, manifest.provider?.modelId ?? "replay-fixed-v1"),
+				modelsConfig(
+					gateway.baseUrl,
+					manifest.provider?.modelId ?? "replay-fixed-v1",
+					manifest.provider?.maxTokens,
+					item.lane === "end-to-end" ? manifest.provider?.api : undefined,
+				),
 			);
 			const socketDir = mkdtempSync("/tmp/wa-bench-");
 			socket = join(socketDir, "d.sock");
@@ -426,6 +453,17 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 					result.turnExitCodes.length === item.turns.length;
 		}
 		result.userElapsedMs = user(result.timedOut ? "timeout" : "ok").durationMs ?? performance.now() - started;
+		if (item.check.kind === "workload" && item.workload) {
+			const check = trace.start("task.check", { checker: "independent-full-output-and-input-integrity" });
+			const checked = checkWorkloadTask(project, workloadOracleDirectory(directory), item.workload);
+			writeJson(join(directory, "workload-check.json"), checked);
+			result.checkPass =
+				checked.pass &&
+				!result.timedOut &&
+				result.turnExitCodes.length === item.turns.length &&
+				result.turnExitCodes.every((code) => code === 0);
+			check(result.checkPass ? "ok" : "error");
+		}
 		if (item.check.kind === "existing" && item.taskDir) {
 			const check = trace.start("task.check");
 			const checked = await timedProcess(
@@ -455,7 +493,9 @@ async function runOne(manifest: Manifest, prepared: Prepared, slot: RunSlot, ite
 		result.status = "completed";
 	} catch (error) {
 		setup("error");
-		result.status = "infrastructure_error";
+		result.timedOut = error instanceof RuntimeDeadlineError;
+		result.status = result.timedOut ? "completed" : "infrastructure_error";
+		if (result.timedOut) result.checkPass = false;
 		result.error = error instanceof Error ? error.message : "Run failed";
 		writeJson(join(directory, "failure.json"), { error: result.error, artifactPreserved: true });
 	} finally {

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureCargo, importCargo } from "../../../poc/bench/three-way/cargo.js";
 import { cases } from "../../../poc/bench/three-way/cases.js";
 import { auditCellContract, cellPrompt } from "../../../poc/bench/three-way/cell-contract.js";
@@ -12,7 +12,7 @@ import { cellExecution } from "../../../poc/bench/three-way/execution.js";
 import { hashTree, readJson, StreamArtifact, writeJson } from "../../../poc/bench/three-way/files.js";
 import { replayChunks, SseDecoder, startGateway } from "../../../poc/bench/three-way/gateway.js";
 import { cleanEnvironment, timedProcess } from "../../../poc/bench/three-way/process.js";
-import { credentials, modelsConfig } from "../../../poc/bench/three-way/provider.js";
+import { credentials, discoverProvider, modelsConfig } from "../../../poc/bench/three-way/provider.js";
 import { analyze, csv, quantile } from "../../../poc/bench/three-way/report.js";
 import { plan, randomizedSlots } from "../../../poc/bench/three-way/runner.js";
 import { importCell } from "../../../poc/bench/three-way/runtime.js";
@@ -633,6 +633,11 @@ describe("three-way benchmark collector", () => {
 			);
 			expect((await send()).status).toBe(429);
 			expect(readdirSync(trace.directory)).toContain("request-1.response.sse");
+			expect(readJson(join(trace.directory, "request-1.json"))).toMatchObject({
+				upstreamStatus: 200,
+				responseModelIds: ["model"],
+				completionIds: ["replay-1"],
+			});
 			expect(trace.spans.find((span) => span.name === "llm.time_to_first_reasoning")?.measurementState).toBe(
 				"not_run",
 			);
@@ -657,6 +662,93 @@ describe("three-way benchmark collector", () => {
 		expect(trace.spans.find((span) => span.name === "cell.execution")?.measurementState).toBe("not_run");
 		expect(trace.spans.find((span) => span.name === "cell.compile")?.clockId).toMatch(/^duration-only:/);
 		expect(trace.spans.find((span) => span.name === "cell.compile")?.cellId).toBe("cell");
+	});
+	it("forwards native Anthropic streams, merges cumulative usage and captures tool source", async () => {
+		vi.stubEnv("PRIME_AGENT_BASE_URL", "https://example.test");
+		vi.stubEnv("PRIME_AGENT_API_KEY", "upstream-test-secret");
+		const trace = new Trace(temporary(), slot),
+			controller = new AbortController();
+		const args = JSON.stringify({ code: 'fn main(){println!("測試");}' });
+		const events = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_test",
+					model: "claude-opus-5-5",
+					usage: {
+						input_tokens: 10,
+						cache_creation_input_tokens: 20,
+						cache_read_input_tokens: 30,
+						output_tokens: 0,
+					},
+				},
+			},
+			{
+				type: "content_block_start",
+				index: 0,
+				content_block: { type: "tool_use", id: "tool_test", name: "rust", input: {} },
+			},
+			...Array.from(args).map((partial_json) => ({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "input_json_delta", partial_json },
+			})),
+			{ type: "message_delta", usage: { output_tokens: 15 } },
+			{ type: "message_stop" },
+		];
+		const wire = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+		const actualFetch = globalThis.fetch;
+		const mockedFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			if (String(url).startsWith("http://127.0.0.1:")) return actualFetch(url, init);
+			expect(String(url)).toBe("https://example.test/v1/messages");
+			expect(init?.headers).toMatchObject({
+				"x-api-key": "upstream-test-secret",
+				"anthropic-version": "2023-06-01",
+				"anthropic-beta": "test-beta",
+			});
+			return new Response(wire, { headers: { "content-type": "text/event-stream" } });
+		});
+		const gateway = await startGateway({
+			trace,
+			modelId: "claude-opus-5-5",
+			provider: {
+				api: "anthropic-messages",
+				baseUrl: "https://example.test",
+				modelId: "claude-opus-5-5",
+				modelIdentity: "advertised-id-not-independent-revision-verification",
+				contextWindow: 200000,
+				maxTokens: 16384,
+			},
+			limit: 1,
+			signal: controller.signal,
+		});
+		try {
+			const response = await fetch(`${gateway.baseUrl}/v1/messages`, {
+				method: "POST",
+				headers: { "x-api-key": gateway.token, "anthropic-beta": "test-beta" },
+				body: JSON.stringify({ model: "claude-opus-5-5", stream: true, messages: [] }),
+			});
+			expect(await response.text()).toBe(wire);
+			expect(readJson(join(trace.directory, "request-1.json"))).toMatchObject({
+				upstreamStatus: 200,
+				responseModelIds: ["claude-opus-5-5"],
+				completionIds: ["msg_test"],
+				doneMarker: true,
+				nativeUsage: { input_tokens: 10, output_tokens: 15 },
+				usage: { prompt_tokens: 60, completion_tokens: 15, total_tokens: 75 },
+			});
+			expect(readJson(join(trace.directory, "request-1.tool-0.json"))).toMatchObject({
+				name: "rust",
+				arguments: JSON.parse(args),
+				complete: true,
+			});
+			expect(trace.spans.filter((span) => span.name === "llm.code_emission")).toHaveLength(1);
+		} finally {
+			controller.abort();
+			await gateway.close();
+			mockedFetch.mockRestore();
+			vi.unstubAllEnvs();
+		}
 	});
 	it("distinguishes Python preparation missing from Cargo not-applicable", () => {
 		const trace = new Trace(temporary(), { ...slot, variantId: "prime-ts" });
@@ -686,6 +778,52 @@ describe("three-way benchmark collector", () => {
 		).toThrow();
 		expect(cleanEnvironment().PRIME_AGENT_API_KEY).toBeUndefined();
 		expect(JSON.stringify(modelsConfig("http://localhost:1/v1", "model"))).toContain("BENCH_GATEWAY_TOKEN");
+	});
+	it.each([false, true])(
+		"prefers the v1 API while retaining root-only provider fallback (rootOnly=%s)",
+		async (rootOnly) => {
+			vi.stubEnv("PRIME_AGENT_BASE_URL", "https://example.test");
+			vi.stubEnv("PRIME_AGENT_API_KEY", "test-value");
+			const paths: string[] = [];
+			const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				const path = new URL(String(url)).pathname;
+				paths.push(path);
+				return new Response(JSON.stringify({ data: [{ id: "anthropic/claude-opus-5-5" }] }), {
+					status: rootOnly && path !== "/models" ? 404 : 200,
+				});
+			});
+			try {
+				const discovered = await discoverProvider("anthropic/claude-opus-5-5");
+				expect(discovered.provider.baseUrl).toBe(`https://example.test${rootOnly ? "" : "/v1"}`);
+				expect(paths).toEqual(rootOnly ? ["/v1/models", "/api/v1/models", "/models"] : ["/v1/models"]);
+			} finally {
+				fetch.mockRestore();
+				vi.unstubAllEnvs();
+			}
+		},
+	);
+	it("discovers Claude Platform with native authentication and root SDK URL", async () => {
+		vi.stubEnv("PRIME_AGENT_BASE_URL", "https://example.test/v1");
+		vi.stubEnv("PRIME_AGENT_API_KEY", "test-value");
+		const mockedFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			expect(String(url)).toBe("https://example.test/v1/models");
+			expect(init?.headers).toEqual({ "x-api-key": "test-value", "anthropic-version": "2023-06-01" });
+			return new Response(JSON.stringify({ data: [{ id: "claude-opus-5-5" }] }));
+		});
+		try {
+			const result = await discoverProvider(undefined, "anthropic-messages");
+			expect(result.provider).toMatchObject({
+				baseUrl: "https://example.test",
+				api: "anthropic-messages",
+				modelId: "claude-opus-5-5",
+			});
+			expect(modelsConfig("http://localhost:1", "claude-opus-5-5", 16384, result.provider.api)).toMatchObject({
+				providers: { benchmark: { api: "anthropic-messages", baseUrl: "http://localhost:1" } },
+			});
+		} finally {
+			mockedFetch.mockRestore();
+			vi.unstubAllEnvs();
+		}
 	});
 	it("produces paired randomized slots with identical Python reference cells", () => {
 		const items = cases(resolve("../.."), "runtime");
