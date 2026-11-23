@@ -214,10 +214,10 @@ mod tests {
             ),
             daemon("/tmp/other.sock", DaemonStatus::Stale, false),
         ]);
-        // Column widths: socket 35 (the starred default path), pid 3,
+        // Column widths: socket 38 (the starred default path), pid 3,
         // version 7, status 7, sessions 8, uptime 6; two-space gutters.
         let expected_header = [
-            ("socket", 35),
+            ("socket", "/tmp/wasmedge-agent-1000/daemon.sock *".len()),
             ("pid", 3),
             ("version", 7),
             ("status", 7),

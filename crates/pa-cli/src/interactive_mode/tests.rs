@@ -404,12 +404,8 @@ async fn report_an_aborted_flow_once() {
     );
 }
 
-/// A fresh home (no choice written) is the one home the question still
-/// mounts for — the opt-in moment: the flow's `Share` answer persists
-/// beside the completion flag, and both read back through the next
-/// launch's fresh manager.
 #[test]
-fn settings_sink_persists_the_fresh_home_answer_with_the_flag() {
+fn fresh_home_completes_onboarding_with_trace_sharing_off() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let agent_dir = dir.path().join("agent");
     std::fs::create_dir_all(&agent_dir).expect("agent dir");
@@ -440,10 +436,9 @@ fn settings_sink_persists_the_fresh_home_answer_with_the_flag() {
         "a fresh home has no completion flag yet"
     );
     assert!(
-        !sink.agent_traces_choice_written(),
-        "a fresh home carries no trace choice (sharing stays off until a choice is made)"
+        sink.agent_traces_choice_written(),
+        "the fork manages trace sharing in settings and skips its onboarding prompt"
     );
-    sink.set_agent_traces_enabled(true).expect("answer Share");
     sink.mark_onboarding_complete()
         .expect("complete onboarding");
 
@@ -453,8 +448,8 @@ fn settings_sink_persists_the_fresh_home_answer_with_the_flag() {
         "the flow marked onboarding shown"
     );
     assert!(
-        settings.get_agent_traces_enabled(),
-        "the Share answer persisted with the flag"
+        !settings.get_agent_traces_enabled(),
+        "completing onboarding keeps trace sharing off"
     );
 }
 

@@ -1025,6 +1025,8 @@ type ServedAdapted = (String, String, String, Option<String>);
 /// request model (TS `requestModel`) together with the credential.
 #[test]
 fn a_mid_session_xai_login_switches_the_request_model_live() {
+    let api_key =
+        pa_ai::env_api_keys::get_env_api_key("xai").unwrap_or_else(|| "sk-config-fallback".into());
     let _faux = FAUX_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1088,9 +1090,8 @@ fn a_mid_session_xai_login_switches_the_request_model_live() {
         .expect("the built session streams")
         .clone();
     call_stream_once(&engine, &stream_fn);
-    assert_eq!(
-        pre_login.received_api_keys().last(),
-        Some(&Some("sk-config-fallback".to_string())),
+    assert!(
+        pre_login.received_api_keys().last() == Some(&Some(api_key.clone())),
         "the build-time shape serves via the faux API"
     );
     assert!(adapted.lock().unwrap().is_empty());
@@ -1109,14 +1110,14 @@ fn a_mid_session_xai_login_switches_the_request_model_live() {
     )
     .unwrap();
     call_stream_once(&engine, &stream_fn);
-    assert_eq!(
-        *adapted.lock().unwrap(),
-        vec![(
-            "grok-test".to_string(),
-            "openai-responses".to_string(),
-            "https://api.x.ai/v1".to_string(),
-            Some("grok-access".to_string()),
-        )],
+    assert!(
+        *adapted.lock().unwrap()
+            == [(
+                "grok-test".to_string(),
+                "openai-responses".to_string(),
+                "https://api.x.ai/v1".to_string(),
+                Some("grok-access".to_string()),
+            )],
         "the live session's next call carried the adapted request model and credential"
     );
 
@@ -1131,12 +1132,8 @@ fn a_mid_session_xai_login_switches_the_request_model_live() {
         1,
         "no further call rides the adapted registration"
     );
-    assert_eq!(
-        pre_login.received_api_keys(),
-        vec![
-            Some("sk-config-fallback".to_string()),
-            Some("sk-config-fallback".to_string())
-        ],
+    assert!(
+        pre_login.received_api_keys() == [Some(api_key.clone()), Some(api_key)],
         "the logout returns the session to the API-key shape with the fallback key"
     );
     pre_login.unregister();
@@ -1152,6 +1149,8 @@ fn a_mid_session_xai_login_switches_the_request_model_live() {
 /// openai-responses shape — never resends.
 #[test]
 fn a_mid_session_xai_logout_serves_the_api_key_shape_never_the_captured_token() {
+    let api_key =
+        pa_ai::env_api_keys::get_env_api_key("xai").unwrap_or_else(|| "sk-config-fallback".into());
     let _faux = FAUX_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1232,20 +1231,19 @@ fn a_mid_session_xai_logout_serves_the_api_key_shape_never_the_captured_token() 
     adapted_registration.unregister();
     // Restore the built-in the shadowed registration replaced.
     pa_ai::registry::register_builtin_api_providers();
-    assert_eq!(
-        subscription_calls,
-        vec![(
-            "grok-test".to_string(),
-            "openai-responses".to_string(),
-            "https://api.x.ai/v1".to_string(),
-            Some("grok-access".to_string()),
-        )],
-        "only the build-time call rides the subscription shape: {subscription_calls:?}"
+    assert!(
+        subscription_calls
+            == [(
+                "grok-test".to_string(),
+                "openai-responses".to_string(),
+                "https://api.x.ai/v1".to_string(),
+                Some("grok-access".to_string()),
+            )],
+        "only the build-time call rides the subscription shape"
     );
-    assert_eq!(
-        api_key_shape_calls,
-        vec![Some("sk-config-fallback".to_string())],
-        "the logout lands the next call on the API-key shape with the fallback key: {api_key_shape_calls:?}"
+    assert!(
+        api_key_shape_calls == [Some(api_key)],
+        "the logout lands the next call on the API-key shape with the configured key"
     );
 }
 

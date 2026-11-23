@@ -8,16 +8,17 @@ use serde_json::Value;
 
 use crate::theme::{Theme, ThemeBg, ThemeColor};
 
-/// The compact 7-row brand butterfly.
-pub const PRIME_COMPACT_BUTTERFLY_LOGO: &str = concat!(
-    "                 \u{2597}\u{2584}\u{2584}\u{2588}\u{2580}\n",
-    "   \u{2588}\u{2588}\u{2588}\u{2584}       \u{2597}\u{2584}\u{2588}\u{2588}\u{2588}\u{2580}\n",
-    "  \u{2597}\u{2588}\u{259b}\u{2590}\u{2588}\u{2599}   \u{2597}\u{2584}\u{2588}\u{2580}\u{2597}\u{2588}\u{2580}\n",
-    " \u{2597}\u{2588}\u{259b} \u{259f}\u{2588}\u{2588}\u{2599}\u{2584}\u{2588}\u{2588}\u{259b} \u{259f}\u{259b}\n",
-    " \u{2597}\u{259f}\u{258c} \u{2590}\u{2588}\u{2588}\u{2588}\u{259b}\u{2598}\u{2597}\u{2584}\u{2588}\u{2596}\n",
-    "\u{259f}\u{2588}\u{2588}\u{2588}\u{2584}  \u{2584}\u{2584}\u{259f}\u{2588}\u{2588}\u{2588}\u{2580}\n",
-    "\u{259c}\u{2588}\u{259b}\u{2580}\u{2598}  \u{259c}\u{2588}\u{259b}\u{2580}\u{2598}",
-);
+/// The seven-row chat mark, rendered from wasmedge-mark.svg with
+/// `scripts/render-logo.py --width 16 --threshold 70`.
+const WASMEDGE_COMPACT_LOGO: [&str; 7] = [
+    "      ██",
+    "     ▄▀▀▄",
+    "▄▄▄▀  ▄▄▄ ▀▄▄▄",
+    "▀▀██▀▀   ▀██▀▀",
+    "  █ ▀    ▀ █",
+    "   █▄    ▄█",
+    "  ██▀▀▀▀▀▀██",
+];
 
 /// Truncate a plain string to a visible width (cut on grapheme
 /// boundaries, appending the ellipsis).
@@ -353,14 +354,14 @@ pub fn render_top_bar(state: &ChromeState, theme: &Theme, width: usize) -> Line 
     line
 }
 
-/// The brand splash: butterfly logo beside the version/model/cwd metadata
+/// The brand splash: WasmEdge logo beside the version/model/cwd metadata
 /// (TS `BrandSplashHeader`, `topPadding` always on).
 #[must_use]
 pub fn render_splash(state: &ChromeState, theme: &Theme, width: usize) -> Vec<Line> {
     let safe_width = width.max(1);
     let padding_x = usize::from(safe_width > 1);
     let content_width = safe_width.saturating_sub(padding_x * 2).max(1);
-    let logo_raw: Vec<&str> = PRIME_COMPACT_BUTTERFLY_LOGO.split('\n').collect();
+    let logo_raw = &WASMEDGE_COMPACT_LOGO;
     let logo_canvas_width = logo_raw
         .iter()
         .map(|line| str_width(line))

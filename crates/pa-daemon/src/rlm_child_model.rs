@@ -24,7 +24,7 @@ pub const ANSWER_TEXT_MAX_CHARS: usize = 65_536;
 const ELLIPSIS: &str = "...";
 
 /// The model catalog the RLM surface resolves against: the same
-/// credential-backed list `rlm.find_models` searches (entitled `internal/*` models resolve).
+/// credential-backed list that `rlm.find_models` searches.
 #[must_use]
 pub fn catalog_models(agent_dir: &Path) -> Vec<RlmModelInfo> {
     let registry = crate::state_getters::worker_model_registry(agent_dir);
@@ -433,10 +433,9 @@ mod tests {
         assert_thinking_supported(dir.path(), Some("high"), "scripted/faux-1").unwrap();
     }
 
-    /// The child-propagation regression: a spawned child resolves an
-    /// entitled private `internal/*` model through the worker's same disk caches.
+    /// A stale account-scoped cache cannot add a child model to the fork's bundled catalog.
     #[test]
-    fn a_spawned_child_resolves_an_entitled_private_model() {
+    fn a_child_rejects_private_models_found_only_in_a_cached_account_snapshot() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path()).unwrap();
         // The worker-path auth (auth.json): one Prime Inference key+team.
@@ -496,46 +495,27 @@ mod tests {
         )
         .unwrap();
 
-        assert!(catalog_models(dir.path())
+        assert!(!catalog_models(dir.path())
             .iter()
             .any(|model| model.id == "internal/glm-5.3-fast"));
-        let resolved = resolve_child_model(
-            dir.path(),
-            Some("prime-inference/internal/glm-5.3-fast"),
-            Some("prime-inference/z-ai/glm-5.3"),
-            "subagent",
-            &DaemonAllowlist::Unrestricted,
-        )
-        .unwrap();
-        assert_eq!(resolved, "prime-inference/internal/glm-5.3-fast");
-        let resolved = resolve_child_model(
-            dir.path(),
-            Some("internal/glm-5.3-fast"),
-            Some("prime-inference/z-ai/glm-5.3"),
-            "subagent",
-            &DaemonAllowlist::Unrestricted,
-        )
-        .unwrap();
-        assert_eq!(resolved, "prime-inference/internal/glm-5.3-fast");
-        // The spawn-time thinking check follows the resolved entitlement.
-        assert_thinking_supported(
-            dir.path(),
-            Some("high"),
+        for reference in [
             "prime-inference/internal/glm-5.3-fast",
-        )
-        .unwrap();
-        assert_thinking_supported(
-            dir.path(),
-            Some("off"),
-            "prime-inference/internal/glm-5.3-fast",
-        )
-        .unwrap();
+            "internal/glm-5.3-fast",
+        ] {
+            let error = resolve_child_model(
+                dir.path(),
+                Some(reference),
+                Some("prime-inference/z-ai/glm-5.3"),
+                "subagent",
+                &DaemonAllowlist::Unrestricted,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("unavailable"), "{error}");
+        }
     }
 
-    /// The catalog-repo child-resolution regression: a fetched entry the compiled fallback lacks
-    /// resolves through the on-disk provider catalog, once its provider is auth-configured.
     #[test]
-    fn a_spawned_child_resolves_a_catalog_repo_entry_the_compiled_fallback_lacks() {
+    fn a_child_rejects_models_found_only_in_the_remote_catalog_cache() {
         const PROBE_ID: &str = "gpt-6-probe";
         assert!(
             !pa_ai::models_generated::get_models("openai-codex")
@@ -589,38 +569,20 @@ mod tests {
         )
         .unwrap();
         let selector = format!("openai-codex/{PROBE_ID}");
-        let catalog = catalog_models(dir.path());
-        let probe = catalog
+        assert!(!catalog_models(dir.path())
             .iter()
-            .find(|model| model.selector() == selector)
-            .expect("the fetched entry lists for find_models");
-        assert_eq!(probe.name, "GPT-6 Probe");
-        let resolved = resolve_child_model(
-            dir.path(),
-            Some(&selector),
-            Some("prime-inference/z-ai/glm-5.3"),
-            "subagent",
-            &DaemonAllowlist::Unrestricted,
-        )
-        .unwrap();
-        assert_eq!(resolved, selector);
-        let resolved = resolve_child_model(
-            dir.path(),
-            Some(PROBE_ID),
-            Some("prime-inference/z-ai/glm-5.3"),
-            "subagent",
-            &DaemonAllowlist::Unrestricted,
-        )
-        .unwrap();
-        assert_eq!(resolved, selector);
-        // The spawn-time thinking check follows the fetched entry's map:
-        // xhigh is explicitly mapped, minimal is explicitly nulled out.
-        assert_thinking_supported(dir.path(), Some("xhigh"), &selector).unwrap();
-        let error = assert_thinking_supported(dir.path(), Some("minimal"), &selector).unwrap_err();
-        assert!(
-            error.to_string().contains("not supported by model"),
-            "{error}"
-        );
+            .any(|model| model.selector() == selector));
+        for reference in [selector.as_str(), PROBE_ID] {
+            let error = resolve_child_model(
+                dir.path(),
+                Some(reference),
+                Some("prime-inference/z-ai/glm-5.3"),
+                "subagent",
+                &DaemonAllowlist::Unrestricted,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("unavailable"), "{error}");
+        }
     }
 
     #[test]

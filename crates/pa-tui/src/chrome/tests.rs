@@ -838,9 +838,7 @@ fn splash_renders_logo_version_model_and_cwd() {
         .any(|l| text(l).contains("wasmedge agent v0.0.0")));
     assert!(lines.iter().any(|l| text(l).contains("model faux-1")));
     assert!(lines.iter().any(|l| text(l).contains("cwd /tmp/project")));
-    assert!(lines
-        .iter()
-        .any(|l| text(l).contains("\u{2597}\u{2584}\u{2584}")));
+    assert!(lines.iter().any(|l| text(l).contains("██▀▀▀▀▀▀██")));
 }
 
 #[test]

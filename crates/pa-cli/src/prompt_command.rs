@@ -149,8 +149,6 @@ fn assemble_breakdown(
             // A daemon worker registers the host request of every
             // controller-backed skill, so all loaded skills stay visible.
             skills: &resources.skills,
-            // The shipped model-tool surface: `python_repl` only; bash/edit are kernel-resident
-            // programmatic tools.
             selected_tools: vec!["rust", "bash"],
             model_prompt_extras: model_prompts.extras.as_deref(),
             model_input: &model.input,
@@ -267,7 +265,7 @@ mod tests {
         let (breakdown, errors) =
             assemble_breakdown(dir.path(), agent_dir.path(), Some(TEXT_MODEL)).unwrap();
         assert!(errors.is_empty());
-        assert!(breakdown.assembled.starts_with("# wasmedge-agent harness"));
+        assert!(breakdown.assembled.starts_with("# WasmEdge Agent"));
         assert!(breakdown
             .assembled
             .contains("Recursive agent depth: 0 (root)"));

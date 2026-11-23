@@ -268,9 +268,12 @@ jobs:
           npm run build:native
           node scripts/test-native-cells.mjs
 
-      - name: Test the native core and provider libraries
+      - name: Test the native Rust workspace libraries
         if: runner.os == 'Linux' && startsWith(matrix.shard, '1/')
-        run: cargo test --release --locked --lib -p pa-agent -p pa-ai -p pa-core -p pa-models -p pa-types
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          WASMEDGE_AGENT_TEMPLATE_DIR: ${{ github.workspace }}/wasmedge-agent-runtime/template
+        run: cargo test --release --locked --workspace --lib
 
       - name: Cell tests (integration + suite)
         working-directory: packages/coding-agent

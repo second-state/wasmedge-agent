@@ -172,20 +172,8 @@ async fn compact_with_paused_goal_never_continues() {
     );
 }
 
-/// The goal continuation loop at the natural turn end (TS
-/// `_getGoalContinuationMessages` + `_getContinuationMessages`): a
-/// multi-continuation goal session driven to completion end to end
-/// through the worker. The turn runner's queue drives each minted
-/// continuation (the engine consults at every settled boundary, the
-/// admission sink queues the follow-up, the runner wakes), the
-/// budget-free loop keeps prompting until the kernel's
-/// `goal.complete()` (the scripted ipython tool call, the f18
-/// completion surface) settles the goal, and the completion's
-/// boundary mints nothing more. The completing cell needs a
-/// bootable kernel: a gate run needs the kernel venv, bootstrapped
-/// or built with uv on PATH (the guard inside names the
-/// recipe when the cell fails instead of letting the loop drain
-/// the faux script into a misleading count mismatch).
+/// The worker keeps scheduling continuations until a WasmEdge cell completes
+/// the goal through the session's host handler.
 #[tokio::test]
 async fn goal_turn_end_loop_runs_to_completion() {
     let dir = std::env::temp_dir().join(format!("pa-worker-goal-loop-{}", uuid::Uuid::new_v4()));
@@ -205,8 +193,8 @@ async fn goal_turn_end_loop_runs_to_completion() {
                 "first pursuit turn",
                 "second pursuit turn",
                 { "content": [
-                    { "type": "toolCall", "name": "python_repl",
-                      "arguments": { "code": "import goal; await goal.complete()" } },
+                    { "type": "toolCall", "name": "rust",
+                      "arguments": { "code": "use agent_lib::prelude::*; fn main() -> Result<()> { rlm::goal::complete()?; Ok(()) }" } },
                 ] },
                 "wrap-up after the completion",
                 "after the loop settled",
@@ -237,24 +225,15 @@ async fn goal_turn_end_loop_runs_to_completion() {
     let idle = worker.dispatch("wait_for_idle", &json!({})).await;
     assert!(idle.success, "the goal loop never settled: {idle:?}");
     let events = session_events_since(&mut subscription);
-    // A gate run without the kernel environment (the kernel venv, or
-    // uv on PATH to build it) fails the
-    // completing ipython cell: the goal stays active and the loop
-    // keeps minting (TS parity: goal continuations are unbounded while
-    // the goal is active) until the faux script runs dry. Fail with
-    // the diagnosis instead of the misleading continuation-count
-    // mismatch.
-    let kernel_failure = events.iter().find(|event| {
+    let cell_failure = events.iter().find(|event| {
         event.get("type").and_then(Value::as_str) == Some("message_end")
             && event["message"]["role"] == "toolResult"
             && event["message"]["isError"] == json!(true)
     });
-    if let Some(failure) = kernel_failure {
-        panic!(
-            "the completing ipython cell failed — this test needs the kernel \
-                 environment (the bootstrapped kernel venv, or uv on PATH to build it): {failure:?}"
-        );
-    }
+    assert!(
+        cell_failure.is_none(),
+        "the completing Rust cell failed: {cell_failure:?}"
+    );
     let goal_rows: Vec<&Value> = events
         .iter()
         .filter(|event| {

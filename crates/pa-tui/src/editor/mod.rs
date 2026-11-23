@@ -899,7 +899,7 @@ mod tests {
     }
 
     /// An editor completing `@` tokens over a base holding the
-    /// `wasmedge-agent/` directory with two children beside an unrelated file.
+    /// `demo-project/` directory with two children beside an unrelated file.
     fn at_editor() -> (tempfile::TempDir, Editor) {
         let base = tempfile::TempDir::new().expect("temp dir");
         std::fs::create_dir_all(base.path().join("demo-project")).expect("mkdir");
@@ -931,7 +931,7 @@ mod tests {
         ]);
         // Tab on the open menu applies the directory item.
         let (_base, mut e) = at_editor();
-        for ch in "@prime-ag".chars() {
+        for ch in "@demo-pro".chars() {
             e.handle_input(&ch.to_string());
         }
         assert_eq!(
@@ -943,7 +943,7 @@ mod tests {
         assert_eq!(settled_menu(&mut e), children);
         // Tab before the menu opens applies the single match inline.
         let (_base, mut e) = at_editor();
-        for ch in "@prime-ag".chars() {
+        for ch in "@demo-pro".chars() {
             e.handle_input(&ch.to_string());
         }
         e.handle_input("tab");
@@ -954,12 +954,12 @@ mod tests {
     #[test]
     fn confirming_a_stale_menu_replaces_the_whole_typed_token() {
         let (_base, mut e) = at_editor();
-        for ch in "@pr".chars() {
+        for ch in "@de".chars() {
             e.handle_input(&ch.to_string());
         }
         assert!(settled_menu(&mut e).is_some());
-        // Typing on parks a refresh: the open menu still answers `@pr`.
-        for ch in "ime-ag".chars() {
+        // Typing on parks a refresh: the open menu still answers `@de`.
+        for ch in "mo-pro".chars() {
             e.handle_input(&ch.to_string());
         }
         e.handle_input("down");
@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn a_slash_typed_while_the_search_runs_lists_the_children() {
         let (_base, mut e) = at_editor();
-        for ch in "@wasmedge-agent".chars() {
+        for ch in "@demo-project".chars() {
             e.handle_input(&ch.to_string());
         }
         e.materialize_autocomplete();
