@@ -8,6 +8,7 @@ The native host invokes the fork's existing Node tool worker for Rust/WASI cells
 and the host shell. The worker owns Cargo builds, the WasmEdge process, library
 transactions, resource controls and the guest bridge. The TypeScript SDK and
 historical benchmark harness remain available in `packages/`.
+The optional Bun standalone build also retains the TypeScript host.
 
 The executable is `wasmedge-agent`, environment overrides use `WASMEDGE_AGENT_*`,
 and configuration lives in `~/.wasmedge-agent`.

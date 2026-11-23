@@ -794,12 +794,8 @@ mod tests {
             // Every schedule must succeed; repetition exercises select's fair branch ordering,
             // rather than retrying a failed login until it happens to succeed.
             for _ in 0..32 {
-                let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-                let port = reservation.local_addr().unwrap().port();
-                drop(reservation);
                 let mut config = config("Slack", ORIGIN_URL);
                 config.client_id = Some("registered-client".to_string());
-                config.callback_port = Some(port);
                 let ui = GraceUi {
                     auth_url: Mutex::default(),
                     input: input.clone(),
@@ -807,18 +803,22 @@ mod tests {
                 let mut login = Box::pin(mcp_login(&http, &config, &ui));
                 assert!(futures::poll!(login.as_mut()).is_pending());
                 let auth_url = Url::parse(&ui.auth_url.lock().unwrap()).unwrap();
+                let mut redirect = auth_url
+                    .query_pairs()
+                    .find(|(key, _)| key == "redirect_uri")
+                    .map(|(_, value)| Url::parse(&value).unwrap())
+                    .unwrap();
                 let state = auth_url
                     .query_pairs()
                     .find(|(key, _)| key == "state")
                     .map(|(_, value)| value.into_owned())
                     .unwrap();
-                let response = client
-                    .get(format!(
-                        "http://127.0.0.1:{port}/callback?code=browser-code&state={state}"
-                    ))
-                    .send()
-                    .await
-                    .unwrap();
+                redirect.set_host(Some("127.0.0.1")).unwrap();
+                redirect
+                    .query_pairs_mut()
+                    .append_pair("code", "browser-code")
+                    .append_pair("state", &state);
+                let response = client.get(redirect).send().await.unwrap();
                 assert_eq!(response.status(), reqwest::StatusCode::OK);
                 // Both the browser result and the expired paste grace are now ready before
                 // the login future is polled again; no wall-clock sleeps or timing guesses.

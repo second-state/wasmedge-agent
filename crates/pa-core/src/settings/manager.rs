@@ -1117,7 +1117,7 @@ mod tests {
         std::fs::create_dir_all(&agent_dir).unwrap();
         let secret = r#"{"prime-inference":{"type":"api_key","key":"sensitive-key"}}"#;
         std::fs::write(&auth, secret).unwrap();
-        std::os::unix::fs::symlink("../../../global/auth.json", &project_settings).unwrap();
+        std::os::unix::fs::symlink("../../global/auth.json", &project_settings).unwrap();
 
         let mut manager = SettingsManager::create(&project, &agent_dir);
         manager.set_project_packages(vec![serde_json::json!({"source": "example"})]);

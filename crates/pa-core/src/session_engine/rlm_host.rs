@@ -198,6 +198,10 @@ pub type RlmHostFuture<T> = std::pin::Pin<Box<dyn Future<Output = anyhow::Result
 /// host answer with the no-children behavior: empty rosters, explicit
 /// spawn failures, no selector matches.
 pub trait RlmSubagentHost: Send + Sync {
+    /// The recursion limit currently enforced when admitting a child.
+    fn max_depth(&self) -> Option<u32> {
+        None
+    }
     fn spawn(&self, request: RlmSpawnRequest) -> RlmHostFuture<RlmSpawnHandle>;
     fn create_session(
         &self,

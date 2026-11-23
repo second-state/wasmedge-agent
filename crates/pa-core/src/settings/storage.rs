@@ -406,7 +406,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         let settings = project.join(CONFIG_DIR_NAME).join("settings.json");
-        let shared = project.join(".prime/shared.json");
+        let shared = project.join("shared.json");
         fs::create_dir_all(settings.parent().unwrap()).unwrap();
         fs::write(&shared, r#"{"theme":"prime"}"#).unwrap();
         std::os::unix::fs::symlink("../shared.json", &settings).unwrap();

@@ -114,6 +114,8 @@ fn run_cli(root: &Path, args: &[&str]) -> Output {
     command
         .args(args)
         .env("WASMEDGE_AGENT_CODING_AGENT_DIR", &agent_dir)
+        .env("WASMEDGE_AGENT_TEMPLATE_DIR", root.join("template"))
+        .env("RUSTUP_HOME", root.join("rustup"))
         .env("TMPDIR", root)
         .stdin(Stdio::null());
     for key in SCRUB_ENV {
@@ -328,6 +330,13 @@ fn reported_socket_paths(report: &Value) -> Vec<String> {
 #[test]
 fn doctor_lists_and_then_reaps_an_idle_root_owned_daemon() {
     let fixture = fixture_dir();
+    // A ready fixture keeps doctor --fix from preparing the installed template.
+    let template = fixture.path().join("template");
+    let built = template.join("target/wasm32-wasip1/release");
+    std::fs::create_dir_all(&built).unwrap();
+    std::fs::create_dir(template.join("vendor")).unwrap();
+    std::fs::write(template.join("Cargo.toml"), "[workspace]\n").unwrap();
+    std::fs::write(built.join("cell.wasm"), []).unwrap();
     let agent_dir = fixture.path().join("agent");
     let socket = agent_dir.join("daemon.sock"); // non-default: not <socket-dir>/daemon.sock
     let mut daemon = spawn_daemon(&socket, &agent_dir, &fixture.path().join("tmp"));

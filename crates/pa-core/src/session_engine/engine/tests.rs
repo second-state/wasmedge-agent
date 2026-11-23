@@ -147,7 +147,7 @@ async fn engine_runs_tool_loop_and_persists() {
 
     // The system prompt is the layered assembly: static core layer
     // first, dynamic tail after.
-    assert!(engine.system_prompt.starts_with("# wasmedge-agent harness"));
+    assert!(engine.system_prompt.starts_with("# WasmEdge Agent"));
     assert!(engine
         .system_prompt
         .contains("Recursive agent depth: 0 (root)"));
@@ -395,7 +395,7 @@ async fn oauth_creds_unlock_generic_mcp_gating_in_new_sessions() {
 }
 
 #[tokio::test]
-async fn create_session_registers_the_kernel_backed_tools_without_cron_wiring() {
+async fn create_session_registers_the_wasmedge_tools_without_cron_wiring() {
     let dir = tempfile::TempDir::new().unwrap();
     let registration =
         pa_ai::faux::register_faux_provider(pa_ai::faux::RegisterFauxProviderOptions {
@@ -439,10 +439,7 @@ async fn create_session_registers_the_kernel_backed_tools_without_cron_wiring() 
         .iter()
         .map(|tool| tool.name().to_string())
         .collect();
-    assert!(
-        names.iter().any(|name| name == "python_repl"),
-        "tools: {names:?}"
-    );
+    assert_eq!(names, ["rust", "bash"]);
 }
 
 /// A daemon-shaped resume: an in-memory session manager (the daemon's
@@ -898,9 +895,13 @@ async fn a_fresh_session_reports_skill_problems_on_its_first_turn() {
     let cwd = tmp.path().join("project");
     let agent_dir = tmp.path().join("agent");
     std::fs::create_dir_all(&cwd).unwrap();
-    let user_goal = agent_dir.join("skills/goal/SKILL.md");
+    let user_goal = agent_dir.join("skills/skill-creator/SKILL.md");
     std::fs::create_dir_all(user_goal.parent().unwrap()).unwrap();
-    std::fs::write(&user_goal, "---\nname: goal\ndescription: Mine\n---\nBody").unwrap();
+    std::fs::write(
+        &user_goal,
+        "---\nname: skill-creator\ndescription: Mine\n---\nBody",
+    )
+    .unwrap();
     let engine = create_session(SessionEngineConfig {
         cwd,
         agent_dir: agent_dir.clone(),
@@ -914,13 +915,13 @@ async fn a_fresh_session_reports_skill_problems_on_its_first_turn() {
     let bundled_goal = engine
         .skills
         .iter()
-        .find(|skill| skill.name == "goal")
-        .expect("bundled goal loads")
+        .find(|skill| skill.name == "skill-creator")
+        .expect("bundled skill-creator loads")
         .file_path
         .clone();
     let expected =
         super::super::skill_problems_notice::notice_message(&[crate::resources::SkillStatus {
-            name: "goal".to_string(),
+            name: "skill-creator".to_string(),
             path: user_goal.display().to_string(),
             state: crate::resources::SkillState::IgnoredForBundled {
                 winner_path: bundled_goal.display().to_string(),

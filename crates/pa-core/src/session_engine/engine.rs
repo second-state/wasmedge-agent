@@ -395,6 +395,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         &resources.skills,
         handlers,
         config.kernel_ready_gate.clone(),
+        config.rlm_subagent_host.clone(),
+        conversation_log.clone(),
     )?);
     let mut tools = config.tools.clone();
     for name in ["rust", "bash"] {

@@ -51,12 +51,21 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build:tools
+        run: npm run build
+
+      - name: Share the Linux host with the benchmark tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-linux-host
+          path: packages/coding-agent/dist/native/linux-x64/wasmedge-agent
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Check
         run: npm run check
 
   test:
+    needs: build-check
     name: Test (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -112,6 +121,17 @@ jobs:
       - name: Build
         run: npm run build:tools
 
+      - name: Install the compiled host for coding-agent tests
+        if: startsWith(matrix.name, 'coding-agent')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ci-linux-host
+          path: packages/coding-agent/dist/native/linux-x64
+
+      - name: Restore the executable mode
+        if: startsWith(matrix.name, 'coding-agent')
+        run: chmod +x packages/coding-agent/dist/native/linux-x64/wasmedge-agent
+
       - name: Test
         working-directory: ${{ matrix.package }}
         run: ${{ matrix.command }}
@@ -127,9 +147,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Ubuntu 26.04 rejects the isolated loopback setup in Bubblewrap.
+          - os: ubuntu-24.04
             shard: 1/2
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             shard: 2/2
           - os: macos-latest
             shard: 1/4
@@ -246,6 +267,10 @@ jobs:
           cargo check --workspace --all-targets --locked
           npm run build:native
           node scripts/test-native-cells.mjs
+
+      - name: Test the native core and provider libraries
+        if: runner.os == 'Linux' && startsWith(matrix.shard, '1/')
+        run: cargo test --release --locked --lib -p pa-agent -p pa-ai -p pa-core -p pa-models -p pa-types
 
       - name: Cell tests (integration + suite)
         working-directory: packages/coding-agent

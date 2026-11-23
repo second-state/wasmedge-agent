@@ -34,7 +34,7 @@ interface Session {
 	handlers: string[];
 }
 
-type Call = { id: string; session: Session } & (
+type Call = { id: string; session: Session; maxDepth: number } & (
 	| { tool: "rust"; args: RustToolInput }
 	| { tool: "bash"; args: Parameters<ReturnType<typeof createBashTool>["execute"]>[1] }
 );
@@ -60,7 +60,7 @@ async function main(): Promise<void> {
 		for (const handler of pending.values()) handler.reject(new Error("Tool host disconnected"));
 		pending.clear();
 	}
-	async function run({ session, tool, id, args }: Call): Promise<void> {
+	async function run({ session, tool, id, args, maxDepth }: Call): Promise<void> {
 		const { cwd, agentDir, artifactDir } = session;
 		const settings = SettingsManager.create(cwd, agentDir);
 		const stream = (update: unknown) => send({ event: "update", update });
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
 				hostHandlers: handlers,
 				harnessDir: local,
 				globalHarnessDir: global,
-				cellEnv: { RLM_DEPTH: String(session.depth), RLM_MAX_DEPTH: process.env.RLM_MAX_DEPTH ?? "8" },
+				cellEnv: { RLM_DEPTH: String(session.depth), RLM_MAX_DEPTH: String(maxDepth) },
 				onDiagnostic: (message) => process.stderr.write(`${message}\n`),
 			});
 

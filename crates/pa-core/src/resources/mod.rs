@@ -586,12 +586,11 @@ mod tests {
         let skill_file = dir.join("SKILL.md");
         fs::write(&skill_file, format!("---\n{frontmatter}\n---\nBody")).unwrap();
         if let Some(project) = project {
-            let import = dir.file_name().unwrap().to_string_lossy().replace('-', "_");
-            fs::create_dir_all(dir.join("src").join(&import)).unwrap();
-            fs::write(dir.join("src").join(&import).join("__init__.py"), "").unwrap();
+            fs::create_dir_all(dir.join("src")).unwrap();
+            fs::write(dir.join("src/lib.rs"), "pub fn check() {}").unwrap();
             fs::write(
-                dir.join("pyproject.toml"),
-                format!("[project]\nname = \"{project}\"\nversion = \"0.1.0\"\n"),
+                dir.join("Cargo.toml"),
+                format!("[package]\nname = \"{project}\"\nversion = \"0.1.0\"\n"),
             )
             .unwrap();
         }
@@ -612,7 +611,7 @@ mod tests {
 
     /// Every state a discovered skill can be in, from one resolution: the
     /// bundled skill wins its name over a project copy (which keeps the
-    /// bundled Python code importable), a project skill shadows a user one,
+    /// bundled Rust code importable), a project skill shadows a user one,
     /// and settings, frontmatter, and project scope each explain the rest.
     #[test]
     fn skill_statuses_explain_every_discovered_skill() {
@@ -654,7 +653,11 @@ mod tests {
         let yaml_error = serde_yaml::from_str::<serde_yaml::Value>(broken_yaml).unwrap_err();
         let settings_path = agent_dir.join("settings.json").display().to_string();
         assert_eq!(
-            resources.skill_statuses,
+            resources
+                .skill_statuses
+                .into_iter()
+                .filter(|skill| Path::new(&skill.path).starts_with(tmp.path()))
+                .collect::<Vec<_>>(),
             vec![
                 status(
                     "broken",
@@ -680,7 +683,7 @@ mod tests {
                         by: DisabledBy::Settings,
                     },
                 ),
-                status("proj-code", &project_code, SkillState::ProjectCodeNotLoaded),
+                status("proj-code", &project_code, SkillState::Active),
                 status(
                     "twin",
                     &user_twin,
@@ -698,7 +701,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             goal.kind,
-            SkillKind::Python,
+            SkillKind::Rust,
             "the bundled code stays importable"
         );
         let collision_message = resources
@@ -719,7 +722,7 @@ mod tests {
     }
 
     /// `"skills": ["-<name>"]` in the global settings disables exactly the
-    /// bundled skill, so the user's same-named Python skill loads instead.
+    /// bundled skill, so the user's same-named Rust skill loads instead.
     #[test]
     fn the_global_settings_line_lets_a_user_skill_replace_a_bundled_one() {
         let tmp = tempfile::tempdir().unwrap();
@@ -744,12 +747,12 @@ mod tests {
             .find(|skill| skill.name == "goal")
             .map(|skill| (skill.file_path, skill.kind))
         };
-        assert_eq!(goal_file(), Some((bundled_goal, SkillKind::Python)));
+        assert_eq!(goal_file(), Some((bundled_goal, SkillKind::Rust)));
         fs::write(
             agent_dir.join("settings.json"),
             serde_json::json!({"skills": ["-goal"]}).to_string(),
         )
         .unwrap();
-        assert_eq!(goal_file(), Some((user_goal, SkillKind::Python)));
+        assert_eq!(goal_file(), Some((user_goal, SkillKind::Rust)));
     }
 }

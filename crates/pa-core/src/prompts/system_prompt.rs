@@ -420,7 +420,7 @@ mod tests {
                 settings: &self.settings,
                 resources: &self.resources,
                 skills: &self.skills,
-                selected_tools: vec![pa_types::ai::PYTHON_TOOL_NAME],
+                selected_tools: vec!["rust", "bash"],
                 model_prompt_extras: None,
                 model_input: &[],
                 cwd: "/w".to_string(),
@@ -445,7 +445,7 @@ mod tests {
     fn default_prompt_is_layered_with_static_prefix_first() {
         let breakdown = system_prompt_breakdown(&Fixture::new().options());
         let prompt = &breakdown.assembled;
-        assert!(prompt.starts_with("# wasmedge-agent harness"));
+        assert!(prompt.starts_with("# WasmEdge Agent"));
         assert_eq!(breakdown.segments[0].kind, SegmentKind::Static);
         assert_eq!(breakdown.segments[0].name, "core");
         let names: Vec<&str> = breakdown
@@ -472,7 +472,7 @@ mod tests {
         assert!(tail.contains("Conversation log: /log.jsonl"));
         assert!(tail.contains("<available_skills>"));
         assert!(tail.contains("Recursive agent depth: 0 (root)"));
-        assert!(tail.contains("Pre-installed Python packages: requests, httpx,"));
+        assert!(tail.contains("The agent_lib prelude"));
     }
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn factory_child_gets_the_factory_line_instead_of_the_reply_line() {
-        const REPLY: &str = "reply explicitly with `await agent_message.send(";
+        const REPLY: &str = "reply explicitly with `rlm::msg::send_to_parent(";
         const FACTORY: &str = "Your final message is this state's output";
         let fixture = Fixture::new();
         let mut child = fixture.options();
@@ -528,7 +528,7 @@ mod tests {
         assert!(prompt.contains("## AGENTS.md\n\nRule one."));
         assert!(prompt.contains("Working directory: /w"));
         assert!(prompt.contains("Current date: "));
-        assert!(!prompt.contains("# wasmedge-agent harness"));
+        assert!(!prompt.contains("# WasmEdge Agent"));
         assert!(!prompt.contains("Tier-2 guidance."));
     }
 

@@ -67,6 +67,10 @@ pub fn scan_sent_agent_message_entries<'a>(
         .collect()
 }
 
+fn accepts_receipts(name: &str) -> bool {
+    name == "rust" || pa_types::ai::is_python_tool_name(name)
+}
+
 /// Patch one receipt onto a `python_repl` tool result's `sentAgentMessages`
 /// details (TS `appendSentAgentMessageToToolResult`): `true` when the row
 /// is the matching tool result, whether or not the receipt is new.
@@ -81,8 +85,7 @@ pub(crate) fn append_to_tool_result(
     // The python tool's aliases all count (an `ipython`/`python`-named
     // call, and TS-era files, store the name the model called): the
     // receipt patches the row whatever the alias was.
-    if result.tool_call_id != tool_call_id || !pa_types::ai::is_python_tool_name(&result.tool_name)
-    {
+    if result.tool_call_id != tool_call_id || !accepts_receipts(&result.tool_name) {
         return false;
     }
     let details = result.details.take().unwrap_or(Value::Null);
@@ -183,7 +186,7 @@ pub(crate) fn landing_transform(
             if !matches!(
                 &message,
                 AgentMessage::Standard(Message::ToolResult(result))
-                    if pa_types::ai::is_python_tool_name(&result.tool_name)
+                    if accepts_receipts(&result.tool_name)
             ) {
                 return message;
             }

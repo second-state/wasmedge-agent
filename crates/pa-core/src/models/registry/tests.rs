@@ -302,7 +302,7 @@ fn header_precedence_model_over_provider() {
 }
 
 #[test]
-fn live_scope_keyed_cache_merges_over_the_compiled_prime_inference_models() {
+fn bundled_catalog_ignores_cached_prices_and_private_models_for_every_scope() {
     let dir = tempfile::tempdir().unwrap();
     let models_path = dir.path().join("models.json");
     std::fs::write(
@@ -372,12 +372,12 @@ fn live_scope_keyed_cache_merges_over_the_compiled_prime_inference_models() {
         .iter()
         .find(|model| model.id == repriced.id && model.provider == "prime-inference")
         .expect("repriced model");
-    assert_eq!(repriced_model.cost.input.as_f64(), 7.0);
+    assert_eq!(repriced_model.cost.input, repriced.cost.input);
     assert_eq!(
         repriced_model.base_url,
         super::super::prime_inference::PRIME_INFERENCE_BASE_URL
     );
-    assert!(all
+    assert!(!all
         .iter()
         .any(|model| model.id == "anthropic/live-only-model"));
     assert!(all.iter().any(|model| model.id == "my-model"));
@@ -640,7 +640,7 @@ async fn scope_readiness_timeout_keeps_models_available_before_refresh() {
 }
 
 #[test]
-fn a_prime_base_url_override_voids_the_live_serving_label() {
+fn a_prime_base_url_override_cannot_import_cached_serving_labels() {
     let dir = tempfile::tempdir().unwrap();
     let auth = auth_without_env(&serde_json::json!({
         "prime-inference": { "type": "api_key", "key": "live-key",
@@ -681,10 +681,7 @@ fn a_prime_base_url_override_voids_the_live_serving_label() {
             .cloned()
             .unwrap()
     };
-    assert_eq!(
-        probe(&registry).serving,
-        Some(pa_types::ai::ModelServing::Hosted)
-    );
+    assert_eq!(probe(&registry).serving, None);
 
     std::fs::write(
         &models_path,

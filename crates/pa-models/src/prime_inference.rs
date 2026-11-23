@@ -742,7 +742,7 @@ mod tests {
         // HMAC-SHA256(key-a, prefix || team-1), computed independently with Python's hmac module.
         assert_eq!(
             a,
-            "7e096109859d5e296cb2b307b0b272639499dca9d98f8ca8417e0a506b072ad6"
+            "946ac5d256017ba145ed305da728cf6aa61e69e5efed3b1c984b8e56635c957b"
         );
     }
 

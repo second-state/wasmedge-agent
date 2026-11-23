@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_cache_beats_bundled_asset() {
+    fn packaged_catalog_ignores_a_valid_disk_cache() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("models.bundled.json"),
@@ -396,8 +396,8 @@ mod tests {
         let catalog =
             ModelCatalog::with_bundled_dir(Some(dir.path().into()), Some(dir.path().into()));
         let models = catalog.resolve(None);
-        assert!(models.iter().any(|m| m.id == "cached-a"));
-        assert!(!models.iter().any(|m| m.id == "bundled-a"), "cache wins");
+        assert!(models.iter().any(|m| m.id == "bundled-a"));
+        assert!(!models.iter().any(|m| m.id == "cached-a"));
     }
 
     #[test]

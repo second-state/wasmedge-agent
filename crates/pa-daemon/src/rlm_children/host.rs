@@ -141,6 +141,10 @@ fn create_session_launch_env(
 }
 
 impl RlmSubagentHost for SupervisorChildSessions {
+    fn max_depth(&self) -> Option<u32> {
+        Some(self.rlm_max_depth())
+    }
+
     fn spawn(&self, request: RlmSpawnRequest) -> RlmHostFuture<RlmSpawnHandle> {
         let this = Arc::clone(&self.inner);
         Box::pin(async move {

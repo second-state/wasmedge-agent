@@ -19,6 +19,7 @@ use super::tool_definition::{
     ToolUpdate,
 };
 use crate::kernel::shared::{HostRequestHandlers, HostRequestPayload};
+use crate::session_engine::rlm_host::{resolve_rlm_max_depth, RlmSubagentHost};
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,8 @@ struct Session {
 pub(crate) struct CellRuntime {
     session: Session,
     registry: HostRequestHandlers,
+    subagent_host: Option<Arc<dyn RlmSubagentHost>>,
+    session_file: Option<String>,
     ready: Option<crate::kernel::WorkspaceReadyGate>,
     lifetime: CancellationToken,
     admission: tokio::sync::Mutex<()>,
@@ -53,6 +56,8 @@ impl CellRuntime {
         skills: &[crate::skills::Skill],
         registry: HostRequestHandlers,
         ready: Option<crate::kernel::WorkspaceReadyGate>,
+        subagent_host: Option<Arc<dyn RlmSubagentHost>>,
+        session_file: Option<String>,
     ) -> Result<Self> {
         let temporary = artifacts.is_none().then(tempfile::tempdir).transpose()?;
         let persistent = artifacts.is_some();
@@ -87,6 +92,8 @@ impl CellRuntime {
                 handlers: registry.names().cloned().collect(),
             },
             registry,
+            subagent_host,
+            session_file,
             ready,
             _temporary: temporary,
             lifetime: CancellationToken::new(),
@@ -165,9 +172,25 @@ impl CellRuntime {
         let output = child.stdout.take().context("missing tool worker stdout")?;
         // Dropping stdin also cancels the helper if the entire Rust future is dropped.
         let conversation = async {
+            let max_depth = self
+                .subagent_host
+                .as_ref()
+                .and_then(|host| host.max_depth())
+                .map_or_else(
+                    || {
+                        resolve_rlm_max_depth(
+                            self.session_file.as_deref(),
+                            None,
+                            &self.session.cwd,
+                            &self.session.agent_dir,
+                        )
+                        .0
+                    },
+                    u64::from,
+                );
             write_frame(
                 &mut input,
-                &json!({"tool":name,"id":id,"args":args,"session":self.session}),
+                &json!({"tool":name,"id":id,"args":args,"session":self.session,"maxDepth":max_depth}),
             )
             .await?;
             let mut lines = BufReader::new(output).lines();

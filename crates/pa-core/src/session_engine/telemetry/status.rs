@@ -258,6 +258,6 @@ mod tests {
         let id = pa_telemetry::install_id(&agent_dir).unwrap();
         let after = telemetry_status_text(&settings, &agent_dir);
         assert!(after.contains(&format!("Installation id: {id}")));
-        assert!(after.contains("Endpoint: nowhere (development build)"));
+        assert!(after.contains("Endpoint: no endpoint configured"));
     }
 }

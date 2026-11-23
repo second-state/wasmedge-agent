@@ -623,6 +623,10 @@ pub(crate) async fn dispose_inline_subagents(root: &Arc<InlineSessionNode>) {
 struct InlineHost(Arc<InlineSessionNode>);
 
 impl RlmSubagentHost for InlineHost {
+    fn max_depth(&self) -> Option<u32> {
+        Some(self.0.max_depth)
+    }
+
     /// Admit one inline child (TS `_startRlmChildRun` minus the usage
     /// attribution the daemonless host does not keep): depth gate, name
     /// uniqueness, model resolution, the child session + engine, the
