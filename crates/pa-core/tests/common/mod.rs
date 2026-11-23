@@ -85,7 +85,29 @@ async fn run(listener: TcpListener, requests: RequestLog, responses: ResponseQue
                     break;
                 }
             }
-            let head = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let Some(header_end) = buffer[..read]
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|n| n + 4)
+            else {
+                return;
+            };
+            let head = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+            let body_length = head
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            // Closing with unread POST data can reset the connection before the client receives the reply.
+            let remaining = body_length.saturating_sub(read - header_end);
+            let mut body = (&mut socket).take(remaining as u64);
+            if tokio::io::copy(&mut body, &mut tokio::io::sink())
+                .await
+                .is_err()
+            {
+                return;
+            }
             requests.lock().unwrap().push(head);
             let scripted = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
                 Scripted::Response(b"HTTP/1.1 500 Drained\r\ncontent-length: 0\r\n\r\n".to_vec())

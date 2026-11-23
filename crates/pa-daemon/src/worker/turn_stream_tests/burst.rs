@@ -119,13 +119,14 @@ fn texts_at(events: &[Value], positions: &[usize]) -> Vec<String> {
 #[tokio::test]
 async fn a_provider_burst_broadcasts_one_coalesced_update_per_tick_not_per_delta() {
     const DELTAS: usize = 120;
-    // 1ms spacing: the burst spans ~120ms, so the 50ms flusher tick
-    // flushes at most a handful of mid-burst snapshots.
     let engine = Arc::new(BurstStreamEngine {
         deltas: DELTAS,
         spacing_ms: 1,
     });
+    let started = std::time::Instant::now();
     let events = turn_session_events(engine).await;
+    // A loaded runner can sleep longer than the requested spacing between deltas.
+    let ticks = started.elapsed().as_nanos() / crate::streaming::UPDATE_FLUSH_INTERVAL.as_nanos();
 
     assert_eq!(
         positions_of(&events, "message_start").len(),
@@ -140,8 +141,8 @@ async fn a_provider_burst_broadcasts_one_coalesced_update_per_tick_not_per_delta
         "the parked snapshots must reach the wire"
     );
     assert!(
-        updates.len() * 10 < DELTAS,
-        "{DELTAS} spaced deltas must coalesce to a handful of wire updates, saw {}",
+        updates.len() < DELTAS && updates.len() as u128 <= ticks + 2,
+        "{DELTAS} deltas over {ticks} flush intervals produced {} updates (including start and settle)",
         updates.len()
     );
     // The latest snapshot wins: the flushed update carries the full

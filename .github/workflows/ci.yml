@@ -30,7 +30,6 @@ jobs:
     env:
       WASMEDGE_AGENT_WASMEDGE: ${{ github.workspace }}/.wasmedge/bin/wasmedge
       WASMEDGE_AGENT_TEMPLATE_DIR: ${{ github.workspace }}/wasmedge-agent-runtime/template
-      GIT_CONFIG_GLOBAL: /dev/null
       CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -121,13 +120,6 @@ jobs:
       - name: Check the workspace
         run: cargo run --locked -p xtask -- check
 
-      - name: Native libraries and public SDK
-        run: |
-          cargo test --release --locked --workspace --lib
-          cargo test --release --locked --doc -p wasmedge-agent-sdk
-          cargo test --release --locked -p pa-cli --test installer_platform_map --test installer_update_e2e --test release_workflow
-          cargo test --release --locked -p pa-core --test release_channel_manifest
-
       - name: Run real WasmEdge cells without Node
         run: |
           cargo build --release --locked --bin wasmedge-agent
@@ -163,6 +155,13 @@ jobs:
           set -- "$PWD"/*-"$platform".tar.gz
           WASMEDGE_AGENT_RUST_PREFIX="$RUNNER_TEMP/native-install" WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL=0 sh install.sh --archive "$1"
           "$RUNNER_TEMP/native-install/bin/wasmedge-agent" --version
+
+      - name: Native libraries and public SDK
+        run: |
+          cargo test --release --locked --workspace --lib
+          cargo test --release --locked --doc -p wasmedge-agent-sdk
+          cargo test --release --locked -p pa-cli --test installer_platform_map --test installer_update_e2e --test release_workflow
+          cargo test --release --locked -p pa-core --test release_channel_manifest
 
   windows-package:
     name: Windows native package

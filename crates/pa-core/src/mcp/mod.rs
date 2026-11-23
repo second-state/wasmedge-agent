@@ -1071,10 +1071,10 @@ mod tests {
     #[tokio::test]
     async fn cell_mcp_reuses_the_negotiated_session_until_the_cell_exits() {
         use crate::kernel::shared::HostRequestPayload;
-        use test_http::{ok_json, status, MockServer};
+        use test_http::MockServer;
 
         fn reply(content_type: &str, session: &str, body: &str) -> Vec<u8> {
-            format!("HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\nmcp-session-id: {session}\r\ncontent-length: {}\r\n\r\n{body}", body.len()).into_bytes()
+            format!("HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: {content_type}\r\nmcp-session-id: {session}\r\ncontent-length: {}\r\n\r\n{body}", body.len()).into_bytes()
         }
         let initialize = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}"#;
         let list = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"counter"}]}}"#;
@@ -1082,12 +1082,12 @@ mod tests {
             "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\r\ndata: \"result\":{\"counter\":1}}\r\n\r\n");
         let server = MockServer::start(vec![
             reply("application/json", "first", initialize),
-            status(202, "Accepted"),
-            ok_json(list, None),
+            b"HTTP/1.1 202 Accepted\r\nconnection: close\r\ncontent-length: 0\r\n\r\n".to_vec(),
+            reply("application/json", "first", list),
             reply("text/event-stream", "first", events),
             reply("application/json", "second", initialize),
-            status(202, "Accepted"),
-            ok_json(list, None),
+            b"HTTP/1.1 202 Accepted\r\nconnection: close\r\ncontent-length: 0\r\n\r\n".to_vec(),
+            reply("application/json", "second", list),
         ])
         .await;
         let manager = Arc::new(std::sync::Mutex::new(manager_with(Some(HashMap::from([
