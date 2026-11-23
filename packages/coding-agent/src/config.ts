@@ -629,6 +629,18 @@ export function collectLegacyEnvDeprecations(): void {
 	for (const suffix of LEGACY_ENV_NAMES) readLegacyEnv(`${envPrefix}_${suffix}`);
 }
 
+/** Propagate supported one-release environment aliases to the native child. */
+export function nativeHostEnv(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	for (const suffix of LEGACY_ENV_NAMES) {
+		const name = `${envPrefix}_${suffix}`;
+		const value = readLegacyEnv(name);
+		if (value !== undefined) env[name] = value;
+	}
+	env[`${envPrefix}_CODING_AGENT_DIR`] = getAgentDir();
+	return env;
+}
+
 export function readLegacyEnv(name: string): string | undefined {
 	const current = process.env[name];
 	if (current !== undefined) return current;

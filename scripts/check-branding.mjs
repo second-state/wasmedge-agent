@@ -222,6 +222,41 @@ const FORBIDDEN = [
  *  a PI_* name rebranded into one of those two prefixes -- is what the pins in
  *  REQUIRED catch from the other side. */
 const PRODUCT_ENV_NAMES = new Set([
+	"WASMEDGE_AGENT_AGENT_DIR",
+	"WASMEDGE_AGENT_ARCHIVE_CHECK",
+	"WASMEDGE_AGENT_BASH_COMMAND_PREFIX",
+	"WASMEDGE_AGENT_BASH_SHELL",
+	"WASMEDGE_AGENT_DAEMON_SOCKET",
+	"WASMEDGE_AGENT_ENV_LOCK",
+	"WASMEDGE_AGENT_FAUX_CHILD_SCRIPT",
+	"WASMEDGE_AGENT_FAUX_SCRIPT",
+	"WASMEDGE_AGENT_INSTALLER_PARENT_PID",
+	"WASMEDGE_AGENT_KERNEL_OWNER_PID",
+	"WASMEDGE_AGENT_KERNEL_PYTHON",
+	"WASMEDGE_AGENT_KERNEL_STARTUP_BUDGET_MS",
+	"WASMEDGE_AGENT_KERNEL_STARTUP_RETRIES",
+	"WASMEDGE_AGENT_MAX_CONCURRENT_KERNEL_BOOTS",
+	"WASMEDGE_AGENT_MODEL",
+	"WASMEDGE_AGENT_MODEL_PROVIDER",
+	"WASMEDGE_AGENT_ROLLBACK_CHECK",
+	"WASMEDGE_AGENT_RUST_",
+	"WASMEDGE_AGENT_RUST_INSTALLER_URL",
+	"WASMEDGE_AGENT_RUST_PREFIX",
+	"WASMEDGE_AGENT_TELEMETRY_ORIGIN",
+	"WASMEDGE_AGENT_TUI_EXIT_FLUSH",
+	"WASMEDGE_AGENT_UNRELATED_MS",
+	"WASMEDGE_AGENT_UPDATE_",
+	"WASMEDGE_AGENT_UPDATE_ACTIVATE_MS",
+	"WASMEDGE_AGENT_UPDATE_BOOT_MS",
+	"WASMEDGE_AGENT_UPDATE_CANDIDATE_DIR",
+	"WASMEDGE_AGENT_UPDATE_DOWNLOAD_ATTEMPTS",
+	"WASMEDGE_AGENT_UPDATE_DOWNLOAD_MS",
+	"WASMEDGE_AGENT_UPDATE_PREPARED_EXPIRY_MS",
+	"WASMEDGE_AGENT_UPDATE_PREPARE_MS",
+	"WASMEDGE_AGENT_UPDATE_ROSTER",
+	"WASMEDGE_AGENT_UV_BIN_DIR",
+	"WASMEDGE_AGENT_UV_INSTALLER",
+	"WASMEDGE_AGENT_WEBSEARCH_PROVIDER",
 	"WASMEDGE_AGENT_AOT_COMPILER",
 	"WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL",
 	"WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL",
@@ -352,7 +387,7 @@ const REQUIRED = [
 	},
 	{ literal: '"@earendil-works/pi-tui"', glob: "packages/tui/package.json", why: "the published package name" },
 	{
-		literal: '"pi": "dist/bundle/cli.js"',
+		literal: '"pi": "dist/native-launch.js"',
 		glob: "packages/coding-agent/package.json",
 		why: "the source bin, which the release packer renames to wasmedge-agent and the source keeps",
 	},
@@ -467,6 +502,14 @@ function changelogScopedPaths(path, lines) {
  *  the glob *and* at least one `allow` pattern -- everything else in that
  *  file still fails. */
 const ALLOWLIST = [
+	{ glob: "crates/**", allow: [/ai\.primeintellect\.prime-agent/g, /prime-agent\.daemon/g, /prime-agent\.(?:worker_recovery|update_restart|update_complete|refinement)/g, /prime-agent-bash/g, /prime-agent-traces/g, /\.vf-prime-agent/g], reason: "Rust and TypeScript share these externally defined protocol, credential and session literals" },
+	{ glob: "crates/**", allow: [/PrimeIntellect-ai\/prime-agent(?:-catalog)?/g, /prime-agent-catalog/g], reason: "upstream source repository and catalog provenance" },
+	{ glob: "crates/pa-daemon/testdata/acp/**", allow: [ANY_LINE], reason: "byte-for-byte upstream ACP reference transcripts" },
+	{ glob: "crates/pa-perf/baseline.json", allow: [ANY_LINE], reason: "historical upstream performance measurements with source run URLs" },
+	{ glob: "crates/pa-types/src/platform/dirs.rs", allow: [/join\("\.prime"\)\.join\("agent"\)/], reason: "documented one-release project directory fallback" },
+	{ glob: "vendor/crossterm/**", allow: [/prime[- ]agent (?:patch|v2)/i, /PRIME_AGENT_PATCH\.md/], reason: "attribution for the upstream terminal patches" },
+	{ glob: "crates/pa-core/src/auth/prime_inference.rs", allow: [/\.join\("\.prime"\)/], reason: "the external inference CLI owns this credentials directory" },
+	{ glob: "crates/**", allow: [/(?:[Ll]og ?in with|Share agent traces with) Prime Intellect/g], reason: "the provider's sign-in and explicit sharing UI names the service" },
 	{
 		glob: "packages/ai/src/models.generated.ts",
 		allow: [/fetched from prime-agent-catalog at runtime/],
@@ -700,6 +743,7 @@ const ALLOWLIST = [
 	{
 		glob: "README.md",
 		allow: [
+			/https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\/commit\/[0-9a-f]{40}/,
 			/\[Prime Agent\]\(https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\)/,
 			/\[\*\*Prime Agent\*\*\]\(https:\/\/github\.com\/PrimeIntellect-ai\/prime-agent\)/,
 			/Prime Agent's design/,
@@ -710,7 +754,7 @@ const ALLOWLIST = [
 	},
 	{
 		glob: "LICENSE",
-		allow: [/Copyright \(c\) 2026 Prime Intellect/],
+		allow: [/Copyright \(c\) (?:2025-)?2026 Prime Intellect/],
 		reason:
 			"the MIT copyright line states who holds the copyright (rule R1). It is a legal notice, not a display name, and rebranding it would make it false. Only that one line is exempt",
 	},

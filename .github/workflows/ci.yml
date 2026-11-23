@@ -22,7 +22,7 @@ jobs:
   build-check:
     name: Build and check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -53,10 +53,19 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Share the Linux host with the benchmark tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-linux-host
+          path: packages/coding-agent/dist/native/linux-x64/wasmedge-agent
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Check
         run: npm run check
 
   test:
+    needs: build-check
     name: Test (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -110,7 +119,18 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build:tools
+
+      - name: Install the compiled host for coding-agent tests
+        if: startsWith(matrix.name, 'coding-agent')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ci-linux-host
+          path: packages/coding-agent/dist/native/linux-x64
+
+      - name: Restore the executable mode
+        if: startsWith(matrix.name, 'coding-agent')
+        run: chmod +x packages/coding-agent/dist/native/linux-x64/wasmedge-agent
 
       - name: Test
         working-directory: ${{ matrix.package }}
@@ -122,14 +142,15 @@ jobs:
   test-rust-cell:
     name: Cell runtime (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Ubuntu 26.04 rejects the isolated loopback setup in Bubblewrap.
+          - os: ubuntu-24.04
             shard: 1/2
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             shard: 2/2
           - os: macos-latest
             shard: 1/4
@@ -237,7 +258,22 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build:tools
+
+      - name: Build and exercise the native agent host
+        if: startsWith(matrix.shard, '1/')
+        run: |
+          cargo fmt --all --check
+          cargo check --workspace --all-targets --locked
+          npm run build:native
+          node scripts/test-native-cells.mjs
+
+      - name: Test the native Rust workspace libraries
+        if: runner.os == 'Linux' && startsWith(matrix.shard, '1/')
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          WASMEDGE_AGENT_TEMPLATE_DIR: ${{ github.workspace }}/wasmedge-agent-runtime/template
+        run: cargo test --release --locked --workspace --lib
 
       - name: Cell tests (integration + suite)
         working-directory: packages/coding-agent

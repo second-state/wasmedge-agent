@@ -9,14 +9,16 @@ import {
 
 /** Shared Linux cgroup budget. Owners must dispose after their runtimes stop. */
 export class ProcessResourceGroup {
-	readonly unit = `app-wasmedge_agent_${randomUUID().replaceAll("-", "")}.slice`;
+	readonly unit: string;
 	readonly limits: Readonly<ProcessLimits>;
 	private references = 1;
 	private ownerReleased = false;
 	private initialized = false;
 	private attempted = false;
 
-	constructor(limits: ProcessLimits) {
+	constructor(limits: ProcessLimits, treeId: string = randomUUID()) {
+		if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(treeId)) throw new Error("Invalid process tree id");
+		this.unit = `app-wasmedge_agent_${treeId.replaceAll("-", "")}.slice`;
 		const normalized = normalizeProcessLimits(limits, process.platform, "rustCell.treeProcessLimits");
 		if (!normalized) throw new Error("ProcessResourceGroup requires at least one limit");
 		this.limits = normalized;

@@ -1,0 +1,85 @@
+//! Private Prime Inference models and the private-model id predicate.
+
+use pa_types::ai::{CompatKind, Model, ModelCompat, ModelCost};
+use pa_types::JsNumber;
+
+pub const PRIME_INFERENCE_BASE_URL: &str = "https://api.pinference.ai/api/v1";
+
+/// Private ids: `internal/*`, `dev/*`, or any id containing `:`.
+#[must_use]
+pub fn is_private_prime_inference_model_id(model_id: &str) -> bool {
+    let normalized = model_id.to_lowercase();
+    normalized.starts_with("internal/")
+        || normalized.starts_with("dev/")
+        || normalized.contains(':')
+}
+
+#[must_use]
+pub fn is_private_prime_inference_model(model: &Model) -> bool {
+    model.provider == "prime-inference" && is_private_prime_inference_model_id(&model.id)
+}
+
+/// The bundled private-route template for private ids the catalog does not
+/// list: the public provider default carries request shapes the private
+/// endpoint rejects.
+#[must_use]
+pub fn private_prime_inference_models() -> Vec<Model> {
+    vec![Model {
+        id: "internal/glm-5.2-fast".to_string(),
+        name: "GLM 5.2 Fast".to_string(),
+        api: "openai-completions".to_string(),
+        provider: "prime-inference".to_string(),
+        base_url: PRIME_INFERENCE_BASE_URL.to_string(),
+        reasoning: true,
+        input: vec![pa_types::ai::ModelInput::Text],
+        headers: None,
+        thinking_level_map: None,
+        cost: ModelCost {
+            input: JsNumber::from(0u64),
+            output: JsNumber::from(0u64),
+            cache_read: JsNumber::from(0u64),
+            cache_write: JsNumber::from(0u64),
+        },
+        context_window: 400_000,
+        max_tokens: 131_072,
+        max_tokens_explicit: false,
+        featured: Some(true),
+        serving: None,
+        compat: Some(ModelCompat::from_kind(CompatKind::OpenAiCompletions(
+            Box::new(pa_types::ai::OpenAiCompletionsCompat {
+                supports_developer_role: Some(false),
+                max_tokens_field: Some(pa_types::ai::MaxTokensField::MaxTokens),
+                ..pa_types::ai::OpenAiCompletionsCompat::default()
+            }),
+        ))),
+    }]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_id_predicate() {
+        assert!(is_private_prime_inference_model_id("internal/glm-5.2-fast"));
+        assert!(is_private_prime_inference_model_id("DEV/x"));
+        assert!(is_private_prime_inference_model_id("z-ai/glm:exacto"));
+        assert!(!is_private_prime_inference_model_id("z-ai/glm-5.3"));
+    }
+
+    #[test]
+    fn generated_catalog_base_urls_match_const() {
+        let models = pa_ai::models_generated::get_models("prime-inference");
+        assert!(
+            !models.is_empty(),
+            "generated prime-inference catalog is empty"
+        );
+        for model in models {
+            assert_eq!(
+                model.base_url, PRIME_INFERENCE_BASE_URL,
+                "generated model {} diverges from PRIME_INFERENCE_BASE_URL",
+                model.id
+            );
+        }
+    }
+}

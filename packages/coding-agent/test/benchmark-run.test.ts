@@ -166,7 +166,7 @@ if (mode === "timeout") setInterval(() => {}, 1000);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 	const realDaemon =
 		mode === "real-daemon"
-			? `if [ "$1" = "--mode" ]; then exec ${quote(join(repo, "wasmedge-agent.sh"))} "$@"; fi\n`
+			? `if [ "$1" = "--mode" ]; then exec ${quote(join(repo, "wasmedge-agent.sh"))} --dist "$@"; fi\n`
 			: "";
 	writeFileSync(
 		join(root, "wasmedge-agent.sh"),

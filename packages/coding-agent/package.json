@@ -8,7 +8,7 @@
 		"configDir": ".wasmedge-agent"
 	},
 	"bin": {
-		"pi": "dist/bundle/cli.js"
+		"pi": "dist/native-launch.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -20,6 +20,7 @@
 	},
 	"files": [
 		"dist",
+		"catalog",
 		"docs",
 		"examples",
 		"skills",

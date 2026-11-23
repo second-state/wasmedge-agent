@@ -11,7 +11,7 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"build": "npm run build:tools && npm run build:native",
 		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
 		"dev:tsc": "cd packages/ai && npm run dev:tsc",
 		"check": "biome check --write --error-on-warnings . && tsgo --noEmit && npm run check:installer && npm run check:browser-smoke && npm run check:showcase && npm run check:standalone-binary && npm run check:branding && npm run check:benchmark-reports",
@@ -35,7 +35,9 @@
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
-		"prepare": "husky"
+		"prepare": "husky",
+		"build:tools": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"build:native": "node scripts/build-native.mjs"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "^0.0.55",

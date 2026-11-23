@@ -11,7 +11,7 @@ original rules remain in git history and apply when contributing upstream.
 
 ## Fork context
 
-- Design authority: `DESIGN.md` (decisions D1–D25) and `REPORT.md`. Consult the
+- Design authority: `DESIGN.md` (decisions D1–D27) and `REPORT.md`. Consult the
   decision log before re-deciding anything.
 - Naming (D25, executed): D25 held the binary, package names, `piConfig.name`,
   env prefixes, and the config dir at upstream identities until M5. That rename
@@ -45,6 +45,9 @@ original rules remain in git history and apply when contributing upstream.
 - After code changes: `npm run check` from the repo root — fix all errors,
   warnings, and infos before committing. (`check` does not run tests.)
 - Building is allowed and expected: `npm run build` for the full workspace.
+- Native host: `cargo check --workspace --all-targets --locked`. After a full
+  build, `node scripts/test-native-cells.mjs` drives the public launcher with
+  an offline provider and real WasmEdge guests.
 - Do not leave `npm run dev` watchers running after a task.
 - Run package tests from the package root, e.g.
   `npx tsx ../../node_modules/vitest/dist/cli.js --run test/foo.test.ts`.

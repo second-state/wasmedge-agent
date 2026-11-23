@@ -1,0 +1,337 @@
+//! Headless e2e for the announced non-update daemon closing (TS #2458):
+//! the pane must arm the bounded shutdown recovery at the notice and
+//! reconnect when the daemon returns on the same socket path (TS
+//! `reconnectAfterShutdown`: same path, same durable session id).
+#![cfg(unix)]
+#![warn(clippy::allow_attributes_without_reason)]
+
+mod support;
+
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use pa_tui::interactive::{
+    run_interactive, HeadlessPlan, HeadlessStep, InteractiveOptions, UiMode,
+};
+use serde_json::{json, Value};
+
+use support::{attach_response, create_response, write_json, write_session_event};
+
+/// The wait for the recovered banner: the shutdown recovery's fixed poll finds the successor well
+/// inside this bound.
+const BANNER_WAIT_MS: u64 = 10_000;
+/// One mock generation's accept window.
+const ACCEPT_WAIT_MS: u64 = 10_000;
+
+/// The first daemon generation: serve the startup create/attach, then announce the non-update
+/// closing and exit.
+struct FirstGeneration {
+    listener: UnixListener,
+}
+
+impl FirstGeneration {
+    fn bind(socket: &Path) -> Self {
+        let listener = UnixListener::bind(socket)
+            .unwrap_or_else(|error| panic!("bind {} failed: {error}", socket.display()));
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking mock listener");
+        FirstGeneration { listener }
+    }
+
+    /// Serve until the announced closing, then free the socket path for the successor.
+    fn serve(self, socket: &Path) {
+        let stream = accept(&self.listener, "the first daemon never saw the client");
+        let mut writer = stream.try_clone().expect("clone first daemon socket");
+        let mut reader = BufReader::new(stream);
+        write_json(&mut writer, &daemon_hello(None));
+        // Answer the startup create + attach and the one mounted turn, then announce and die.
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let Ok(envelope) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            let id = envelope.get("id").and_then(Value::as_str).unwrap_or("");
+            let command = envelope.get("command").cloned().unwrap_or(Value::Null);
+            let command_type = command
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match command_type.as_str() {
+                "create" => {
+                    write_json(&mut writer, &create_response(id));
+                }
+                "attach" => {
+                    write_json(&mut writer, &attach_response(id, "restart session"));
+                }
+                "prompt" => {
+                    // The turn stays mid-flight when the daemon announces and exits — the
+                    // operator's shutdown does not wait for turns (the sibling turn-end e2e
+                    // pins the turn-settling stats refresh).
+                    write_json(&mut writer, &success_response(id, "prompt"));
+                    let question = command
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    write_session_event(&mut writer, &json!({ "type": "turn_start" }));
+                    write_session_event(
+                        &mut writer,
+                        &json!({
+                            "type": "message_start",
+                            "message": { "role": "user", "content": question },
+                        }),
+                    );
+                    write_session_event(
+                        &mut writer,
+                        &json!({
+                            "type": "message_start",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{ "type": "text", "text": "" }],
+                                "assistantMessageEvent": { "type": "start" },
+                            },
+                        }),
+                    );
+                    write_session_event(
+                        &mut writer,
+                        &json!({
+                            "type": "message_update",
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    { "type": "text", "text": "the streamed answer" },
+                                ],
+                            },
+                            "assistantMessageEvent": {
+                                "type": "text_delta",
+                                "delta": "the streamed answer",
+                            },
+                        }),
+                    );
+                    write_json(
+                        &mut writer,
+                        &json!({ "type": "daemon_closing", "reason": "shutdown" }),
+                    );
+                    break;
+                }
+                _ => write_json(&mut writer, &success_response(id, &command_type)),
+            }
+        }
+        // Dropping the socket closes the connection; the listener frees the path for the successor.
+        drop(writer);
+        drop(reader);
+        drop(self.listener);
+        std::fs::remove_file(socket).expect("free the socket path for the successor");
+    }
+}
+
+/// The successor daemon generation: back on the SAME socket path with its own version, serving the
+/// reattach and recording every `attach` it sees.
+struct SuccessorDaemon {
+    listener: UnixListener,
+    /// The reattach requests the successor served (the durable-id pin).
+    attach_requests: Arc<Mutex<Vec<Value>>>,
+    /// The version the restarted daemon reports in its hello.
+    app_version: String,
+}
+
+impl SuccessorDaemon {
+    fn bind(socket: &Path, app_version: String, attach_requests: Arc<Mutex<Vec<Value>>>) -> Self {
+        let listener = UnixListener::bind(socket)
+            .unwrap_or_else(|error| panic!("bind successor {} failed: {error}", socket.display()));
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking mock listener");
+        SuccessorDaemon {
+            listener,
+            attach_requests,
+            app_version,
+        }
+    }
+
+    /// Serve the reattached run until it disconnects.
+    fn serve(self) {
+        let stream = accept(&self.listener, "the successor never saw the client");
+        let mut writer = stream.try_clone().expect("clone successor socket");
+        let mut reader = BufReader::new(stream);
+        write_json(&mut writer, &daemon_hello(Some(&self.app_version)));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let Ok(envelope) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            let id = envelope.get("id").and_then(Value::as_str).unwrap_or("");
+            let command = envelope.get("command").cloned().unwrap_or(Value::Null);
+            let command_type = command
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match command_type.as_str() {
+                "attach" => {
+                    self.attach_requests.lock().unwrap().push(command);
+                    write_json(&mut writer, &attach_response(id, "restart session"));
+                }
+                _ => write_json(&mut writer, &success_response(id, &command_type)),
+            }
+        }
+    }
+}
+
+/// Accept one connection, bounded: a mock that never sees its client is a broken mock, not a slow
+/// one.
+fn accept(listener: &UnixListener, what: &str) -> UnixStream {
+    let deadline = std::time::Instant::now() + Duration::from_millis(ACCEPT_WAIT_MS);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // macOS inherits O_NONBLOCK from the listener on accept; the request loop blocks.
+                stream.set_nonblocking(false).expect("blocking mock stream");
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{what}: the accept window expired"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("{what}: accept failed: {error}"),
+        }
+    }
+}
+
+/// The supervisor hello; `app_version` is the version the restarted daemon reports (the first
+/// generation reports none — the banner reads only the successor's).
+fn daemon_hello(app_version: Option<&str>) -> Value {
+    let mut hello = json!({
+        "type": "daemon_hello",
+        "protocol": { "name": "prime-agent.daemon", "version": 7 },
+        "serverCapabilities": [],
+        "clientId": "mock",
+    });
+    if let Some(app_version) = app_version {
+        hello["appVersion"] = json!(app_version);
+    }
+    hello
+}
+
+fn success_response(id: &str, command: &str) -> Value {
+    json!({
+        "type": "response",
+        "id": id,
+        "command": command,
+        "success": true,
+        "data": {},
+    })
+}
+
+/// One plain Enter key event.
+fn enter() -> KeyEvent {
+    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+}
+
+/// The operator's daemon restart recovers an attached window (TS #2458): the announced non-update
+/// closing arms the bounded shutdown recovery, the pane stays mounted while it waits, and the
+/// restarted daemon's reattach lands.
+#[test]
+fn an_announced_shutdown_reconnects_when_the_daemon_comes_back() {
+    // The ambient TMUX variable adds a startup notice; scrub it so runs are the same inside tmux
+    // and out.
+    std::env::remove_var("TMUX");
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("tui.sock");
+    let first = FirstGeneration::bind(&socket);
+    let attach_requests = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&attach_requests);
+    let successor_socket = socket.clone();
+    let successor_version = env!("CARGO_PKG_VERSION").to_string();
+    let handle = std::thread::spawn(move || {
+        // The first daemon's lifetime, then the successor's — the stop-and-restart the operator
+        // performs.
+        first.serve(&successor_socket);
+        let successor = SuccessorDaemon::bind(&successor_socket, successor_version, recorder);
+        successor.serve();
+    });
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let plan = HeadlessPlan {
+        steps: vec![
+            HeadlessStep::Type("hello".to_string()),
+            HeadlessStep::Key(enter()),
+            // The barrier arms before the shutdown can even fire (the daemon answers the submitted
+            // turn with the closing), so the recovery banner is always a post-barrier frame.
+            HeadlessStep::WaitRender {
+                needle: "Daemon restarted (v".to_string(),
+                timeout_ms: BANNER_WAIT_MS,
+            },
+            HeadlessStep::WaitMs(200),
+        ],
+        width: 100,
+        height: 40,
+    };
+    let options = InteractiveOptions {
+        fullscreen_mouse: false,
+        ..support::options(socket)
+    };
+    let outcome = runtime.block_on(run_interactive(options, UiMode::Headless(plan)));
+    let _ = handle.join();
+    let outcome = outcome.expect("the recovered run returns normally");
+    let all = outcome.frames.join("\n");
+
+    // TS #2458's waiting row: the announced closing armed the bounded shutdown recovery (not the
+    // hiccup loop).
+    assert!(
+        all.contains("the WasmEdge Agent daemon shut down; waiting for it to come back"),
+        "the shutdown recovery armed at the notice:\n{all}"
+    );
+    let equal_banner = format!(
+        "Daemon restarted (v{}) - reconnected",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(
+        all.contains(&equal_banner),
+        "the version-honest banner for the equal-version successor:\n{all}"
+    );
+    assert!(
+        !all.contains("the daemon connection closed — reconnecting"),
+        "the announced closing must not fall back to the hiccup loop:\n{all}"
+    );
+    assert!(
+        !all.contains("reconnected to the daemon"),
+        "the hiccup loop's recovery row must not appear:\n{all}"
+    );
+    // The successor saw the reattach: the same session, by DURABLE id (the active id can change
+    // across a restart, TS #2458).
+    let requests = attach_requests.lock().unwrap().clone();
+    let attached_by_durable_id = requests
+        .iter()
+        .any(|request| request.get("activeSessionId").and_then(Value::as_str) == Some("sess-1"));
+    assert!(
+        attached_by_durable_id,
+        "the reattach reached the successor by durable id: {requests:?}"
+    );
+    assert!(
+        !all.contains("The WasmEdge Agent daemon shut down while this window was attached"),
+        "the expiry row must not appear when the daemon came back:\n{all}"
+    );
+}

@@ -60,7 +60,7 @@ describe("release package manifest", () => {
 		// pointing there cannot tell it was invoked as the alias and the
 		// deprecation notice never fires on that platform.
 		expect(bin).toEqual({
-			"wasmedge-agent": "dist/bundle/cli.js",
+			"wasmedge-agent": "dist/native-launch.js",
 			"prime-agent": "dist/bundle/prime-agent.js",
 		});
 	});
@@ -75,7 +75,7 @@ describe("release package manifest", () => {
 		expect(files).toContain("dist");
 		// ...and the canonical one is the same constant the pack-time build
 		// check requires, so the two cannot drift apart.
-		expect(PUBLIC_BIN_TARGET).toBe("dist/bundle/cli.js");
+		expect(PUBLIC_BIN_TARGET).toBe("dist/native-launch.js");
 		expect(PUBLIC_LEGACY_BIN_TARGET).toBe("dist/bundle/prime-agent.js");
 	});
 
@@ -100,7 +100,7 @@ describe("release package manifest", () => {
 		expect(source).toContain(`process.env.${LEGACY_ALIAS_ENV} =`);
 		// It has to reach the real entry, and set the marker before it does --
 		// a static import would be hoisted above the assignment.
-		expect(source).toContain('await import("./cli.js")');
+		expect(source).toContain('await import("../native-launch.js")');
 		expect(source.startsWith("#!")).toBe(true);
 		expect(statSync(written).mode & 0o111).not.toBe(0);
 	});
@@ -380,7 +380,7 @@ describe("release package manifest", () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "wasmedge-agent-link-bin-"));
 		tempDirs.push(packageRoot);
 		mkdirSync(join(packageRoot, dirname(PUBLIC_BIN_TARGET)), { recursive: true });
-		const real = join(packageRoot, "dist", "bundle", "real.js");
+		const real = join(packageRoot, dirname(PUBLIC_BIN_TARGET), "real.js");
 		writeFileSync(real, "#!/usr/bin/env node\n");
 		symlinkSync(real, join(packageRoot, PUBLIC_BIN_TARGET));
 

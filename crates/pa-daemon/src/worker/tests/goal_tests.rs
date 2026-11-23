@@ -1,0 +1,521 @@
+//! Goal continuation and compact-mint e2e tests.
+use super::*;
+
+/// A scripted goal session's dispatch worker.
+async fn goal_dispatch_worker(goal: serde_json::Value) -> std::sync::Arc<Worker> {
+    let dir = std::env::temp_dir().join(format!("pa-worker-goal-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = WorkerConfig {
+        socket_path: dir.join("worker.sock"),
+        supervisor_socket_path: PathBuf::new(),
+        token: "token".to_string(),
+        worker_instance_id: String::new(),
+        active_session_id: "goal-session".to_string(),
+        agent_dir: dir.join("agent"),
+        recovery_journal_path: dir.join("recovery.jsonl"),
+        telemetry_disabled: None,
+        script: Some(json!({
+            "responses": ["ack"],
+            "goal": goal,
+        })),
+    };
+    let worker = std::sync::Arc::new(Worker::new(config, None));
+    let created = worker
+        .dispatch(
+            "create",
+            &json!({ "noSession": true, "cwd": "/tmp", "name": "goal" }),
+        )
+        .await;
+    assert!(created.success, "create failed: {created:?}");
+    worker
+}
+
+/// TS `compact()`'s active-goal branch: a successful compact mints the owed continuation.
+#[tokio::test]
+async fn compact_with_active_goal_schedules_the_continue() {
+    let worker = goal_dispatch_worker(json!({
+        "status": "active",
+        "objective": "land the post-compact continue",
+        "message": "[goal: continuation]\n\nkeep pursuing the goal",
+    }))
+    .await;
+    let mut subscription = worker.events.subscribe();
+    let compact = worker
+        .dispatch("compact", &json!({ "activeSessionId": "goal-session" }))
+        .await;
+    assert!(compact.success, "scripted compact failed: {compact:?}");
+    // The scheduled continue drives the continuation turn; the idle
+    // wait settles only after it ran.
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "never went idle: {idle:?}");
+    let events = session_events_since(&mut subscription);
+    // The mint's `goal_update` surfaces first, then the continuation
+    // turn: the goal-context custom row plus its model turn.
+    let goal_updates: Vec<&Value> = events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("goal_update"))
+        .collect();
+    assert_eq!(goal_updates.len(), 1, "events: {events:?}");
+    assert_eq!(goal_updates[0]["goal"]["status"], "active");
+    let custom_rows: Vec<&Value> = events
+        .iter()
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str) == Some("message_start")
+                && event["message"]["customType"] == "goal_context"
+        })
+        .collect();
+    assert_eq!(custom_rows.len(), 1, "events: {events:?}");
+    assert_eq!(
+        custom_rows[0]["message"]["content"],
+        "[goal: continuation]\n\nkeep pursuing the goal"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("turn_end")),
+        "the continuation turn never ran: {events:?}"
+    );
+    // The resume site crossed the #234 suspension gate: a plain prompt
+    // is admitted again.
+    let plain = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({ "activeSessionId": "goal-session", "message": "after the continue" }),
+        )
+        .await;
+    assert!(plain.success, "still suspended: {plain:?}");
+}
+
+#[tokio::test]
+async fn compact_with_active_goal_and_parked_work_skips_the_mint() {
+    let worker = goal_dispatch_worker(json!({
+        "status": "active",
+        "objective": "land the post-compact continue",
+    }))
+    .await;
+    let mut subscription = worker.events.subscribe();
+    {
+        // Park one queued follow-up behind the suspension gate, like a
+        // steer that arrived mid-compact-window.
+        let mut core = worker.core.lock().unwrap();
+        core.queued_input_suspended = true;
+        core.follow_up.push_back(QueuedItem {
+            priority: QueuePriority::Human,
+            preview: None,
+            message: "parked queued work".to_string(),
+            custom_message: None,
+            agent_message: None,
+            queue_key: None,
+            admission_id: None,
+            images: Vec::new(),
+            done: None,
+            queue_visible: true,
+            policy: TurnPolicy::Queued,
+            forced_batch: false,
+        });
+    }
+    let compact = worker
+        .dispatch("compact", &json!({ "activeSessionId": "goal-session" }))
+        .await;
+    assert!(compact.success, "scripted compact failed: {compact:?}");
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "never went idle: {idle:?}");
+    let events = session_events_since(&mut subscription);
+    assert!(
+        events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("message_start")
+                && event["message"]["role"] == "user"
+                && event["message"]["content"] == "parked queued work"
+        }),
+        "the parked item never ran: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("message_start")
+                && event["message"]["customType"] == "goal_context"
+        }),
+        "a continuation was minted over the parked work: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("goal_update")),
+        "a mint emitted a goal_update: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn compact_with_paused_goal_never_continues() {
+    let worker = goal_dispatch_worker(json!({
+        "status": "paused",
+        "objective": "land the post-compact continue",
+    }))
+    .await;
+    let mut subscription = worker.events.subscribe();
+    let compact = worker
+        .dispatch("compact", &json!({ "activeSessionId": "goal-session" }))
+        .await;
+    assert!(compact.success, "scripted compact failed: {compact:?}");
+    let rejected = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({ "activeSessionId": "goal-session", "message": "hi" }),
+        )
+        .await;
+    assert_eq!(rejected.error.as_deref(), Some(QUEUED_INPUT_SUSPENDED));
+    let events = session_events_since(&mut subscription);
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("goal_update")),
+        "a paused goal minted a continuation: {events:?}"
+    );
+}
+
+/// The worker keeps scheduling continuations until a WasmEdge cell completes
+/// the goal through the session's host handler.
+#[tokio::test]
+async fn goal_turn_end_loop_runs_to_completion() {
+    let dir = std::env::temp_dir().join(format!("pa-worker-goal-loop-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = WorkerConfig {
+        socket_path: dir.join("worker.sock"),
+        supervisor_socket_path: PathBuf::new(),
+        token: "token".to_string(),
+        worker_instance_id: String::new(),
+        active_session_id: "goal-loop-session".to_string(),
+        agent_dir: dir.join("agent"),
+        recovery_journal_path: dir.join("recovery.jsonl"),
+        telemetry_disabled: None,
+        script: Some(json!({
+            "engine": "faux",
+            "responses": [
+                "first pursuit turn",
+                "second pursuit turn",
+                { "content": [
+                    { "type": "toolCall", "name": "rust",
+                      "arguments": { "code": "use agent_lib::prelude::*; fn main() -> Result<()> { rlm::goal::complete()?; Ok(()) }" } },
+                ] },
+                "wrap-up after the completion",
+                "after the loop settled",
+            ],
+        })),
+    };
+    let worker = std::sync::Arc::new(Worker::new(config, None));
+    let created = worker
+        .dispatch(
+            "create",
+            &json!({ "noSession": true, "cwd": "/tmp", "name": "goal-loop" }),
+        )
+        .await;
+    assert!(created.success, "create failed: {created:?}");
+    let mut subscription = worker.events.subscribe();
+    let start = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({
+                "activeSessionId": "goal-loop-session",
+                "message": "/goal drive the loop to completion",
+            }),
+        )
+        .await;
+    assert!(start.success, "the goal start failed: {start:?}");
+    // The loop owns the session until the goal settles: the idle wait
+    // returns only when the completion turn's boundary minted nothing.
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "the goal loop never settled: {idle:?}");
+    let events = session_events_since(&mut subscription);
+    let cell_failure = events.iter().find(|event| {
+        event.get("type").and_then(Value::as_str) == Some("message_end")
+            && event["message"]["role"] == "toolResult"
+            && event["message"]["isError"] == json!(true)
+    });
+    assert!(
+        cell_failure.is_none(),
+        "the completing Rust cell failed: {cell_failure:?}"
+    );
+    let goal_rows: Vec<&Value> = events
+        .iter()
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str) == Some("message_start")
+                && event["message"]["customType"] == "goal_context"
+        })
+        .collect();
+    assert_eq!(goal_rows.len(), 3, "events: {events:?}");
+    assert_eq!(goal_rows[0]["message"]["details"]["kind"], "continuation");
+    assert_eq!(goal_rows[1]["message"]["details"]["continuationsUsed"], 1);
+    assert_eq!(goal_rows[2]["message"]["details"]["continuationsUsed"], 2);
+    let assistant_rows = events
+        .iter()
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str) == Some("message_end")
+                && event["message"]["role"] == "assistant"
+        })
+        .count();
+    assert!(assistant_rows >= 4, "events: {events:?}");
+    // The goal state settled complete through the worker's host
+    // handlers.
+    let complete_update = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.get("type").and_then(Value::as_str) == Some("goal_update")
+                && event["goal"]["status"] == "complete"
+        })
+        .expect("the completion surfaced as a goal_update");
+    assert_eq!(
+        complete_update["goal"]["objective"],
+        "drive the loop to completion"
+    );
+    assert_eq!(complete_update["goal"]["continuationsUsed"], 2);
+    assert!(
+        complete_update["goal"]["tokensUsed"].as_u64().unwrap_or(0) > 0,
+        "usage accounting ran: {complete_update:?}"
+    );
+    let queue = worker
+        .dispatch(
+            "get_queue",
+            &json!({ "activeSessionId": "goal-loop-session" }),
+        )
+        .await;
+    assert!(queue.success, "queue read failed: {queue:?}");
+    let plain = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({
+                "activeSessionId": "goal-loop-session",
+                "message": "after the loop",
+            }),
+        )
+        .await;
+    assert!(plain.success, "a post-goal prompt failed: {plain:?}");
+}
+
+#[tokio::test]
+async fn goal_pause_withdraws_the_queued_continuation() {
+    let dir = std::env::temp_dir().join(format!("pa-worker-goal-pause-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = WorkerConfig {
+        socket_path: dir.join("worker.sock"),
+        supervisor_socket_path: PathBuf::new(),
+        token: "token".to_string(),
+        worker_instance_id: String::new(),
+        active_session_id: "goal-pause-session".to_string(),
+        agent_dir: dir.join("agent"),
+        recovery_journal_path: dir.join("recovery.jsonl"),
+        telemetry_disabled: None,
+        script: Some(json!({
+            "engine": "faux",
+            "responses": ["start turn", "continuation turn"],
+            "repeatLastResponse": true,
+        })),
+    };
+    let worker = std::sync::Arc::new(Worker::new(config, None));
+    let created = worker
+        .dispatch(
+            "create",
+            &json!({ "noSession": true, "cwd": "/tmp", "name": "goal-pause" }),
+        )
+        .await;
+    assert!(created.success, "create failed: {created:?}");
+    let start = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({
+                "activeSessionId": "goal-pause-session",
+                "message": "/goal pause right after the start",
+            }),
+        )
+        .await;
+    assert!(start.success, "the goal start failed: {start:?}");
+    // Holding queued input lets the running goal turn settle and mint its
+    // continuation, which then stays queued.
+    let input_pause = worker
+        .dispatch(
+            "acquire_session_input_pause",
+            &json!({
+                "activeSessionId": "goal-pause-session",
+                "leaseKey": "goal-pause",
+                "clientId": "test",
+            }),
+        )
+        .await;
+    assert!(
+        input_pause.success,
+        "the input pause failed: {input_pause:?}"
+    );
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "the held loop never parked: {idle:?}");
+    let queued_continuations = worker
+        .core
+        .lock()
+        .unwrap()
+        .follow_up
+        .iter()
+        .filter(|item| crate::worker::is_goal_context_item(item))
+        .count();
+    assert_eq!(queued_continuations, 1, "one continuation is queued");
+    let assistant_rows = || async {
+        let messages = worker.dispatch("get_messages", &json!({})).await;
+        messages
+            .data
+            .as_ref()
+            .and_then(|data| data.get("messages"))
+            .and_then(Value::as_array)
+            .map_or(0, |messages| {
+                messages
+                    .iter()
+                    .filter(|message| crate::types::message_role(message) == Some("assistant"))
+                    .count()
+            })
+    };
+    let assistant_rows_before = assistant_rows().await;
+    // The pause takes the steering lane ahead of the queued continuation.
+    let pause = worker
+        .dispatch(
+            "prompt",
+            &json!({ "activeSessionId": "goal-pause-session", "message": "/goal pause" }),
+        )
+        .await;
+    assert!(pause.success, "the pause was not admitted: {pause:?}");
+    let released = worker
+        .dispatch(
+            "release_session_input_pause",
+            &json!({
+                "activeSessionId": "goal-pause-session",
+                "pauseId": input_pause.data.as_ref().unwrap()["pauseId"],
+                "clientId": "test",
+            }),
+        )
+        .await;
+    assert!(
+        released.success,
+        "the input pause release failed: {released:?}"
+    );
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "the loop never went quiet: {idle:?}");
+    let goal = worker.engine.goal_state_value();
+    assert_eq!(goal["status"], "paused", "goal state: {goal}");
+    assert_eq!(
+        assistant_rows().await,
+        assistant_rows_before,
+        "no continuation turn ran after the pause"
+    );
+}
+
+/// A scripted goal session's dispatch worker with a durable session
+/// file, so the `thread_goal_state` mirror is observable.
+async fn goal_dispatch_worker_with_store(
+    goal: serde_json::Value,
+) -> (std::sync::Arc<Worker>, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("pa-worker-goal-{}", uuid::Uuid::new_v4()));
+    let session_dir = dir.join("sessions");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let config = WorkerConfig {
+        socket_path: dir.join("worker.sock"),
+        supervisor_socket_path: PathBuf::new(),
+        token: "token".to_string(),
+        worker_instance_id: String::new(),
+        active_session_id: "goal-session".to_string(),
+        agent_dir: dir.join("agent"),
+        recovery_journal_path: dir.join("recovery.jsonl"),
+        telemetry_disabled: None,
+        script: Some(json!({
+            "responses": ["ack"],
+            "goal": goal,
+        })),
+    };
+    let worker = std::sync::Arc::new(Worker::new(config, None));
+    let created = worker
+        .dispatch(
+            "create",
+            &json!({
+                "cwd": dir.to_string_lossy(),
+                "name": "goal",
+                "sessionDir": session_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+    assert!(created.success, "create failed: {created:?}");
+    let file = std::fs::read_dir(&session_dir)
+        .expect("session dir readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .expect("session file created");
+    (worker, file)
+}
+
+/// The session file's `thread_goal_state` custom rows, in order.
+fn thread_goal_state_rows(path: &std::path::Path) -> Vec<Value> {
+    crate::session_store::parse_session_entries(&std::fs::read_to_string(path).expect("read"))
+        .into_iter()
+        .filter(|entry| {
+            entry.get("type").and_then(Value::as_str) == Some("custom")
+                && entry.get("customType").and_then(Value::as_str)
+                    == Some(pa_core::goals::GOAL_STATE_CUSTOM_TYPE)
+        })
+        .collect()
+}
+
+/// The mirror row is what a recovery rebuild replays.
+#[tokio::test]
+async fn goal_update_events_mirror_the_durable_goal_row() {
+    let (worker, file) = goal_dispatch_worker_with_store(json!({
+        "emitUpdateOnPrompt": true,
+        "state": {
+            "active": true,
+            "status": "active",
+            "goalId": "goal-1",
+            "objective": "ship the port",
+            "tokensUsed": 340,
+            "timeUsedSeconds": 9,
+            "continuationsUsed": 2,
+        },
+    }))
+    .await;
+    let prompt = worker
+        .dispatch(
+            "prompt_and_wait",
+            &json!({ "activeSessionId": "goal-session", "message": "work" }),
+        )
+        .await;
+    assert!(prompt.success, "prompt failed: {prompt:?}");
+    let rows = thread_goal_state_rows(&file);
+    assert_eq!(rows.len(), 1, "rows: {rows:?}");
+    assert_eq!(rows[0]["data"]["status"], "active");
+    assert_eq!(rows[0]["data"]["objective"], "ship the port");
+    assert_eq!(rows[0]["data"]["goalId"], "goal-1");
+    assert_eq!(rows[0]["data"]["tokensUsed"], 340);
+    assert_eq!(rows[0]["data"]["continuationsUsed"], 2);
+}
+
+/// The mint persists its row before the `goal_update`, so the count survives a crash.
+#[tokio::test]
+async fn compact_mint_persists_the_goal_state_row() {
+    let (worker, file) = goal_dispatch_worker_with_store(json!({
+        "status": "active",
+        "objective": "ship the port",
+        "state": {
+            "active": true,
+            "status": "active",
+            "goalId": "goal-1",
+            "objective": "ship the port",
+            "tokensUsed": 340,
+            "timeUsedSeconds": 9,
+            "continuationsUsed": 1,
+        },
+    }))
+    .await;
+    let compact = worker
+        .dispatch("compact", &json!({ "activeSessionId": "goal-session" }))
+        .await;
+    assert!(compact.success, "scripted compact failed: {compact:?}");
+    let idle = worker.dispatch("wait_for_idle", &json!({})).await;
+    assert!(idle.success, "never went idle: {idle:?}");
+    let rows = thread_goal_state_rows(&file);
+    assert_eq!(rows.len(), 1, "rows: {rows:?}");
+    assert_eq!(rows[0]["data"]["status"], "active");
+    assert_eq!(rows[0]["data"]["continuationsUsed"], 1);
+    assert_eq!(rows[0]["data"]["objective"], "ship the port");
+}

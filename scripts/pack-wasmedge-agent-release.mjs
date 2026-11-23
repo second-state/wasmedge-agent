@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	lstatSync,
@@ -32,7 +33,7 @@ const releaseChannels = new Set(["stable", "beta"]);
  *  package must contain, so the two cannot drift: a bin entry naming a file
  *  the tarball does not carry is a package that installs and then fails on
  *  first run, and npm reports nothing at pack time. */
-export const PUBLIC_BIN_TARGET = "dist/bundle/cli.js";
+export const PUBLIC_BIN_TARGET = "dist/native-launch.js";
 
 /** What the deprecated command alias points at instead.
  *
@@ -65,7 +66,7 @@ const LEGACY_ALIAS_SHIM_SOURCE = `#!/usr/bin/env node
 // reads this marker once, deletes it so no child process inherits it, and
 // warns.
 process.env.WASMEDGE_AGENT_LEGACY_ALIAS = "1";
-await import("./cli.js");
+await import("../native-launch.js");
 `;
 
 /** Writes the alias entry point into a staged package, and returns its path.
@@ -313,6 +314,7 @@ const PACKER_WRITTEN_ENTRY_POINTS = new Set([PUBLIC_LEGACY_BIN_TARGET]);
 const COMPILED_SOURCE_RULES = [{ path: "", kind: "compiled", source: "src" }];
 
 const CODING_AGENT_DIST_RULES = [
+	{ path: "native", kind: "generated", by: "scripts/build-native.mjs and release target artifacts" },
 	{ path: "bundle", kind: "generated", by: "scripts/bundle.mjs, which empties it first" },
 	{ path: "skills", kind: "generated", by: "copy-assets, which removes it before copying" },
 	{ path: "wasmedge-agent-runtime", kind: "generated", by: "copy-assets, which removes it before copying" },
@@ -631,7 +633,7 @@ function copyPackageContents(sourceDir, targetDir, packageJson) {
 	mkdirSync(targetDir, { recursive: true });
 	writeJson(join(targetDir, "package.json"), packageJson);
 
-	for (const entry of ["dist", "docs", "examples", "skills", "postinstall.cjs", "README.md", "CHANGELOG.md"]) {
+	for (const entry of ["dist", "catalog", "docs", "examples", "skills", "postinstall.cjs", "README.md", "CHANGELOG.md"]) {
 		copyIfExists(join(sourceDir, entry), join(targetDir, entry));
 	}
 }
@@ -687,7 +689,24 @@ function sha256File(path) {
 function buildForRelease() {
 	console.log("Emptying every workspace's dist and rebuilding, so the pack matches the sources...");
 	run("npm", ["run", "clean", "--workspaces", "--if-present"], root);
-	run("npm", ["run", "build"], root);
+	run("npm", ["run", "build:tools"], root);
+}
+
+// The release tarball is platform-independent. Compile each native host on
+// its target runner and stage them together before constructing the bin map.
+const releaseHosts = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"];
+
+function stageNativeHosts(stagingDir) {
+	const source = join(root, "target", "release-hosts");
+	for (const platform of releaseHosts) {
+		const binary = platform.startsWith("win32-") ? "wasmedge-agent.exe" : "wasmedge-agent";
+		const target = join(stagingDir, "dist", "native", platform, binary);
+		const build = join(source, platform, binary);
+		if (!isFilesystemKind(build, "file")) throw new Error(`Missing native host for ${platform}: ${build}`);
+		mkdirSync(dirname(target), { recursive: true });
+		cpSync(build, target);
+		if (!platform.startsWith("win32-")) chmodSync(target, 0o755);
+	}
 }
 
 function main() {
@@ -767,6 +786,7 @@ function main() {
 		if (packageName === publicPackageName) {
 			// Only the public package installs commands, so only it carries the
 			// alias entry the bin map above points at.
+			stageNativeHosts(stagingDir);
 			writeLegacyAliasShim(stagingDir);
 		}
 

@@ -32,6 +32,8 @@
 
 ## 1. 總體架構
 
+2026-11-24 的同步將預設 host 切換到上游 Rust workspace（D27）。CLI、TUI、daemon、session 與 provider 在 Rust 內執行。原有的 WasmEdge cell 執行器由 Node 工具程序載入，每次呼叫透過私有 stdio 傳送請求、進度與結果。下圖記錄 Phase 1 的 TypeScript 實作。
+
 ### 1.1 系統圖（Phase 1 架構，含 2026-10-02 bridge 更新）
 
 ```
@@ -844,6 +846,7 @@ CI 注意：kernel 測試刪除後，上游 `test:kernel` script 位置換 `test
 | D24 ✅ | 吸收合併取代 GitHub fork 機制；private repo；README attribution | GitHub fork 強制公開違反 D22 低調意圖且功能受限；prime-agent 對 pi 的先例即獨立 repo + README 鳴謝（§7.1） |
 | D25 ✅ | 孵化期（M2–M4）零改名，完整 rebrand 延至 M5 | piConfig.name 牽動 env prefix/config 目錄，早改名＝bench/文件/SYNC 全面陣痛且 M5 可能重演；根 README 為唯一身分檔案（§7.1） |
 | D26 ✅ | Repo 於 M2 期即轉 **public**（取代 D22 的 private 孵化） | 使用者裁定：public repo 的 GitHub Actions 免費（private 額度制）、低調未產生實質效益；公開前完成內容體檢（provider 參照泛化、D23 措辭中性化）。Actions 於 WP1 分支合綠與 workflow 適配前保持停用；M5 僅餘 org transfer |
+| D27 | 預設 host 同步至 upstream Rust workspace `798d9703`，保留 fork 的 WasmEdge 執行器與 TypeScript SDK | `pa-core` 註冊 `rust`、`bash`，工具程序沿用既有的 Cargo workspace、資源限制與 guest bridge。歷史 benchmark 維持原始 revision。 |
 
 **審閱記錄**：
 - 2026-08-06 第 1 輪（§1 總體架構）——D11/D12/D13 確認；分層圖、進程模型、原則 1–5 無異議成立。
