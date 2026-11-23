@@ -456,7 +456,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let digest_context = super::harness_digest::HarnessDigestContext {
         global_dir: crate::refinement::get_global_harness_state_dir(&config.agent_dir),
         local_dir: local_harness_dir,
-        include_ipython: false,
+        include_rust: active_tool_names.iter().any(|name| name == "rust"),
         include_shell_examples: active_tool_names.iter().any(|name| name == "bash"),
         include_refine: model_visible_skills.iter().any(|skill| {
             !skill.disable_model_invocation
@@ -636,6 +636,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             .then_some(digest_context.clone()),
     )
     .await?;
+    if active_tool_names.iter().any(|name| name == "rust") {
+        session.skill_runtime = Arc::downgrade(&cells);
+    }
     // Receipts that landed after their cell's tool result persist as
     // custom entries; the build patches them onto the rebuilt tool
     // results (TS `_restoreLateIpythonSentAgentMessages`).

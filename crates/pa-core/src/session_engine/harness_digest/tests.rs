@@ -11,7 +11,7 @@ fn empty_state_digest_renders_placeholder() {
     let context = HarnessDigestContext {
         global_dir: tmp.path().join("harness"),
         local_dir: None,
-        include_ipython: true,
+        include_rust: true,
         include_shell_examples: false,
         include_refine: true,
     };
@@ -19,7 +19,7 @@ fn empty_state_digest_renders_placeholder() {
     assert!(digest.starts_with("# Continual Harness State"));
     assert!(digest.contains("No saved harness entries yet."));
     assert!(digest.contains("recent refinements: 0"));
-    assert!(digest.contains("When to call `await refine.run()`"));
+    assert!(digest.contains("When to call `rlm::refine::run(None, false)?`"));
     let message = harness_digest_message_text(&digest);
     assert!(message.starts_with("[harness-digest]"));
     assert!(message.ends_with("</harness_state>"));
@@ -329,7 +329,7 @@ async fn placement_rig(
         Some(HarnessDigestContext {
             global_dir,
             local_dir: Some(local_dir),
-            include_ipython: false,
+            include_rust: false,
             include_shell_examples: false,
             include_refine: false,
         }),

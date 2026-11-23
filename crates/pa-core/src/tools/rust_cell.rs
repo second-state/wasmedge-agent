@@ -105,6 +105,21 @@ impl CellRuntime {
         drop(self.admission.lock().await);
     }
 
+    pub(crate) async fn test_skill(
+        &self,
+        reference: &serde_json::Map<String, Value>,
+    ) -> Result<()> {
+        self.execute(
+            "testSkill",
+            "refine",
+            json!({ "reference": reference }),
+            AbortSignal::default(),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn dispose(&self) {
         self.lifetime.cancel();
         drop(self.admission.lock().await);

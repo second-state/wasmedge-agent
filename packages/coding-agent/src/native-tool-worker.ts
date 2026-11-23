@@ -36,6 +36,7 @@ interface Session {
 
 type Call = { id: string; session: Session; maxDepth: number } & (
 	| { tool: "rust"; args: RustToolInput }
+	| { tool: "testSkill"; args: { reference: Record<string, unknown> } }
 	| { tool: "bash"; args: Parameters<ReturnType<typeof createBashTool>["execute"]>[1] }
 );
 
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
 			send({ event: "result", result });
 			return;
 		}
-		if (tool !== "rust") throw new Error("Unknown native tool");
+		if (tool !== "rust" && tool !== "testSkill") throw new Error("Unknown native tool");
 		const skills = loadSkills({ cwd, agentDir, skillPaths: session.skills, includeDefaults: false }).skills;
 		let provisioner: RustCellProvisioner;
 		const handlers: HostRequestHandlers = Object.create(null);
@@ -158,6 +159,11 @@ async function main(): Promise<void> {
 			});
 
 			try {
+				if (tool === "testSkill") {
+					await provisioner.testSkill(args.reference, lifetime.signal);
+					send({ event: "result", result: { content: [], details: { passed: true } } });
+					return;
+				}
 				const result = await createRustTool(cwd, { provisioner }).execute(id, args, lifetime.signal, stream);
 				send({ event: "result", result });
 			} finally {

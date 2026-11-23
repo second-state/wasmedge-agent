@@ -141,7 +141,7 @@ async fn digest_session(provider: Arc<ScriptedProvider>) -> (AgentSession, tempf
     let harness = crate::session_engine::harness_digest::HarnessDigestContext {
         global_dir: tmp.path().join("harness"),
         local_dir: None,
-        include_ipython: false,
+        include_rust: false,
         include_shell_examples: false,
         include_refine: false,
     };
@@ -272,7 +272,7 @@ async fn resume_dedupes_by_state_fingerprint_and_appends_stale_digest_update() {
     let harness = crate::session_engine::harness_digest::HarnessDigestContext {
         global_dir: harness_dir.clone(),
         local_dir: None,
-        include_ipython: false,
+        include_rust: false,
         include_shell_examples: false,
         include_refine: false,
     };

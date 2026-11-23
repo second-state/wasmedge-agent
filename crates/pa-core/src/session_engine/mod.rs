@@ -138,6 +138,7 @@ pub struct AgentSession {
     slash_commands: SlashCommandRegistry,
     /// Harness digest inputs; `None` without harness state.
     harness_digest: Option<harness_digest::HarnessDigestContext>,
+    skill_runtime: std::sync::Weak<crate::tools::rust_cell::CellRuntime>,
     /// Fresh sessions defer the first-turn digest so untouched sessions
     /// stay empty.
     digest_pending: std::sync::atomic::AtomicBool,
@@ -258,6 +259,7 @@ impl AgentSession {
             prompt_templates,
             slash_commands: SlashCommandRegistry::builtin(),
             harness_digest,
+            skill_runtime: std::sync::Weak::new(),
             digest_pending: std::sync::atomic::AtomicBool::new(false),
             compaction: std::sync::RwLock::new(compaction::CompactionSettings::default()),
             auxiliary_model: None,

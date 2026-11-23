@@ -365,7 +365,7 @@ async fn execute_compaction_attaches_harness_digest_snapshot() {
         context: super::super::harness_digest::HarnessDigestContext {
             global_dir: global_dir.clone(),
             local_dir: Some(local_dir.clone()),
-            include_ipython: true,
+            include_rust: true,
             include_shell_examples: true,
             include_refine: true,
         },
@@ -452,7 +452,7 @@ async fn execute_compaction_attaches_harness_digest_snapshot() {
         context: super::super::harness_digest::HarnessDigestContext {
             global_dir,
             local_dir: Some(local_dir.clone()),
-            include_ipython: true,
+            include_rust: true,
             include_shell_examples: true,
             include_refine: true,
         },

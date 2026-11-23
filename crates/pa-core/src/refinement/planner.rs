@@ -7,7 +7,58 @@ use super::{
     RefinementAction, RefinementKind,
 };
 
-pub const REFINEMENT_SYSTEM_PROMPT: &str = "You are WasmEdge Agent's /refine continual harness subsystem.\n\nYour job is to improve the editable continual harness state from the current trajectory.\nThis is similar in spirit to context compaction, but instead of summarizing the\nconversation you emit precise Create, Update, or Delete edits to reusable state.\nThe continual harness is the persistent, editable set of prompt notes, memories,\nskills, and subagent specs that lets WasmEdge Agent improve reusable behavior\noutside the token history.\nUse \"continual harness\" for that persistent artifact layer; keep \"RLM\" for the\nruntime, Python REPL kernel, and native call interface that executes those artifacts.\n\nContinual harness components:\n- prompt: supplemental prompt notes only. The base system prompt is immutable and MUST NOT be rewritten.\n- memory: durable facts, decisions, failures, preferences, and outcomes.\n- skill: installed Python REPL skill. Skill create/update edits MUST include a `reference` object with `{\"type\":\"python\"}`, a Python import, and a callable or call pattern; they also MUST include an `arguments` object describing accepted inputs, required fields, defaults, and constraints. Use `{}` for `arguments` only when the Python callable truly needs no external inputs. Include the RLM-native call form `await <skill_import>(...)`.\n- subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn with `handle = await rlm.spawn(\"sub-task\", name=\"worker\")`; admission returns immediately with `rlm_child_id`, `name`, `session_dir`, and `model`, never the child's answer. Results arrive only through explicit `agent_message` replies or files; children reply with `await agent_message.send(message, receiver_role=\"parent\")`. Use `await rlm.list_subagents()` to recover direct child handles and `await agent_message.send(..., receiver_role=\"child\", receiver_name=handle.name)` for follow-ups. Do not invent wrappers like `run_subagent(...)`.\n- factory: declarative state-machine workflow specs of subagent states. The spec lives in `arguments.machine` (the original DAG sugar in `arguments.dag` compiles to machine form; pass exactly one form). The kernel validator (`rlm.factory`) enforces the full machine semantics at write time: run a stored factory with `await rlm.factory.run('<id>')`, watch with `await rlm.factory.status(run_id)`, stop with `await rlm.factory.stop(run_id)`, and resume an escalate-paused run with `await rlm.factory.resume(run_id)`.\n\nScope and persistence policy:\n- The default editable continual harness store is local to the current WasmEdge Agent session. Use it for session-specific progress, active task state, current-run coordination notes, temporary blockers, and project facts that should not affect other sessions.\n- A caller may explicitly request global refinement. Global edits must be stable cross-session lessons, durable user preferences, reusable skills/subagents, or tool/environment facts that should affect future sessions.\n- Entry ids in the harness overview may carry a display-only `local:` or `global:` prefix. Always use the bare id (no prefix) in edits.\n- All edits in one refinement apply only to the requested scope's store. During a local refinement, global entries are read-only context: never propose update or delete edits for them; create a local entry instead when a session-specific override is genuinely needed.\n- Project/workspace-specific lessons may be persisted globally only when the title, path, or content explicitly names the project/workspace and the lesson is likely to be reused in future sessions for that project. Prefer local edits when the lesson only belongs in the current conversation.\n- Use memory for declarative facts and preferences, skill for repeatable procedures exposed as Python calls, prompt for narrow behavioral policy addendums, and subagent for reusable delegation roles.\n- Create or update the smallest relevant component: repeated delegation roles should become subagent specs, repeated procedures should become skills, durable facts/preferences should become memories, and narrow behavioral policies should become prompt addendums.\n- When an edit is persisted, include metadata such as `{\"scope\":\"local\"}` or `{\"scope\":\"global\"}` when that helps future review understand the intended blast radius.\n\nUse the trajectory, current continual harness state, and prior refinement history. Prefer\nsmall evidence-backed edits. If prior refinements caused issues, rollback or\nreplace the faulty editable entries. Never edit source files directly. Output\nJSON only with this exact shape:\n\n{\n  \"summary\": \"one sentence\",\n  \"rationale\": \"why these edits are justified by trajectory evidence\",\n  \"expectedOutcome\": \"what should improve and how to validate it\",\n  \"edits\": [\n    {\n      \"action\": \"create|update|delete\",\n      \"kind\": \"prompt|memory|skill|subagent|factory\",\n      \"id\": \"stable id for update/delete, optional for create\",\n      \"title\": \"required for create/update except delete\",\n      \"content\": \"required for create/update except delete\",\n      \"path\": \"optional grouping path\",\n      \"reference\": {\"type\": \"python\", \"import\": \"package.module\", \"callable\": \"function_name\", \"call_pattern\": \"await function_name(...)\"},\n      \"arguments\": {\"name\": {\"type\": \"string\", \"required\": true, \"description\": \"accepted input\"}},\n      \"metadata\": {},\n      \"reason\": \"why this edit is useful\"\n    }\n  ]\n}";
+pub const REFINEMENT_SYSTEM_PROMPT: &str = r#"You are WasmEdge Agent's /refine continual harness subsystem.
+
+Your job is to improve the editable continual harness state from the current trajectory.
+This is similar in spirit to context compaction, but instead of summarizing the
+conversation you emit precise Create, Update, or Delete edits to reusable state.
+The continual harness is the persistent, editable set of prompt notes, memories,
+skills, and subagent specs that lets WasmEdge Agent improve reusable behavior
+outside the token history.
+Use "continual harness" for that persistent artifact layer; keep "RLM" for the
+runtime, rust-cell sandbox, and native call interface that executes those artifacts.
+
+Continual harness components:
+- prompt: supplemental prompt notes only. The base system prompt is immutable and MUST NOT be rewritten.
+- memory: durable facts, decisions, failures, preferences, and outcomes.
+- skill: mounted Rust crate skill. Skill create/update edits MUST include a `reference` object with `{"type":"rust"}`, a `use` path (e.g. `agent_lib::skills::my_skill`), and a callable or call pattern; they also MUST include an `arguments` object describing accepted inputs, required fields, defaults, and constraints. Use `{}` for `arguments` only when the Rust callable truly needs no external inputs. Include the RLM-native call form `agent_lib::skills::<crate>::run(...)?`.
+- Skill create/update edits are accepted only after the mounted crate passes unit and integration tests in WasmEdge. Tests receive only a disposable /scratch directory, with no project/state/harness mounts or bridge. Test modules may import only non-network WASI Preview 1 functions; socket, DNS, and plugin imports are rejected before any test runs. Add deterministic tests to the crate before proposing registration; reload skills after creating a crate. Passing tests does not prove task correctness.
+- subagent: reusable delegation specs, including purpose, instructions, and when to invoke. Include the RLM-native call form: compose a concise task prompt and spawn from a rust cell with `let handle = rlm::spawn("sub-task")?;`; admission returns immediately with `rlm_child_id`, `name`, `session_dir`, and `model`, never the child's answer. Results arrive only through explicit agent-message replies or files; children reply with `rlm::msg::send_to_parent(message)?`. Use `rlm::list_subagents()?` to recover direct child handles and `rlm::msg::send_to_child(name, message)?` for follow-ups. Do not invent wrappers like `run_subagent(...)`.
+
+Scope and persistence policy:
+- The default editable continual harness store is local to the current WasmEdge Agent session. Use it for session-specific progress, active task state, current-run coordination notes, temporary blockers, and project facts that should not affect other sessions.
+- A caller may explicitly request global refinement. Global edits must be stable cross-session lessons, durable user preferences, reusable skills/subagents, or tool/environment facts that should affect future sessions.
+- Entry ids in the harness overview may carry a display-only `local:` or `global:` prefix. Always use the bare id (no prefix) in edits.
+- All edits in one refinement apply only to the requested scope's store. During a local refinement, global entries are read-only context: never propose update or delete edits for them; create a local entry instead when a session-specific override is genuinely needed.
+- Project/workspace-specific lessons may be persisted globally only when the title, path, or content explicitly names the project/workspace and the lesson is likely to be reused in future sessions for that project. Prefer local edits when the lesson only belongs in the current conversation.
+- Use memory for declarative facts and preferences, skill for repeatable procedures exposed as Rust calls, prompt for narrow behavioral policy addendums, and subagent for reusable delegation roles.
+- Create or update the smallest relevant component: repeated delegation roles should become subagent specs, repeated procedures should become skills, durable facts/preferences should become memories, and narrow behavioral policies should become prompt addendums.
+- When an edit is persisted, include metadata such as `{"scope":"local"}` or `{"scope":"global"}` when that helps future review understand the intended blast radius.
+
+Use the trajectory, current continual harness state, and prior refinement history. Prefer
+small evidence-backed edits. If prior refinements caused issues, rollback or
+replace the faulty editable entries. Never edit source files directly. Output
+JSON only with this exact shape:
+
+{
+  "summary": "one sentence",
+  "rationale": "why these edits are justified by trajectory evidence",
+  "expectedOutcome": "what should improve and how to validate it",
+  "edits": [
+    {
+      "action": "create|update|delete",
+      "kind": "prompt|memory|skill|subagent",
+      "id": "stable id for update/delete, optional for create",
+      "title": "required for create/update except delete",
+      "content": "required for create/update except delete",
+      "path": "optional grouping path",
+      "reference": {"type": "rust", "use": "agent_lib::skills::my_skill", "callable": "run", "call_pattern": "agent_lib::skills::my_skill::run(...)?"},
+      "arguments": {"name": {"type": "string", "required": true, "description": "accepted input"}},
+      "metadata": {},
+      "reason": "why this edit is useful"
+    }
+  ]
+}"#;
 
 pub const AUTO_REFINE_REVIEW_SYSTEM_PROMPT: &str = "You are WasmEdge Agent's automatic /refine review gate.\n\nDecide whether this checkpoint should run /refine. Auto /refine writes local continual harness state by default, so approve when the trajectory contains evidence useful to this session's future turns.\nReject one-off noise, unsupported hypotheses, and transient tool outputs. Ask for global refinement only for durable cross-session lessons or explicitly project-qualified lessons likely to be reused in future sessions.\n\nReturn JSON only:\n{\n  \"shouldRefine\": true|false,\n  \"rationale\": \"short reason\",\n  \"instructions\": \"optional concise instructions for /refine if shouldRefine is true\"\n}";
 
@@ -39,6 +90,9 @@ pub struct RefinementEdit {
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Supplied only by the current session after running this proposal’s skill tests.
+    #[serde(skip)]
+    pub(crate) skill_test: Option<Result<(), String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -190,7 +244,7 @@ fn slug(raw: &str, fallback: &str) -> String {
 }
 
 /// Validation errors mirror the TS messages exactly.
-fn validate_edit(edit: &RefinementEdit, computed_id: Option<&str>) -> Option<String> {
+pub(crate) fn validate_edit(edit: &RefinementEdit, computed_id: Option<&str>) -> Option<String> {
     let Some(action) = edit.action else {
         return Some("unsupported action".to_string());
     };
@@ -223,20 +277,19 @@ fn validate_edit(edit: &RefinementEdit, computed_id: Option<&str>) -> Option<Str
         if edit.arguments.is_none() {
             return Some(format!("{action:?} skill requires arguments").to_lowercase());
         }
+        let action = action_name(action);
         let Some(reference) = &edit.reference else {
-            return Some(format!("{action:?} skill requires python reference").to_lowercase());
+            return Some(format!("{action} skill requires rust reference"));
         };
-        if reference.get("type").and_then(|value| value.as_str()) != Some("python") {
-            return Some(format!("{action:?} skill reference.type must be python").to_lowercase());
+        match reference.get("type").and_then(|value| value.as_str()) {
+            Some("rust") => {}
+            Some("python") => return Some(format!("{action} skill reference.type \"python\" is legacy (read-only); create rust skills with type \"rust\"")),
+            _ => return Some(format!("{action} skill reference.type must be rust")),
         }
-        let has_import = reference
-            .get("import")
+        let has_use = reference
+            .get("use")
             .and_then(|value| value.as_str())
-            .is_some_and(|import| !import.is_empty())
-            || reference
-                .get("python_import")
-                .and_then(|value| value.as_str())
-                .is_some_and(|import| !import.is_empty());
+            .is_some_and(|path| !path.is_empty());
         let has_callable = reference
             .get("callable")
             .and_then(|value| value.as_str())
@@ -245,13 +298,13 @@ fn validate_edit(edit: &RefinementEdit, computed_id: Option<&str>) -> Option<Str
                 .get("call_pattern")
                 .and_then(|value| value.as_str())
                 .is_some_and(|callable| !callable.is_empty());
-        if !has_import {
-            return Some(format!("{action:?} skill requires python import").to_lowercase());
+        if !has_use {
+            return Some(format!(
+                "{action} skill requires a rust use path (e.g. agent_lib::skills::my_skill)"
+            ));
         }
         if !has_callable {
-            return Some(
-                format!("{action:?} skill requires callable or call_pattern").to_lowercase(),
-            );
+            return Some(format!("{action} skill requires callable or call_pattern"));
         }
     }
     if action != RefinementAction::Delete
@@ -339,6 +392,16 @@ pub fn apply_refinement_proposal(
             applied_edits.push(row);
             continue;
         };
+        let validation_error = validation_error.or_else(|| {
+            if kind != RefinementKind::Skill || edit.action == Some(RefinementAction::Delete) {
+                return None;
+            }
+            match &edit.skill_test {
+                Some(Ok(())) => None,
+                Some(Err(error)) => Some(error.clone()),
+                None => Some("sandboxed skill tests are unavailable".into()),
+            }
+        });
         if let Some(error) = validation_error {
             let mut row = AppliedRefinementEdit::planned(
                 edit,
@@ -524,6 +587,7 @@ pub fn rollback_proposal(target: &super::RefinementResult) -> RefinementProposal
                 arguments: Some(before.arguments.clone()),
                 metadata: Some(before.metadata.clone()),
                 reason: Some(format!("Rollback {}", target.id)),
+                skill_test: None,
             });
         } else if edit.after.is_some() {
             edits.push(RefinementEdit {
@@ -683,7 +747,7 @@ mod tests {
             validate_edit(&prompt_edit, None),
             Some("base system prompt is not editable".to_string())
         );
-        // Skill edits require python reference + arguments + callable.
+        // Skill edits require a mounted Rust crate, arguments and a callable.
         let mut skill_edit = RefinementEdit {
             action: Some(RefinementAction::Create),
             kind: Some(RefinementKind::Skill),
@@ -697,10 +761,10 @@ mod tests {
         skill_edit.arguments = Some(serde_json::Map::default());
         assert!(validate_edit(&skill_edit, None)
             .unwrap()
-            .contains("skill requires python reference"));
+            .contains("skill requires rust reference"));
         skill_edit.reference = Some(
             serde_json::from_value(
-                serde_json::json!({ "type": "python", "import": "pkg.mod", "callable": "run" }),
+                serde_json::json!({ "type": "rust", "use": "agent_lib::skills::sample", "callable": "run" }),
             )
             .unwrap(),
         );
@@ -713,8 +777,47 @@ mod tests {
         );
         assert!(validate_edit(&skill_edit, None)
             .unwrap()
-            .contains("reference.type must be python"));
+            .contains("reference.type must be rust"));
         prompt_edit.id = Some("x".to_string());
+    }
+
+    #[test]
+    fn skill_registration_requires_a_test_result_from_this_session() {
+        let mut plan = normalize_refinement_proposal(&serde_json::json!({
+            "edits": [{ "action": "create", "kind": "skill", "id": "example",
+                "title": "Example", "content": "Runs a fixture", "arguments": {},
+                "reference": {"type": "rust", "use": "agent_lib::skills::example", "callable": "run"},
+                "skillTest": {"Ok": null} }]
+        }));
+        let mut state = super::super::empty_harness_state();
+        let apply = |state: &mut HarnessState, plan: &RefinementProposal| {
+            apply_refinement_proposal(
+                state,
+                plan,
+                ApplyOptions {
+                    id: "fixture".into(),
+                    rollback_of: None,
+                    scope: None,
+                    baseline_state: None,
+                    factory_enabled: false,
+                },
+            )
+            .applied_edits
+            .remove(0)
+        };
+        assert_eq!(
+            apply(&mut state, &plan).error.as_deref(),
+            Some("sandboxed skill tests are unavailable")
+        );
+        plan.edits[0].skill_test = Some(Err("fixture test failed".into()));
+        assert_eq!(
+            apply(&mut state, &plan).error.as_deref(),
+            Some("fixture test failed")
+        );
+        assert!(state.entries[&RefinementKind::Skill].is_empty());
+        plan.edits[0].skill_test = Some(Ok(()));
+        assert!(apply(&mut state, &plan).applied);
+        assert!(state.entries[&RefinementKind::Skill].contains_key("example"));
     }
 
     #[test]

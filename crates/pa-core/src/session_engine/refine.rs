@@ -219,14 +219,23 @@ pub struct RefinementStores {
     /// The session's own local harness state directory, when the session
     /// persists artifacts.
     pub local_dir: Option<PathBuf>,
+    skill_runtime: std::sync::Weak<crate::tools::rust_cell::CellRuntime>,
+}
+
+impl RefinementStores {
+    #[must_use]
+    pub fn new(global_dir: PathBuf, local_dir: Option<PathBuf>) -> Self {
+        Self {
+            global_dir,
+            local_dir,
+            skill_runtime: std::sync::Weak::new(),
+        }
+    }
 }
 
 impl From<&super::harness_digest::HarnessDigestContext> for RefinementStores {
     fn from(context: &super::harness_digest::HarnessDigestContext) -> Self {
-        Self {
-            global_dir: context.global_dir.clone(),
-            local_dir: context.local_dir.clone(),
-        }
+        Self::new(context.global_dir.clone(), context.local_dir.clone())
     }
 }
 
@@ -518,6 +527,23 @@ pub(crate) async fn prepare_refinement(
                      inherits its parent's records): edit or remove the entry by hand in the \
                      recorded store, or roll the refinement back from the session that wrote it",
                     current.display()
+                );
+            }
+        }
+    }
+    for edit in &mut plan.proposal.edits {
+        if edit.kind == Some(crate::refinement::RefinementKind::Skill)
+            && edit.action != Some(crate::refinement::RefinementAction::Delete)
+            && crate::refinement::planner::validate_edit(edit, edit.id.as_deref()).is_none()
+        {
+            if let (Some(runtime), Some(reference)) =
+                (stores.skill_runtime.upgrade(), &edit.reference)
+            {
+                edit.skill_test = Some(
+                    runtime
+                        .test_skill(reference)
+                        .await
+                        .map_err(|err| err.to_string()),
                 );
             }
         }
@@ -907,7 +933,10 @@ impl AgentSession {
     pub(crate) fn refinement_stores(&self) -> anyhow::Result<RefinementStores> {
         self.harness_digest
             .as_ref()
-            .map(RefinementStores::from)
+            .map(|context| RefinementStores {
+                skill_runtime: self.skill_runtime.clone(),
+                ..RefinementStores::from(context)
+            })
             .ok_or_else(refinement_stores_missing_error)
     }
 
@@ -1258,10 +1287,7 @@ mod tests {
                 messages: &[],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1279,10 +1305,7 @@ mod tests {
                 messages: &[user_message("remember this")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::SelfRefine,
@@ -1318,10 +1341,7 @@ mod tests {
                 messages: &[],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: dir.path().join("harness"),
-                local_dir: None,
-            },
+            &RefinementStores::new(dir.path().join("harness"), None),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1476,10 +1496,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1511,10 +1528,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1557,10 +1571,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1585,10 +1596,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1620,10 +1628,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1685,10 +1690,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("x")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -1794,10 +1796,7 @@ Reviewer instructions: record it"
                     messages: &messages,
                     refinement_history: &refinement_history,
                 },
-                &RefinementStores {
-                    global_dir: global_harness_dir.clone(),
-                    local_dir: Some(local_harness_dir.clone()),
-                },
+                &RefinementStores::new(global_harness_dir.clone(), Some(local_harness_dir.clone())),
                 &test_model(),
                 &RefineOptions::default(),
                 RefinementSource::User,
@@ -1890,10 +1889,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("x")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions {
                 global: true,
@@ -1920,10 +1916,7 @@ Reviewer instructions: record it"
                 messages: &[],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions {
                 global: true,
@@ -1997,10 +1990,7 @@ Reviewer instructions: record it"
                 messages: &[],
                 refinement_history: std::slice::from_ref(&legacy_local),
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &rollback("refine_legacy_local", false),
             RefinementSource::User,
@@ -2048,10 +2038,7 @@ Reviewer instructions: record it"
                 messages: &[],
                 refinement_history: std::slice::from_ref(&legacy_global),
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &rollback("refine_legacy_global", true),
             RefinementSource::User,
@@ -2104,10 +2091,7 @@ Reviewer instructions: record it"
                 messages: &[user_message("do a thing twice")],
                 refinement_history: &[],
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
@@ -2131,10 +2115,7 @@ Reviewer instructions: record it"
                 messages: &[],
                 refinement_history: std::slice::from_ref(&record),
             },
-            &RefinementStores {
-                global_dir: global_dir.clone(),
-                local_dir: Some(local_dir.clone()),
-            },
+            &RefinementStores::new(global_dir.clone(), Some(local_dir.clone())),
             &test_model(),
             &RefineOptions {
                 rollback_id: Some(record.id.clone()),

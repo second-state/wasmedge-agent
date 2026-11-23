@@ -62,6 +62,30 @@ function cells(responses, children, flags = []) {
 		}));
 }
 const helper = "src/helpers/answer.rs";
+function addSkill(name, expected) {
+	const dir = join(temp, "agent", "skills", name);
+	const crate = name.replaceAll("-", "_");
+	mkdirSync(join(dir, "src"), { recursive: true });
+	writeFileSync(
+		join(dir, "SKILL.md"),
+		`---\nname: ${name}\ndescription: Native refinement fixture\n---\nRun the crate.\n`,
+	);
+	writeFileSync(join(dir, "Cargo.toml"), `[package]\nname = "${crate}"\nversion = "0.1.0"\nedition = "2021"\n`);
+	writeFileSync(
+		join(dir, "src/lib.rs"),
+		`pub fn run() -> i32 { 7 }\n#[test] fn verifies() { assert_eq!(run(), ${expected}); }\n`,
+	);
+	return {
+		action: "create",
+		kind: "skill",
+		id: name,
+		title: name,
+		content: "Return the fixture result",
+		arguments: {},
+		reference: { type: "rust", use: `agent_lib::skills::${crate}`, callable: "run" },
+	};
+}
+
 try {
 	mkdirSync(join(temp, "agent"));
 	writeFileSync(join(temp, "agent", "settings.json"), JSON.stringify({ rlmMaxDepth: 3 }));
@@ -108,10 +132,33 @@ try {
 	assert.match(second[1].text, /native-host-shell/);
 	assert.match(second[2].text, /child=child/);
 	assert.equal(readFileSync(join(cwd, "child-result"), "utf8"), "inherited=7 depth=1/3");
+	const edits = [addSkill("passing-native", 7), addSkill("failing-native", 8)];
+	const refinement = run(["--resume", session, "--mode", "json", "-p", "/refine"], {
+		responses: [JSON.stringify({ summary: "Register tested skills", edits })],
+		repeatLastResponse: true,
+	});
+	const result = refinement
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line))
+		.find((event) => event.type === "refine_complete")?.result;
+	assert.ok(result, refinement.slice(-2500));
+	assert.deepEqual(
+		result.appliedEdits.map((edit) => [edit.id, edit.applied]),
+		[
+			["passing-native", true],
+			["failing-native", false],
+		],
+		JSON.stringify(result.appliedEdits),
+	);
+	assert.match(result.appliedEdits[1].error, /test.*fail|assertion/i);
+	const state = JSON.parse(readFileSync(result.harnessStatePath, "utf8"));
+	assert.ok(state.entries.skill["passing-native"]);
+	assert.equal(state.entries.skill["failing-native"], undefined);
 	cells([rust('std::fs::write("/workspace/forbidden", "unexpected")?'), "complete"], undefined, ["--tools", "bash"]);
 	assert.ok(!existsSync(join(cwd, "forbidden")), "restricted tool set executed a Rust cell");
 	console.log(
-		"Native host passed WasmEdge execution, failed library rollback, session reopen, native host requests, bash and child workspace inheritance.",
+		"Native host passed WasmEdge execution, library rollback, session reopen, host requests, bash, child inheritance and sandboxed skill refinement.",
 	);
 } finally {
 	rmSync(temp, { recursive: true, force: true });
