@@ -4,11 +4,9 @@
 
 The CLI, TUI, daemon, agent loop, session management and providers run in the
 upstream Rust workspace, synchronized through [`798d9703`](https://github.com/PrimeIntellect-ai/prime-agent/commit/798d97032a3ec6d70142cc75c0420cb2b260f194).
-The native host invokes the fork's existing Node tool worker for Rust/WASI cells
-and the host shell. The worker owns Cargo builds, the WasmEdge process, library
-transactions, resource controls and the guest bridge. The TypeScript SDK and
-historical benchmark harness remain available in `packages/`.
-The optional Bun standalone build also retains the TypeScript host.
+The Rust session worker compiles cells with Cargo, launches WasmEdge, serves
+guest requests over private stdio and runs the host shell. Embedders can use
+the same session engine through the [Rust SDK](packages/coding-agent/docs/sdk.md).
 
 The executable is `wasmedge-agent`, environment overrides use `WASMEDGE_AGENT_*`,
 and configuration lives in `~/.wasmedge-agent`.
@@ -21,7 +19,7 @@ the runtime under it:
 
 | | Benchmark baseline (`c22549a3`) | This fork |
 |---|---|---|
-| Host harness | TypeScript | Native Rust host and Node tool worker |
+| Host harness | TypeScript | Native Rust host and session worker |
 | Model-facing tool | `ipython` (persistent kernel) | `rust` (cell = complete program) |
 | Execution | host Python, no sandbox | `wasm32-wasip1` in WasmEdge, capability-scoped preopens |
 | Persistence | in-memory namespace + dill snapshots | explicit: `rlm::state` KV/blobs + growable `agent_lib` crate + files |
@@ -53,23 +51,30 @@ Rebuild the October 8 standalone reports with `uv run --with markdown==3.10.2 py
 
 ## Build and run
 
-From the checkout, install the Node dependencies and build the tool worker and
-the native host. Rust, the `wasm32-wasip1` target and a WasmEdge CLI are needed
-to execute a cell.
+Install Rust, Git and the WasmEdge CLI. From the repository root, run:
 
 ```sh
-npm ci
 rustup target add wasm32-wasip1
-npm run build
-./wasmedge-agent.sh --dist doctor --json
+cargo build --release --locked --bin wasmedge-agent
+./wasmedge-agent.sh --dist doctor --fix
 ./wasmedge-agent.sh --dist
 ```
 
-The native binary is `target/release/wasmedge-agent`. The launcher sets the
-package root for the bundled assets and applies the one-release legacy name
-fallbacks. A source run with `./wasmedge-agent.sh` rebuilds the native binary.
-Run `npm run check` for the fork checks and `node scripts/test-native-cells.mjs`
-for an offline end-to-end run with real WasmEdge cells.
+The launcher uses `target/release/wasmedge-agent`. The first template
+preparation in a source checkout needs access to the locked dependencies.
+Platform release archives already include those dependencies. The native CLI,
+SDK, build and release tools run without Node.js, npm or Bun.
+
+```sh
+cargo run --locked -p xtask -- check
+cargo test --release --locked -p wasmedge-agent-sdk
+cargo test --release --locked -p pa-cli --test native_cells -- --ignored
+```
+
+Browser-side JavaScript remains in the standalone HTML session exporter.
+The TypeScript benchmark runners and fixtures in `poc/` reproduce the
+published experiments using the [pinned host](poc/README.md).
+Third-party packages installed explicitly from npm require their own npm toolchain.
 
 ## Try it
 

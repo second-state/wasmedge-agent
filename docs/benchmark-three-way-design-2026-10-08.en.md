@@ -246,7 +246,7 @@ A single speed ratio, if needed, uses equal-task-weight geometric means of penal
 
 ## 8. Implementation sequence and coverage
 
-Reusable components are the [cell timing code](../packages/coding-agent/src/core/rust-cell/cell-timing.ts), [Rust tool](../packages/coding-agent/src/core/tools/rust.ts), [request timing](../packages/coding-agent/src/core/request-timing.ts), [offline microbenchmark](bench-history/runtime-microbenchmark-2026-10-07.md), and [older harness](../poc/bench/README.md).
+Reusable components are the [cell timing code](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/packages/coding-agent/src/core/rust-cell/cell-timing.ts), [Rust tool](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/packages/coding-agent/src/core/tools/rust.ts), [request timing](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/packages/coding-agent/src/core/request-timing.ts), [offline microbenchmark](bench-history/runtime-microbenchmark-2026-10-07.md), and [older harness](../poc/bench/README.md).
 
 Required work includes release adapters and readiness/parity checks; normalized traces and clocks; Python/Rust runtime hooks; source-field SSE mapping; process accounting; and explicit missing-phase coverage. Legacy `compileMs` includes build-queue work and sometimes rollback. Legacy `runMs` includes cleanup. They cannot be added to their child phases or called pure compiler/guest time. Arbitrary unmarked model code gets observable totals, not invented body partitions.
 

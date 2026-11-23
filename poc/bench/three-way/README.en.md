@@ -1,5 +1,14 @@
 # Four-Way Agent Benchmark Runner
 
+These experiments use the October TypeScript SDK and host. To reproduce the published runs, create a separate checkout with their original build inputs, then follow the instructions below in that checkout.
+
+```sh
+git worktree add --detach ../wasmedge-agent-benchmark 630cb342f419831ac18d74435ba12b4c14b0a81f
+cd ../wasmedge-agent-benchmark
+npm ci
+npm run build
+```
+
 For report selection and timing definitions, start with the [English documentation guide](../../../docs/README.md). This file covers running and analyzing the benchmarks.
 
 Use `--suite workloads-e2e` or `E-N01-graph,E-N03-events,E-N04-simulation` for model-generated versions of the new workloads. No reference solution is supplied. Independent checkers validate all outputs and input integrity. Numeric packages are excluded. E2E currently supports cold workspaces only; warm is rejected until a model warmup policy is defined. Analysis adds `workloads-e2e.html/json`, separate from preserved fixed-program results. See the [Opus E2E record](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md).

@@ -77,9 +77,12 @@ pub async fn latest_release(
     if std::env::var("PI_SKIP_VERSION_CHECK").is_ok() || std::env::var("PI_OFFLINE").is_ok() {
         return Ok(None);
     }
-    let manifest_path =
-        super::version::resolve_update_channel(current_version, channel).manifest_path();
-    let url = format!("{}/{manifest_path}", base_url.trim_end_matches('/'));
+    let channel = super::version::resolve_update_channel(current_version, channel);
+    let url = super::installer::channel_asset_url(
+        base_url,
+        channel == UpdateChannel::Nightly,
+        channel.manifest_path(),
+    );
     let response = pa_ai::utils::tls::http_client_builder()
         .build()
         .expect("release client")
@@ -313,7 +316,7 @@ mod tests {
         assert_eq!(release.artifacts[0].platform, "linux-x64");
         let head = head_rx.await.expect("the head was captured").to_lowercase();
         assert!(
-            head.starts_with("get /latest.json http/1.1"),
+            head.starts_with("get /latest/download/latest.json http/1.1"),
             "the fetch hits the stable manifest path: {head}"
         );
         assert!(

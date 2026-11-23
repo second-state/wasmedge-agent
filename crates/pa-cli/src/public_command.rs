@@ -189,7 +189,7 @@ pub fn handle_public_command(args: &[String]) -> PublicCommandResult {
         "session" => rewrite_nested_command("session", "export", "--export", &rest),
         "prompt" => handled_with_exit(crate::prompt_command::run_prompt_command(&rest)),
         "skills" => handled_with_exit(crate::skills_command::run_skills_command(&rest)),
-        "storage" => match crate::run_tool_helper("--storage", &rest) {
+        "storage" => match crate::cell_maintenance(pa_core::cell_maintenance::storage(&rest)) {
             Ok(code) => handled_with_exit(code),
             Err(err) => fail(err, None),
         },
@@ -473,22 +473,7 @@ fn run_doctor(args: &[String]) -> PublicCommandResult {
     };
     let fix = options.contains("--fix");
     let json = options.contains("--json");
-    let report = (|| -> anyhow::Result<serde_json::Value> {
-        let mut worker = std::process::Command::new("node");
-        worker
-            .arg(pa_core::tool_worker_path()?)
-            .arg("--runtime-check");
-        if fix {
-            worker.arg("--fix");
-        }
-        let output = worker.output()?;
-        anyhow::ensure!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok(serde_json::from_slice(&output.stdout)?)
-    })();
+    let report = crate::cell_maintenance(pa_core::cell_maintenance::doctor(fix));
     let mut report = match report {
         Ok(value) => value,
         Err(err) => return fail(err.to_string(), None),
@@ -718,26 +703,6 @@ fn check_invocation(args: &[String]) -> Option<crate::installer_update::UpdateOp
 }
 
 fn run_update(args: &[String]) -> PublicCommandResult {
-    if args
-        .iter()
-        .all(|flag| matches!(flag.as_str(), "--force" | "--nightly" | "--stable"))
-    {
-        let helper = match pa_core::tool_worker_path() {
-            Ok(path) => path,
-            Err(err) => return fail(err.to_string(), None),
-        };
-        let entry = helper.with_file_name("bundle").join("cli.js");
-        return match std::process::Command::new("node")
-            .arg(entry)
-            .arg("update")
-            .args(args)
-            .status()
-        {
-            Ok(status) => handled_with_exit(status.code().unwrap_or(1)),
-            Err(err) => fail(err.to_string(), None),
-        };
-    }
-
     // `--check` (alias `--version`) reports without installing, optionally
     // for one channel flag; mixed with anything else the parse below
     // rejects it.

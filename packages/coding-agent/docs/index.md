@@ -16,7 +16,7 @@ wasmedge-agent
 
 Authenticate with `/login` for subscription or stored API-key providers, or set an environment variable such as `ANTHROPIC_API_KEY` before launch. See the [Quickstart](quickstart.md) for the complete first-run flow.
 
-Public releases will be installed from versioned release artifacts. The inherited npm workspace names in the source tree are implementation details, not the public install path.
+Install a native platform archive from GitHub Releases or build the CLI with Cargo.
 
 ## Start Here
 
@@ -44,7 +44,7 @@ Public releases will be installed from versioned release artifacts. The inherite
 
 ## Programmatic Usage
 
-- [SDK](sdk.md) - embed WasmEdge Agent in Node.js applications.
+- [SDK](sdk.md) - embed WasmEdge Agent in Rust applications.
 - [ACP mode](acp.md) - drive WasmEdge Agent from any Agent Client Protocol client.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.

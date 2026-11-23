@@ -44,7 +44,7 @@ flowchart LR
 - The supervisor owns discovery, routing, attachments, worker health, and cross-agent message delivery.
 - Each worker owns one root runtime, its scheduler, cell workspaces, and all descendants below that root.
 - `AgentSession` owns provider calls, queues, tools, compaction, goals, child lifecycles, and transcript writes.
-- The Rust cell is the model-facing control environment. Typed host requests over the cell bridge return authoritative operations to the TypeScript session.
+- The Rust cell is the model-facing control environment. Typed host requests over the cell bridge return authoritative operations to the Rust session worker.
 
 Workers are separate processes for lifecycle and failure containment, not security sandboxes; they normally run with the same operating-system permissions as the client. Cells are the exception: they run as WebAssembly inside WasmEdge with only their preopened directories.
 

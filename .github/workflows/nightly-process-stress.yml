@@ -21,31 +21,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Install uv
-        run: |
-          python3 -m pip install --user uv
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Run process stress tests
-        working-directory: packages/coding-agent
-        env:
-          WASMEDGE_AGENT_STRESS_WORKERS: "10"
-        run: npm run test:process-stress
+      - name: Exercise concurrent native workers
+        run: cargo test --release --locked -p pa-daemon --test worker_orphan_exit_e2e --test create_reuse_e2e

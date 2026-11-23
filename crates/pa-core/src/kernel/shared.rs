@@ -311,10 +311,6 @@ impl HostRequestHandlers {
         self.handlers = Arc::new(map);
     }
 
-    pub(crate) fn names(&self) -> impl Iterator<Item = &String> {
-        self.handlers.keys()
-    }
-
     /// Merge another registry into this one; the other registry's entries
     /// win on key collisions (later registrations override).
     pub fn merge(&mut self, other: Self) {

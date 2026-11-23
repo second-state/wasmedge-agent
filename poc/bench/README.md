@@ -1,5 +1,14 @@
 # PoC benchmark harness (DESIGN.md §6.2–6.3)
 
+These experiments use the October TypeScript SDK and host. To reproduce the published runs, create a separate checkout with their original build inputs, then follow the instructions below in that checkout.
+
+```sh
+git worktree add --detach ../wasmedge-agent-benchmark 630cb342f419831ac18d74435ba12b4c14b0a81f
+cd ../wasmedge-agent-benchmark
+npm ci
+npm run build
+```
+
 Measures the D20 GO/NO-GO question: can models work effectively in
 cell-as-program mode (group B, `rust` + WasmEdge) versus the ipython baseline
 (group A), at acceptable token cost?

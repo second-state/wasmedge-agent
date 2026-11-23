@@ -1,0 +1,515 @@
+{
+  "rules": [
+    {
+      "pattern": "(?i)prime_agent_",
+      "label": "branded identifier prefix prime_agent_ / PRIME_AGENT_ (any case)"
+    },
+    {
+      "pattern": "\\.prime/agent",
+      "label": "legacy config directory .prime/agent"
+    },
+    {
+      "pattern": "[\"']\\.prime[\"']",
+      "label": "legacy config directory as a split path segment (join(..., \".prime\", \"agent\"))"
+    },
+    {
+      "pattern": "PRIME_(?:BUTTERFLY|LOGO)",
+      "label": "brand-asset identifier (PRIME_BUTTERFLY_*, PRIME_LOGO_*)"
+    },
+    {
+      "pattern": "prime-(?:butterfly|logo)",
+      "label": "brand-asset filename or module (prime-butterfly, prime-logo)"
+    },
+    {
+      "pattern": "(?i)prime-agent",
+      "label": "legacy command or package name prime-agent (any case)"
+    },
+    {
+      "pattern": "[Pp]rimeAgent",
+      "label": "legacy product name in an identifier (PrimeAgent, primeAgent)"
+    },
+    {
+      "pattern": "(?i)\\bprime agent\\b",
+      "label": "legacy product display name Prime Agent (any case)"
+    },
+    {
+      "pattern": "(?i)\\bprime[-\\s]brand",
+      "label": "legacy product branding wording (Prime brand, Prime-branded, any case)"
+    },
+    {
+      "pattern": "Prime Intellect",
+      "label": "upstream vendor display name Prime Intellect"
+    },
+    {
+      "pattern": "(?i)ai\\.primeintellect\\.wasmedge-agent",
+      "label": "wrongly rebranded ACP _meta namespace (the wire value is \"ai.primeintellect.prime-agent\")"
+    },
+    {
+      "pattern": "(?i)wasmedge-agent-traces",
+      "label": "wrongly rebranded traces provider id (the wire value is \"prime-agent-traces\")"
+    },
+    {
+      "pattern": "@[a-z0-9-]*wasmedge[a-z0-9-]*/",
+      "label": "rebranded package scope (the packages stay under @earendil-works)"
+    },
+    {
+      "pattern": "@earendil-works/(?!pi-)",
+      "label": "rebranded package name under @earendil-works (every one of ours is pi-*)"
+    },
+    {
+      "pattern": "@(?!earendil-works/|mariozechner/)(?![a-z0-9-]*wasmedge)[a-z0-9-]+/pi-(?:agent-core|coding-agent|ai|tui)\\b",
+      "label": "one of our package names under another scope (they are published under @earendil-works)"
+    },
+    {
+      "pattern": "(?i)wasmedge-agent-bash",
+      "label": "wrongly rebranded ACP bash tool-call id prefix (the wire value is \"prime-agent-bash\")"
+    },
+    {
+      "pattern": "(?i)wasmedge-agent\\.daemon",
+      "label": "wrongly rebranded daemon protocol name (the wire value is \"prime-agent.daemon\")"
+    },
+    {
+      "pattern": "(?i)wasmedge-agent\\.(?:worker_recovery|update_restart|update_complete|refinement)",
+      "label": "wrongly rebranded persisted session entry type (the wire values are \"prime-agent.<type>\")"
+    }
+  ],
+  "names": [
+    "WASMEDGE_AGENT_AGENT_DIR",
+    "WASMEDGE_AGENT_AOT_COMPILER",
+    "WASMEDGE_AGENT_ARCHIVE_CHECK",
+    "WASMEDGE_AGENT_BASH_COMMAND_PREFIX",
+    "WASMEDGE_AGENT_BASH_SHELL",
+    "WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL",
+    "WASMEDGE_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL",
+    "WASMEDGE_AGENT_BUILD_ID",
+    "WASMEDGE_AGENT_BUILD_ID_ENV",
+    "WASMEDGE_AGENT_CARGO",
+    "WASMEDGE_AGENT_CMD",
+    "WASMEDGE_AGENT_CODING_AGENT_DIR",
+    "WASMEDGE_AGENT_CODING_AGENT_SESSION_DIR",
+    "WASMEDGE_AGENT_DAEMON_SOCKET",
+    "WASMEDGE_AGENT_DOWNLOAD_BASE_URL",
+    "WASMEDGE_AGENT_ENV_LOCK",
+    "WASMEDGE_AGENT_FAUX_CHILD_SCRIPT",
+    "WASMEDGE_AGENT_FAUX_SCRIPT",
+    "WASMEDGE_AGENT_INFERENCE_API_BASE_URL",
+    "WASMEDGE_AGENT_INFERENCE_FRONTEND_URL",
+    "WASMEDGE_AGENT_INSTALLER_PARENT_PID",
+    "WASMEDGE_AGENT_INSTALLER_PLAIN",
+    "WASMEDGE_AGENT_INTERACTIVE_SELF_UPDATE",
+    "WASMEDGE_AGENT_KERNEL_FORKSERVER",
+    "WASMEDGE_AGENT_KERNEL_OWNER_PID",
+    "WASMEDGE_AGENT_KERNEL_PYTHON",
+    "WASMEDGE_AGENT_KERNEL_STARTUP_BUDGET_MS",
+    "WASMEDGE_AGENT_KERNEL_STARTUP_RETRIES",
+    "WASMEDGE_AGENT_KERNEL_VENV",
+    "WASMEDGE_AGENT_LAUNCHER_PATH",
+    "WASMEDGE_AGENT_LAUNCHER_PATH_ENV",
+    "WASMEDGE_AGENT_LEGACY_ALIAS",
+    "WASMEDGE_AGENT_MAX_CONCURRENT_BUILDS",
+    "WASMEDGE_AGENT_MAX_CONCURRENT_KERNEL_BOOTS",
+    "WASMEDGE_AGENT_META_NAMESPACE",
+    "WASMEDGE_AGENT_MODEL",
+    "WASMEDGE_AGENT_MODEL_PROVIDER",
+    "WASMEDGE_AGENT_NODE_INSTALLED_STANDALONE",
+    "WASMEDGE_AGENT_OWNED_TEST",
+    "WASMEDGE_AGENT_PACKAGE",
+    "WASMEDGE_AGENT_PACKAGE_NAME",
+    "WASMEDGE_AGENT_RELEASE_CHANNEL",
+    "WASMEDGE_AGENT_ROLLBACK_CHECK",
+    "WASMEDGE_AGENT_RUSTUP",
+    "WASMEDGE_AGENT_RUST_",
+    "WASMEDGE_AGENT_RUST_INSTALLER_URL",
+    "WASMEDGE_AGENT_RUST_PREFIX",
+    "WASMEDGE_AGENT_SESSION_DIR",
+    "WASMEDGE_AGENT_SHELL_PROFILE",
+    "WASMEDGE_AGENT_SPLASH_PREVIEW_FRAMES",
+    "WASMEDGE_AGENT_STANDALONE_NODE_BIN",
+    "WASMEDGE_AGENT_STRESS_WORKERS",
+    "WASMEDGE_AGENT_TELEMETRY",
+    "WASMEDGE_AGENT_TELEMETRY_ENDPOINT",
+    "WASMEDGE_AGENT_TELEMETRY_ORIGIN",
+    "WASMEDGE_AGENT_TEMPLATE_DIR",
+    "WASMEDGE_AGENT_TOOLCHAIN",
+    "WASMEDGE_AGENT_TRACES_API_KEY",
+    "WASMEDGE_AGENT_TRACES_BASE_URL",
+    "WASMEDGE_AGENT_TRACES_PROVIDER_ID",
+    "WASMEDGE_AGENT_TRACES_PROVIDER_NAME",
+    "WASMEDGE_AGENT_TUI_EXIT_FLUSH",
+    "WASMEDGE_AGENT_UNRELATED_MS",
+    "WASMEDGE_AGENT_UPDATE_",
+    "WASMEDGE_AGENT_UPDATE_ACTIVATE_MS",
+    "WASMEDGE_AGENT_UPDATE_BOOT_MS",
+    "WASMEDGE_AGENT_UPDATE_CANDIDATE_DIR",
+    "WASMEDGE_AGENT_UPDATE_DOWNLOAD_ATTEMPTS",
+    "WASMEDGE_AGENT_UPDATE_DOWNLOAD_MS",
+    "WASMEDGE_AGENT_UPDATE_PREPARED_EXPIRY_MS",
+    "WASMEDGE_AGENT_UPDATE_PREPARE_MS",
+    "WASMEDGE_AGENT_UPDATE_ROSTER",
+    "WASMEDGE_AGENT_UV_BIN_DIR",
+    "WASMEDGE_AGENT_UV_INSTALLER",
+    "WASMEDGE_AGENT_VERSION",
+    "WASMEDGE_AGENT_WASMEDGE",
+    "WASMEDGE_AGENT_WEBSEARCH_NUM_RESULTS",
+    "WASMEDGE_AGENT_WEBSEARCH_PROVIDER",
+    "WASMEDGE_AGENT_WEBSEARCH_TIMEOUT"
+  ],
+  "pins": [
+    {
+      "literal": "https://api.primeintellect.ai",
+      "glob": "crates/pa-core/src/auth/prime_inference.rs",
+      "why": "the Prime Intellect API host the traces client and the whoami probe post to"
+    },
+    {
+      "literal": "https://app.primeintellect.ai",
+      "glob": "crates/pa-core/src/auth/prime_inference.rs",
+      "why": "the Prime Intellect sign-in host the browser auth flow opens"
+    },
+    {
+      "literal": "PI_CACHE_RETENTION",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_CLEAR_ON_SHRINK",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_HARDWARE_CURSOR",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_OAUTH_CALLBACK_HOST",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_OFFLINE",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_PACKAGE_DIR",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_SHARE_VIEWER_URL",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_SKIP_VERSION_CHECK",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_STARTUP_BENCHMARK",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    },
+    {
+      "literal": "PI_TIMING",
+      "glob": "crates/**",
+      "why": "an upstream PI_* environment name the rebrand keeps, read from source"
+    }
+  ],
+  "allows": [
+    {
+      "glob": "crates/**",
+      "patterns": [
+        "ai\\.primeintellect\\.prime-agent",
+        "prime-agent\\.daemon",
+        "prime-agent\\.(?:worker_recovery|update_restart|update_complete|refinement)",
+        "prime-agent-bash",
+        "prime-agent-traces",
+        "\\.vf-prime-agent"
+      ],
+      "reason": "Rust and TypeScript share these externally defined protocol, credential and session literals"
+    },
+    {
+      "glob": "crates/**",
+      "patterns": [
+        "PrimeIntellect-ai/prime-agent(?:-catalog)?",
+        "prime-agent-catalog"
+      ],
+      "reason": "upstream source repository and catalog provenance"
+    },
+    {
+      "glob": "crates/pa-daemon/testdata/acp/**",
+      "patterns": [
+        "^[\\s\\S]*$"
+      ],
+      "reason": "byte-for-byte upstream ACP reference transcripts"
+    },
+    {
+      "glob": "crates/pa-perf/baseline.json",
+      "patterns": [
+        "^[\\s\\S]*$"
+      ],
+      "reason": "historical upstream performance measurements with source run URLs"
+    },
+    {
+      "glob": "crates/pa-types/src/platform/dirs.rs",
+      "patterns": [
+        "join\\(\"\\.prime\"\\)\\.join\\(\"agent\"\\)"
+      ],
+      "reason": "documented one-release project directory fallback"
+    },
+    {
+      "glob": "vendor/crossterm/**",
+      "patterns": [
+        "(?i)prime[- ]agent (?:patch|v2)",
+        "PRIME_AGENT_PATCH\\.md"
+      ],
+      "reason": "attribution for the upstream terminal patches"
+    },
+    {
+      "glob": "crates/pa-core/src/auth/prime_inference.rs",
+      "patterns": [
+        "\\.join\\(\"\\.prime\"\\)"
+      ],
+      "reason": "the external inference CLI owns this credentials directory"
+    },
+    {
+      "glob": "crates/**",
+      "patterns": [
+        "(?:[Ll]og ?in with|Share agent traces with) Prime Intellect"
+      ],
+      "reason": "the provider's sign-in and explicit sharing UI names the service"
+    },
+    {
+      "glob": "packages/coding-agent/README.md",
+      "patterns": [
+        "`PRIME_AGENT_\\*`"
+      ],
+      "reason": "the environment-variable table cannot document the one-release fallback without naming the prefix that is falling back (rule R3); only the backticked asterisked prefix in that one row is exempt, so a concrete PRIME_AGENT_<NAME> added anywhere else in this README still fails"
+    },
+    {
+      "glob": "packages/coding-agent/docs/acp.md",
+      "patterns": [
+        "\"ai\\.primeintellect\\.prime-agent\""
+      ],
+      "reason": "the doc must publish the exact _meta namespace acp-meta.ts emits (rule R1); a client written from a rebranded key would look up something the agent never sends and silently see no metadata"
+    },
+    {
+      "glob": ".gitignore",
+      "patterns": [
+        "\\.prime/agent/"
+      ],
+      "reason": "the legacy project-local config dir stays ignored until project-local migration lands (rule R3), so a developer's pre-rebrand directory does not surface as untracked in the meantime"
+    },
+    {
+      "glob": "install.sh",
+      "patterns": [
+        "PRIME_AGENT_<suffix>",
+        "PRIME_AGENT_DOWNLOAD_BASE_URL",
+        "PRIME_AGENT_RELEASE_CHANNEL",
+        "PRIME_AGENT_PACKAGE",
+        "PRIME_AGENT_CMD",
+        "PRIME_AGENT_INSTALLER_PLAIN",
+        "PRIME_AGENT_VERSION",
+        "PRIME_AGENT_SHELL_PROFILE"
+      ],
+      "reason": "install.sh's own one-release compatibility window (rule R3): each PRIME_AGENT_<NAME> is a legacy fallback wasmedge_agent_warn_if_legacy_env checks for and each real reader falls back to, mirroring readLegacyEnv on the TypeScript side; only these seven literal names (plus the doc comment's generic placeholder) are exempt, so a bare PRIME_AGENT_ added anywhere else in this file still fails"
+    },
+    {
+      "glob": "poc/**",
+      "patterns": [
+        "prime-agent",
+        "PRIME_AGENT_",
+        "~/\\.prime/agent",
+        "\"\\.prime\""
+      ],
+      "reason": "poc/ is the Phase 0 proof of concept that runs against stock upstream prime-agent -- a different program, with its own command name, its own PRIME_AGENT_* env vars and its own config dir, which the bench harness builds as split path segments. Naming it is naming upstream, not naming us (rule R1). Only those four upstream literals are exempt: 'Prime Agent' as a display name still fails here, as do this fork's own group-F paths"
+    },
+    {
+      "glob": "README.md",
+      "patterns": [
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/commit/[0-9a-f]{40}",
+        "\\[Prime Agent\\]\\(https://github\\.com/PrimeIntellect-ai/prime-agent\\)",
+        "\\[\\*\\*Prime Agent\\*\\*\\]\\(https://github\\.com/PrimeIntellect-ai/prime-agent\\)",
+        "Prime Agent's design",
+        "\\[Prime Intellect\\]\\(https://primeintellect\\.ai\\)"
+      ],
+      "reason": "the fork's lineage and its MIT attribution name upstream's product, repository and vendor, which are upstream's to name and not ours to rebrand (rule R1): the opening sentence saying what this is a fork of, the Attribution section's credit to Prime Intellect, and the one clause naming whose design the fork keeps. A mechanical sweep over these produced \"built on WasmEdge Agent by Prime Intellect\", which is simply false. Only those four literals are exempt, so this fork's own status and install prose in the same file still fails"
+    },
+    {
+      "glob": "LICENSE",
+      "patterns": [
+        "Copyright \\(c\\) (?:2025-)?2026 Prime Intellect"
+      ],
+      "reason": "the MIT copyright line states who holds the copyright (rule R1). It is a legal notice, not a display name, and rebranding it would make it false. Only that one line is exempt"
+    },
+    {
+      "glob": "AGENTS.md",
+      "patterns": [
+        "fork of prime-agent",
+        "PrimeIntellect-ai/prime-agent",
+        "`prime-agent-runtime/`"
+      ],
+      "reason": "three references to upstream rather than to us (rule R1): what this repo is a fork of, the slug the sync strategy in DESIGN.md 7.3 syncs from, and `prime-agent-runtime/`, an upstream directory deleted in WP1 that the rule forbidding new references to it has to name in order to forbid it. Only these three literals are exempt, so this file's own naming rules still fail if they reintroduce a branded name"
+    },
+    {
+      "glob": "docs/bench-history/benchmark-comparison-2026-08-10.md",
+      "patterns": [
+        "Prime Agent vs WasmEdge Agent benchmark",
+        "stock Prime Agent's IPython runtime",
+        "`PrimeIntellect-ai/prime-agent`",
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/blob/c22549a37b73cc603c6f0d202517cb0ca856c7d3/packages/coding-agent/package\\.json",
+        "prime-agent-clean-bench/prime-agent\\.sh",
+        "`PRIME_AGENT_CODING_AGENT_DIR`"
+      ],
+      "reason": "a dated record of a campaign that was really run on 2026-08-10 against the real upstream binary (rule R2): the two products compared, the upstream worktree and its package manifest pinned by SHA, the literal command line that launched it, and the environment variable the harness actually set. Rebranding any of them would make a measurement record claim something that did not happen. Only these historical literals and the exact manifest URL are exempt, so a newly branded string added to this file still fails"
+    },
+    {
+      "glob": "docs/benchmark-three-way-design-2026-10-08.md",
+      "patterns": [
+        "Prime Agent，",
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/(?:tree|blob|commit)/[a-f0-9]{40}(?:/[^\\s)]+)?"
+      ],
+      "reason": "the three-version experiment names the two upstream products and links their pinned source revisions (rule R1); only the upstream product label and upstream source URLs are exempt, not this fork's own branding"
+    },
+    {
+      "glob": "docs/benchmark-cell-runtime-analysis-2026-10-08.*",
+      "patterns": [
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager\\.ts",
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests\\.rs"
+      ],
+      "reason": "the runtime diagnosis cites the exact upstream kernel sources measured by the two Python baselines (rule R1); public pinned URLs replace links into ignored local upstream checkouts"
+    },
+    {
+      "glob": "docs/bench-history/benchmark-cell-runtime-analysis-2026-10-08.*",
+      "patterns": [
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager\\.ts",
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests\\.rs"
+      ],
+      "reason": "the runtime diagnosis cites the exact upstream kernel sources measured by the two Python baselines (rule R1); public pinned URLs replace links into ignored local upstream checkouts"
+    },
+    {
+      "glob": "docs/benchmark-three-way-plan.json",
+      "patterns": [
+        "\"https://github\\.com/PrimeIntellect-ai/prime-agent\""
+      ],
+      "reason": "the experiment's source manifest must identify the actual upstream repository for both baseline variants (rule R1); only that exact repository URL is exempt"
+    },
+    {
+      "glob": "REPORT.en.*",
+      "patterns": [
+        "Prime Agent's persistent IPython runtime",
+        "Prime Agent v0\\.7\\.0",
+        "Prime Agent source analysis",
+        "1-prime-agent-source-analysis",
+        "Prime Agent is a coding/research agent",
+        "Prime Agent was an in-repository fork"
+      ],
+      "reason": "the English reading edition describes the upstream product assessed in the historical feasibility study (rules R1/R2); only those upstream descriptions and their generated section anchor are exempt"
+    },
+    {
+      "glob": "docs/benchmark-comparison-2026-08-10.en.html",
+      "patterns": [
+        "Prime Agent vs WasmEdge Agent benchmark",
+        "prime-agent-vs-wasmedge-agent-benchmark-2026-08-10",
+        "stock Prime Agent's IPython runtime",
+        "PrimeIntellect-ai/prime-agent",
+        "prime-agent-clean-bench/prime-agent\\.sh",
+        "PRIME_AGENT_CODING_AGENT_DIR"
+      ],
+      "reason": "the named English counterparts preserve the August campaign's actual upstream product, repository, launcher path, and isolated configuration variable (rule R2); the HTML heading anchor derives from its historical title"
+    },
+    {
+      "glob": "docs/benchmark-three-way-design-2026-10-08.en.*",
+      "patterns": [
+        "https://github\\.com/PrimeIntellect-ai/prime-agent/(?:tree|blob|commit)/[a-f0-9]{40}(?:/[^\\s)\"<>]+)?"
+      ],
+      "reason": "the English experiment design links pinned upstream revisions and their source paths (rule R1); the fork's own product names remain checked"
+    },
+    {
+      "glob": "docs/rust-cell-report-2026-10-08.*",
+      "patterns": [
+        "Prime Agent with a (?:TypeScript|Rust) host",
+        "Prime Agent 的",
+        "pinned Prime Agent README"
+      ],
+      "reason": "the consolidated report and its templates describe the upstream comparison groups and pinned upstream documentation (rule R1); only those upstream clauses are exempt"
+    },
+    {
+      "glob": "poc/bench/templates/rust-cell-report*.md",
+      "patterns": [
+        "Prime Agent with a (?:TypeScript|Rust) host",
+        "Prime Agent 的",
+        "pinned Prime Agent README"
+      ],
+      "reason": "the consolidated report and its templates describe the upstream comparison groups and pinned upstream documentation (rule R1); only those upstream clauses are exempt"
+    },
+    {
+      "glob": "examples/showcase/README.md",
+      "patterns": [
+        "a fork of Prime Agent"
+      ],
+      "reason": "the tour's opening sentence names the upstream product this is a fork of (rule R1); only that clause is exempt, so the showcase's own prose about this fork still fails"
+    },
+    {
+      "glob": "DESIGN.md",
+      "patterns": [
+        "^[\\s\\S]*$"
+      ],
+      "reason": "historical record of the fork's own decisions"
+    },
+    {
+      "glob": "REPORT.md",
+      "patterns": [
+        "^[\\s\\S]*$"
+      ],
+      "reason": "historical record of the fork's own decisions"
+    },
+    {
+      "glob": "docs/bench-history/m*-*.md",
+      "patterns": [
+        "^[\\s\\S]*$"
+      ],
+      "reason": "dated milestone reports; historical record"
+    },
+    {
+      "glob": "CHANGELOG.md",
+      "patterns": [
+        "(?s)^.*$"
+      ],
+      "reason": "Released changelog entries preserve historical names. The Unreleased section is checked separately."
+    },
+    {
+      "glob": "crates/pa-cli/src/config.rs",
+      "patterns": [
+        "PRIME_AGENT_",
+        "prime-agent",
+        "\\.join\\(\"\\.prime\"\\)"
+      ],
+      "reason": "One-release environment, executable and directory migration."
+    },
+    {
+      "glob": "xtask/src/branding.json",
+      "patterns": [
+        "(?s)^.*$"
+      ],
+      "reason": "Branding rules contain the literals they check."
+    },
+    {
+      "glob": "xtask/src/checks.rs",
+      "patterns": [
+        "Prime Agent",
+        "Prime Intellect",
+        "Prime brand"
+      ],
+      "reason": "The scanner checks split legacy branding across Markdown lines."
+    },
+    {
+      "glob": "install.sh",
+      "patterns": [
+        "prime-agent"
+      ],
+      "reason": "Keep the documented one-release executable alias."
+    }
+  ]
+}

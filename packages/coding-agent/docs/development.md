@@ -4,27 +4,16 @@ See the repository [AGENTS.md](../../../AGENTS.md) for the current contribution 
 
 ## Setup
 
-WasmEdge Agent requires Node.js 22.8.0 or newer.
+Install Rust, its `wasm32-wasip1` target, Git and WasmEdge. From the repository root:
 
-```bash
-git clone https://github.com/hydai/wasmedge-agent
-cd wasmedge-agent
-npm ci
+```sh
+rustup target add wasm32-wasip1
+cargo build --release --locked --bin wasmedge-agent
+./wasmedge-agent.sh --dist doctor --fix
+./wasmedge-agent.sh --dist
 ```
 
-Run from source:
-
-```bash
-/path/to/wasmedge-agent/wasmedge-agent.sh
-```
-
-The script can be called from any directory and preserves the caller's working directory. Use that behavior to run a source checkout against a separate test project.
-
-## Product and Source Names
-
-WasmEdge Agent is the product, public CLI, release artifact, and repository name. The monorepo still retains inherited `@earendil-works/pi-*` npm workspace names, a source-package `pi` bin entry, the `pi` package manifest key, and some `PI_*` compatibility environment variables. These names are source and compatibility details, not a signal that contributors should install or develop against pi-mono.
-
-Public releases are currently versioned tarball artifacts installed by the stable and beta installer scripts. `scripts/pack-wasmedge-agent-release.mjs` rewrites the coding-agent package name, executable, config metadata, and internal dependency URLs for that distribution. Do not document the inherited npm workspace package as the public WasmEdge Agent install path.
+The launcher preserves the caller's working directory. The public embedding library is documented in the [Rust SDK guide](sdk.md).
 
 ## Local Configuration
 
@@ -40,15 +29,9 @@ WASMEDGE_AGENT_CODING_AGENT_DIR=/tmp/wasmedge-agent-dev /path/to/wasmedge-agent/
 
 Classify every daemon command, event, or response-shape change as backward-compatible, capability-gated, or incompatible. Optional behavior must be negotiated and degrade locally. Follow the protocol-version, schema-revision, compatibility-map, and cross-version test requirements in the root `AGENTS.md` before changing the wire contract.
 
-## Package Asset Resolution
+## Package assets
 
-WasmEdge Agent runs from source, Node.js package output, and standalone release artifacts. Always use `src/config.ts` helpers for package assets:
-
-```typescript
-import { getPackageDir, getThemeDir } from "./config.js";
-```
-
-Do not resolve packaged assets directly from `__dirname`.
+The native executable finds adjacent release assets. In a checkout the launcher sets the package directory. The release packager copies the root `catalog/`, `skills/` and `wasmedge-agent-runtime/` directories.
 
 ## Debugging
 
@@ -92,31 +75,11 @@ wasmedge-agent shutdown
 
 ## Validation
 
-After code changes, run the repository check from the root:
-
-```bash
-npm run check
+```sh
+cargo run --locked -p xtask -- check
+cargo test --release --locked --workspace --lib
+cargo test --release --locked -p wasmedge-agent-sdk --doc
+cargo test --release --locked -p pa-cli --test native_cells -- --ignored
 ```
 
-This performs formatting, linting, type checking, installer rendering checks, and the browser smoke check. It does not run the test suite.
-
-Run focused tests from the package root. For example:
-
-```bash
-cd packages/coding-agent
-npx tsx ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts
-```
-
-If you create or modify a test file, run that file and iterate until it passes. Coding-agent suite regressions belong under `test/suite/regressions/` and use the suite harness and faux provider rather than live provider credentials.
-
-## Capability Evals
-
-End-to-end capability evals live under `scripts/evals/` and are not part of CI: a real-model run is a manual step with credentials in the environment. Each harness ships model-free self-tests that validate its fixtures and rubric without any model call - run them from the eval directory:
-
-```bash
-cd scripts/evals/swarm_fanout
-uv run --locked ruff check .
-uv run --locked python -m unittest discover -s tests -v
-```
-
-See `scripts/evals/README.md` for the rubric and the real-model run instructions.
+The repository check validates branding, report links, formatting and all Cargo targets. The native integration test uses a scripted model with the public executable and real WasmEdge cells.

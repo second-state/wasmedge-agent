@@ -8,6 +8,7 @@ mod catalog_status_views;
 mod catalog_views;
 mod connection_store;
 
+mod cell_client;
 mod local_catalog;
 mod login;
 mod manager_catalog;
@@ -630,6 +631,7 @@ impl McpManager {
             Ok(number.min(max_limit as u64) as usize)
         }
 
+        cell_client::register(manager, handlers);
         let (auth, acp_servers, usage_refresh, acp_servers_for_config, usage_config, begin_login) = {
             let manager = manager.lock().unwrap();
             (

@@ -11,13 +11,13 @@ original rules remain in git history and apply when contributing upstream.
 
 ## Fork context
 
-- Design authority: `DESIGN.md` (decisions D1–D27) and `REPORT.md`. Consult the
+- Design authority: `DESIGN.md` (decisions D1–D28) and `REPORT.md`. Consult the
   decision log before re-deciding anything.
 - Naming (D25, executed): D25 held the binary, package names, `piConfig.name`,
   env prefixes, and the config dir at upstream identities until M5. That rename
   has landed, so the canonical surface is now `wasmedge-agent`,
   `WASMEDGE_AGENT_*`, and `~/.wasmedge-agent`. The old spellings survive only as
-  the one-release fallbacks the CHANGELOG documents. `npm run check:branding`
+  the one-release fallbacks the CHANGELOG documents. `cargo run -p xtask -- branding`
   fails the build on any literal in its FORBIDDEN list that is not allowlisted
   with a reason; that list is what it knows about and nothing more, so a
   branded spelling it has never seen has to be added to it. Do not reintroduce
@@ -25,7 +25,7 @@ original rules remain in git history and apply when contributing upstream.
 - Upstream sync (SYNC strategy, DESIGN §7.3): the sync source is
   PrimeIntellect-ai/prime-agent. Check `git remote -v` before fetching -- the
   `upstream` remote name is not reserved for it. Our exclusive dirs:
-  `core/rust-cell/`, `poc/`, `docs/`, `DESIGN.md`, `REPORT.md`, root
+  `crates/pa-core/src/tools/rust_cell/`, `poc/`, `docs/`, `DESIGN.md`, `REPORT.md`, root
   `README.md`, this file.
 - The Python/IPython runtime is being removed (WP1); do not add new references
   to `core/kernel/`, `tools/ipython*`, or `prime-agent-runtime/`.
@@ -33,34 +33,21 @@ original rules remain in git history and apply when contributing upstream.
 ## Code Quality
 
 - Read files in full before wide-ranging changes.
-- Comments only where there is real ambiguity; no `any` unless unavoidable.
-- No inline `await import()` / `import()` types — top-level imports only.
-- Never remove or downgrade code to silence type errors from outdated deps.
+- Comment where an invariant or contract needs explanation.
+- Keep existing API contracts unless the change calls for a migration.
 - All keybindings must be configurable; add defaults to the matching object.
-- NEVER modify `packages/ai/src/models.generated.ts` directly; update
-  `packages/ai/scripts/generate-models.ts`.
 
 ## Commands
 
-- After code changes: `npm run check` from the repo root — fix all errors,
-  warnings, and infos before committing. (`check` does not run tests.)
-- Building is allowed and expected: `npm run build` for the full workspace.
-- Native host: `cargo check --workspace --all-targets --locked`. After a full
-  build, `node scripts/test-native-cells.mjs` drives the public launcher with
-  an offline provider and real WasmEdge guests.
-- Do not leave `npm run dev` watchers running after a task.
-- Run package tests from the package root, e.g.
-  `npx tsx ../../node_modules/vitest/dist/cli.js --run test/foo.test.ts`.
-- If you create or modify a test file, run it and iterate until it passes.
-- For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` with the
-  faux provider — no real provider APIs or paid tokens in tests.
-- Rust (guest crates, fixtures): always `cargo build --release`; keep
-  `[profile.dev.package."*"] debug = false` in workspace manifests.
+- Run `cargo run --locked -p xtask -- check` for branding, report links, formatting and all-target compilation. The private `npm run check` shortcut calls that same Cargo command.
+- Build with `cargo build --release --locked --bin wasmedge-agent`.
+- Run `cargo test --release --locked --workspace --lib` and relevant integration tests. Use the scripted provider for CLI tests. With WasmEdge and the prepared WASI template installed, run `cargo test --release --locked -p pa-cli --test native_cells -- --ignored`.
+- Build guest crates and fixtures with `cargo build --release`; keep `[profile.dev.package."*"] debug = false` in workspace manifests.
 
 ## Git
 
 - Feature work on branches (`runtime/…`, `bench/…`); merge to `main` when
-  `npm run check` and the relevant tests are green.
+  the repository check and the relevant tests are green.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`); one concern per
   commit; no Assisted-by/Co-Authored-By trailers.
 - Never `git add -A` in shared worktrees; stage explicit paths.

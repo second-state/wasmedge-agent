@@ -19,159 +19,23 @@ permissions:
   contents: read
 
 jobs:
-  build-check:
-    name: Build and check
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install system dependencies
-        run: |
-          # These dependencies come from Ubuntu, not the runner's third-party repositories.
-          test -f /etc/apt/sources.list.d/ubuntu.sources
-          apt_sources=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
-          sudo apt-get "${apt_sources[@]}" update
-          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Share the Linux host with the benchmark tests
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ci-linux-host
-          path: packages/coding-agent/dist/native/linux-x64/wasmedge-agent
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Check
-        run: npm run check
-
-  test:
-    needs: build-check
-    name: Test (${{ matrix.name }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: agent-core
-            package: packages/agent
-            command: npm test
-          - name: ai
-            package: packages/ai
-            command: npm test
-          - name: tui
-            package: packages/tui
-            command: npm test
-          - name: coding-agent 1/3
-            package: packages/coding-agent
-            command: npm run test:ci -- --shard=1/3
-          - name: coding-agent 2/3
-            package: packages/coding-agent
-            command: npm run test:ci -- --shard=2/3
-          - name: coding-agent 3/3
-            package: packages/coding-agent
-            command: npm run test:ci -- --shard=3/3
-          - name: coding-agent process smoke
-            package: packages/coding-agent
-            command: npm run test:process
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install system dependencies
-        run: |
-          # These dependencies come from Ubuntu, not the runner's third-party repositories.
-          test -f /etc/apt/sources.list.d/ubuntu.sources
-          apt_sources=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
-          sudo apt-get "${apt_sources[@]}" update
-          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build:tools
-
-      - name: Install the compiled host for coding-agent tests
-        if: startsWith(matrix.name, 'coding-agent')
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ci-linux-host
-          path: packages/coding-agent/dist/native/linux-x64
-
-      - name: Restore the executable mode
-        if: startsWith(matrix.name, 'coding-agent')
-        run: chmod +x packages/coding-agent/dist/native/linux-x64/wasmedge-agent
-
-      - name: Test
-        working-directory: ${{ matrix.package }}
-        run: ${{ matrix.command }}
-
-  # DESIGN.md section 9 integration layer: the toolchain-gated cell tests
-  # (which skip without cargo + wasm32-wasip1 + wasmedge) run for real here,
-  # on both platforms, plus the guest crate's native tests.
-  test-rust-cell:
-    name: Cell runtime (${{ matrix.os }}, ${{ matrix.shard }})
+  native:
+    name: Native runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Ubuntu 26.04 rejects the isolated loopback setup in Bubblewrap.
-          - os: ubuntu-24.04
-            shard: 1/2
-          - os: ubuntu-24.04
-            shard: 2/2
-          - os: macos-latest
-            shard: 1/4
-          - os: macos-latest
-            shard: 2/4
-          - os: macos-latest
-            shard: 3/4
-          - os: macos-latest
-            shard: 4/4
+        os: [ubuntu-24.04, macos-latest]
     env:
       WASMEDGE_AGENT_WASMEDGE: ${{ github.workspace }}/.wasmedge/bin/wasmedge
+      WASMEDGE_AGENT_TEMPLATE_DIR: ${{ github.workspace }}/wasmedge-agent-runtime/template
+      GIT_CONFIG_GLOBAL: /dev/null
+      CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          node-version: 22
-          cache: npm
-
+          persist-credentials: false
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -179,8 +43,8 @@ jobs:
           test -f /etc/apt/sources.list.d/ubuntu.sources
           apt_sources=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
           sudo apt-get "${apt_sources[@]}" update
-          sudo apt-get "${apt_sources[@]}" install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep bubblewrap dbus-user-session
-          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+          sudo apt-get "${apt_sources[@]}" install -y fd-find ripgrep bubblewrap dbus-user-session
+          sudo ln -sf "$(which fdfind)" /usr/local/bin/fd
 
       - name: Allow Bubblewrap user namespaces (Linux)
         if: runner.os == 'Linux'
@@ -213,7 +77,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install pkg-config cairo pango libpng jpeg giflib librsvg ripgrep fd
+        run: brew install ripgrep fd
 
       - name: Install the wasm32-wasip1 target
         run: |
@@ -254,43 +118,90 @@ jobs:
           HOST_TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
           cargo test --release --target "$HOST_TRIPLE"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Check the workspace
+        run: cargo run --locked -p xtask -- check
 
-      - name: Build
-        run: npm run build:tools
-
-      - name: Build and exercise the native agent host
-        if: startsWith(matrix.shard, '1/')
+      - name: Native libraries and public SDK
         run: |
-          cargo fmt --all --check
-          cargo check --workspace --all-targets --locked
-          npm run build:native
-          node scripts/test-native-cells.mjs
+          cargo test --release --locked --workspace --lib
+          cargo test --release --locked --doc -p wasmedge-agent-sdk
+          cargo test --release --locked -p pa-cli --test installer_platform_map --test installer_update_e2e --test release_workflow
+          cargo test --release --locked -p pa-core --test release_channel_manifest
 
-      - name: Test the native Rust workspace libraries
-        if: runner.os == 'Linux' && startsWith(matrix.shard, '1/')
-        env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          WASMEDGE_AGENT_TEMPLATE_DIR: ${{ github.workspace }}/wasmedge-agent-runtime/template
-        run: cargo test --release --locked --workspace --lib
+      - name: Run real WasmEdge cells without Node
+        run: |
+          cargo build --release --locked --bin wasmedge-agent
+          cargo test --release --locked -p pa-cli --test native_cells --no-run
+          WASMEDGE_AGENT_CARGO=$(command -v cargo)
+          export WASMEDGE_AGENT_CARGO
+          mkdir "$RUNNER_TEMP/native-tools"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          dest = Path(os.environ["RUNNER_TEMP"]) / "native-tools"
+          for directory in os.get_exec_path():
+              for binary in Path(directory).glob("*"):
+                  if binary.name in {"node", "nodejs", "npm", "npx", "bun", "corepack", "pnpm", "yarn"}:
+                      continue
+                  link = dest / binary.name
+                  if binary.is_file() and os.access(binary, os.X_OK) and not link.exists():
+                      link.symlink_to(binary.resolve() if not binary.is_symlink() else binary.absolute())
+          PY
+          export PATH="$RUNNER_TEMP/native-tools"
+          if command -v node || command -v npm; then exit 1; fi
+          cargo test --release --locked -p pa-cli --test native_cells -- --ignored
 
-      - name: Cell tests (integration + suite)
-        working-directory: packages/coding-agent
-        run: npm run test:rust-cell -- --shard=${{ matrix.shard }}
+      - name: Verify native release archives
+        run: |
+          platform=linux-x64
+          if [ "$RUNNER_OS" = macOS ]; then platform=darwin-arm64; fi
+          mkdir -p "target/release-hosts/$platform"
+          cp target/release/wasmedge-agent "target/release-hosts/$platform/"
+          cargo run --release --locked -p xtask -- pack --base-url https://github.com/second-state/wasmedge-agent/releases --platform "$platform"
+          cd target/dist/artifacts
+          shasum -a 256 -c SHA256SUMS
+          set -- "$PWD"/*-"$platform".tar.gz
+          WASMEDGE_AGENT_RUST_PREFIX="$RUNNER_TEMP/native-install" WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL=0 sh install.sh --archive "$1"
+          "$RUNNER_TEMP/native-install/bin/wasmedge-agent" --version
+
+  windows-package:
+    name: Windows native package
+    runs-on: windows-2022
+    timeout-minutes: 75
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: 0
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build the Windows executable and SDK
+        shell: bash
+        run: |
+          cargo build --release --locked --bin wasmedge-agent
+          cargo test --release --locked -p wasmedge-agent-sdk
+          mkdir -p target/release-hosts/win32-x64
+          cp target/release/wasmedge-agent.exe target/release-hosts/win32-x64/
+      - name: Package and install through Git Bash
+        shell: bash
+        run: |
+          (cd wasmedge-agent-runtime/template && cargo vendor --locked vendor)
+          cargo run --release --locked -p xtask -- pack --platform win32-x64 --base-url https://github.com/second-state/wasmedge-agent/releases
+          cd target/dist/artifacts
+          sha256sum -c SHA256SUMS
+          set -- "$PWD"/*-win32-x64.tar.gz
+          WASMEDGE_AGENT_RUST_PREFIX="$RUNNER_TEMP/native-install" WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL=0 sh install.sh --archive "$1"
+      - name: Run the installed Windows launcher
+        shell: pwsh
+        run: '& "$env:RUNNER_TEMP/native-install/bin/wasmedge-agent.cmd" --version'
 
   build-check-test:
     name: build-check-test
     if: always()
-    needs: [build-check, test, test-rust-cell]
+    needs: [native, windows-package]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify CI results
+      - name: Verify native checks
         env:
-          BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-          RUST_CELL_RESULT: ${{ needs.test-rust-cell.result }}
-        run: |
-          test "$BUILD_CHECK_RESULT" = success
-          test "$TEST_RESULT" = success
-          test "$RUST_CELL_RESULT" = success
+          NATIVE_RESULT: ${{ needs.native.result }}
+          WINDOWS_RESULT: ${{ needs.windows-package.result }}
+        run: test "$NATIVE_RESULT" = success && test "$WINDOWS_RESULT" = success

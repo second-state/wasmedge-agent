@@ -14,7 +14,7 @@
 
 Rust 的 `cell.execution` 不含 Cargo、workspace 初始化、readonly probe、import admission 檢查、snapshot 與 bridge cleanup。它包含 process 啟動、module 載入與 VM 初始化、guest、stdout/stdio bridge、process 結束。Python 的啟動另列，不會每 cell 重做。因此這張圖量到的是產品實際每次 cell 的成本，不是只量兩種語言的程式本體。
 
-來源：[Rust execution boundary](../../packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](../../packages/coding-agent/src/core/rust-cell/process.ts)、[固定 revision 的 Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts)、[固定 revision 的 Python Rust host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs)。
+來源：[Rust execution boundary](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/packages/coding-agent/src/core/rust-cell/cell-runner.ts#L287)、[process spawn/close](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/packages/coding-agent/src/core/rust-cell/process.ts)、[固定 revision 的 Python TS kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/7d442aafa985f9342134fac16c2ef41f03fb45c1/packages/coding-agent/src/core/kernel/repl-manager.ts)、[固定 revision 的 Python Rust host kernel](https://github.com/PrimeIntellect-ai/prime-agent/blob/967eb13fd488507af5f590e9c6ea8b2672f1fc05/crates/pa-core/src/kernel/manager/requests.rs)。
 
 ## 2. 每 cell 固定成本：接近空程式仍需約 10 ms
 

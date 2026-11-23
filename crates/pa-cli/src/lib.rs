@@ -65,6 +65,7 @@ pub mod print_runtime;
 pub(crate) mod print_session_command;
 pub mod update_flow;
 pub mod util_time;
+pub use config::migrate_legacy_launch;
 pub use print_runtime::PrintRuntime;
 
 /// Daemon wiring shared by the interactive runtime and the integration
@@ -102,11 +103,26 @@ fn main_impl(args: &[String], runtime: &dyn mode::Runtime) -> Result<i32, String
         std::env::set_var(crate::config::ENV_OFFLINE, "1");
     }
 
-    // Install-time kernel preparation: the installer invokes `--wasmedge-agent-bootstrap`
-    // after extracting a release, so the venv is ready before the first session.
-    if args.len() == 1 && args[0] == "--wasmedge-agent-bootstrap" {
+    // Warm the installed WASI guest template before the first session.
+    if args.len() == 1
+        && matches!(
+            args[0].as_str(),
+            "--wasmedge-agent-bootstrap" | "--wasmedge-agent-runtime-check"
+        )
+    {
         crate::config::require_agent_dir()?;
-        return run_tool_helper("--bootstrap", &[]);
+        return cell_maintenance(async {
+            let report =
+                pa_core::cell_maintenance::doctor(args[0] == "--wasmedge-agent-bootstrap").await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(i32::from(
+                report["runtime"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|c| c["ok"] != true),
+            ))
+        });
     }
 
     // Public command routing: help requests, removed commands, management
@@ -329,16 +345,15 @@ fn main_impl(args: &[String], runtime: &dyn mode::Runtime) -> Result<i32, String
     }
 }
 
-/// Execute a fork maintenance operation using the installed tool support package.
-fn run_tool_helper(mode: &str, args: &[String]) -> Result<i32, String> {
-    let path = pa_core::tool_worker_path().map_err(|e| e.to_string())?;
-    std::process::Command::new("node")
-        .arg(path)
-        .arg(mode)
-        .args(args)
-        .status()
-        .map(|s| s.code().unwrap_or(1))
-        .map_err(|e| format!("starting WasmEdge tool support: {e}"))
+fn cell_maintenance<T>(
+    work: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> Result<T, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(work)
+        .map_err(|e| e.to_string())
 }
 
 /// Run the daemon session-worker runtime (the process the supervisor spawns

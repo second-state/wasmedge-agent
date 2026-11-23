@@ -10,7 +10,7 @@
   RLM-native terminal coding and research harness.
 </p>
 
-WasmEdge Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `wasmedge-agent`. Do not use the inherited npm package as the WasmEdge Agent install path.
+The Rust workspace builds the CLI, session worker and SDK. Install a native platform archive or use the [Rust SDK](docs/sdk.md) from a versioned source release.
 
 ## Table of Contents
 
@@ -66,11 +66,7 @@ The cell runtime needs `cargo` with the `wasm32-wasip1` target and a `wasmedge` 
 
 For each built-in provider, WasmEdge Agent maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
-The model and MCP service catalogs ship with each release: they are committed under `catalog/` (`models.bundled.json`, `mcp-services.bundled.json`) and copied into `dist/` at build time. Nothing is fetched at runtime; only Prime Inference queries its own API for live models when you are signed in. To refresh the bundled snapshots from a local catalog checkout (`models/catalog.v1.json`, `plugins/catalog.v2.json`):
-
-```bash
-npm run catalog:assets -- --catalog-dir /path/to/catalog
-```
+The model and MCP service catalogs ship in the release's `catalog/` directory. Their committed sources are `catalog/models.bundled.json` and `catalog/mcp-services.bundled.json` at the repository root. Refresh both from a catalog checkout with `cargo run --locked -p xtask -- catalog /path/to/catalog`.
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max
@@ -263,7 +259,7 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 An official release records the host it was published to (`<base>`), and the update check asks that host: stable builds fetch `<base>/latest/download/latest.json`, and beta builds fetch `<base>/download/beta/beta.json` and remain on the beta channel. Set `WASMEDGE_AGENT_DOWNLOAD_BASE_URL` to ask a different one -- it must serve both paths, plus `<base>/download/v<version>/<file>` for every file a manifest names.
 
-A build that was not packed for release -- a source checkout, or your own `npm run build` -- records no host. It makes no request at all, and `wasmedge-agent update` says so rather than guessing. There is deliberately no compiled-in default: the only value that could sit there is upstream's release bucket, which would offer upstream's build as an update to this one.
+The installer records the installed release channel and supports `wasmedge-agent update --check` and `wasmedge-agent update --rollback`.
 
 Disable version checks outright with `PI_SKIP_VERSION_CHECK=1`.
 
@@ -442,29 +438,13 @@ See [docs/packages.md](docs/packages.md).
 
 ## Programmatic Usage
 
-### SDK
+### Rust SDK
 
-```typescript
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "wasmedge-agent";
-
-const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  authStorage,
-  modelRegistry,
-});
-
-await session.prompt("What files are in the current directory?");
-```
-
-For advanced multi-session runtime replacement, use `createAgentSessionRuntime()` and `AgentSessionRuntime`.
-
-See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
+Use the `wasmedge-agent-sdk` crate to embed the same session engine as the CLI. Construct a `SessionEngineConfig`, call `create_session`, and send prompts with `SessionEngine::prompt`. The [SDK guide](docs/sdk.md) includes a Cargo dependency and a complete session lifecycle.
 
 ### RPC Mode
 
-For non-Node.js integrations, use RPC mode over stdin/stdout:
+Clients in any language can use RPC mode over stdin/stdout.
 
 ```bash
 wasmedge-agent --mode rpc

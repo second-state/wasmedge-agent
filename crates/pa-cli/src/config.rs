@@ -46,7 +46,7 @@ pub const ENV_LEGACY_SESSION_DIR: &str = "WASMEDGE_AGENT_CODING_AGENT_SESSION_DI
 /// overrides it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The product version: the packaged `package.json` manifest next to the
+/// The product version: the release manifest next to the
 /// executable wins, falling back to the compiled-in version.
 pub fn version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -73,7 +73,10 @@ fn package_dir() -> PathBuf {
 }
 
 pub(crate) fn packaged_manifest_version() -> Option<String> {
-    let manifest = std::fs::read_to_string(package_dir().join("package.json")).ok()?;
+    let package = package_dir();
+    let manifest = std::fs::read_to_string(package.join("version.json"))
+        .or_else(|_| std::fs::read_to_string(package.join("package.json")))
+        .ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&manifest).ok()?;
     let version = parsed.get("version")?.as_str()?.trim();
     (!version.is_empty()).then(|| version.to_string())
@@ -100,6 +103,67 @@ pub fn expand_tilde_path(path: &str) -> PathBuf {
         return home.join(rest);
     }
     PathBuf::from(path)
+}
+
+/// Apply the documented one-release aliases before any threads or settings readers start.
+pub fn migrate_legacy_launch() {
+    for suffix in [
+        "CODING_AGENT_DIR",
+        "SESSION_DIR",
+        "CODING_AGENT_SESSION_DIR",
+        "DOWNLOAD_BASE_URL",
+        "RELEASE_CHANNEL",
+        "PACKAGE",
+        "CMD",
+        "INSTALLER_PLAIN",
+        "SHELL_PROFILE",
+        "VERSION",
+        "BOOTSTRAP_TOOLS_ON_INSTALL",
+        "TRACES_API_KEY",
+        "TRACES_BASE_URL",
+        "WEBSEARCH_NUM_RESULTS",
+        "WEBSEARCH_TIMEOUT",
+    ] {
+        let name = format!("WASMEDGE_AGENT_{suffix}");
+        let legacy = format!("PRIME_AGENT_{suffix}");
+        if std::env::var_os(&name).is_none() {
+            if let Some(value) = std::env::var_os(&legacy) {
+                std::env::set_var(&name, value);
+                eprintln!("{legacy} is deprecated; use {name}.");
+            }
+        }
+    }
+    if std::env::args_os()
+        .next()
+        .and_then(|s| PathBuf::from(s).file_stem().map(|s| s.to_owned()))
+        .is_some_and(|s| s == "prime-agent")
+    {
+        eprintln!("prime-agent is deprecated; use wasmedge-agent.");
+    }
+    let Some(home) = pa_types::platform::home_dir() else {
+        return;
+    };
+    let legacy = home.join(".prime").join("agent");
+    if legacy.is_dir() {
+        let destination = get_agent_dir();
+        if destination == legacy {
+            return;
+        }
+        if destination.exists() {
+            eprintln!(
+                "Both {} and {} exist. Using {}.",
+                legacy.display(),
+                destination.display(),
+                destination.display()
+            );
+        } else if let Err(error) = std::fs::rename(&legacy, &destination) {
+            eprintln!(
+                "Could not migrate {} to {}: {error}",
+                legacy.display(),
+                destination.display()
+            );
+        }
+    }
 }
 
 pub fn get_agent_dir() -> PathBuf {

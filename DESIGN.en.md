@@ -10,7 +10,7 @@ Each cell is a complete program. It does not preserve arbitrary objects across c
 
 Interpreter is the default. Optional AOT inspects imports, removes guest custom sections, compiles on the host, verifies the output, and records provenance. AOT has no cache. Gas, memory-page, read-only-project, compiler-sandbox, and process-tree settings have distinct scopes. See the runtime reference for exact defaults and platform support.
 
-## Decisions D1–D26
+## Decisions D1–D28
 
 Decisions describe intent. Historical plans are not proof of implementation. Later notes and the runtime reference determine what has shipped.
 
@@ -42,6 +42,8 @@ Decisions describe intent. Historical plans are not proof of implementation. Lat
 | D24 | Use an independent repository with attribution rather than GitHub's fork mechanism. |
 | D25 | Retain upstream names during incubation; rebrand at M5. The canonical name is now `wasmedge-agent`, with `WASMEDGE_AGENT_*` and `~/.wasmedge-agent`. Only documented temporary fallbacks remain. |
 | D26 | Make the repository public during M2 to use public GitHub Actions. This supersedes private incubation. |
+| D27 | Synchronize the CLI, daemon and session engine with the upstream Rust workspace at `798d9703`. |
+| D28 | Run Cargo, WasmEdge and the host shell in the Rust session worker. Ship the embedding SDK and platform releases through Cargo, preserve the on-disk session format and pin the historical benchmark host. |
 
 ## Work packages and roadmap
 

@@ -30,12 +30,12 @@ partway.
   success, or if it cannot find one. It runs no tests of its own.
 - **`## [Unreleased]` cut to a version heading, for a production dispatch.**
   Before dispatching production, edit
-  `packages/coding-agent/CHANGELOG.md` so the entry you are shipping reads
+  `CHANGELOG.md` so the entry you are shipping reads
   `## [X.Y.Z] - <date>` instead of `## [Unreleased]`. The workflow extracts
   that section as the GitHub release's notes; if it finds no matching
   heading, the notes fall back to a bare `Release vX.Y.Z` line.
-- **`package.json`'s version, for a beta dispatch.** A beta build tags itself
-  `v<package.json version>-beta.<run number>.<commit>`. Make sure that
+- **The workspace version in `Cargo.toml`, for a beta dispatch.** A beta build tags itself
+  `v<workspace version>-beta.<run number>.<commit>`. Make sure that
   version is the one you mean to ship as beta before you dispatch.
 
 ## What a run publishes
@@ -53,15 +53,10 @@ Two URL shapes carry every published object:
 A production dispatch publishes one version release, tagged `v<version>`, and
 marks it `latest` if its version is newer than (or equal to, on a re-run) the
 version currently marked latest -- by semantic version, not by publish date.
-That release carries nine assets: the four packed tarballs (`wasmedge-agent`
-and its three internal dependencies), `SHA256SUMS`, `release.json`, the
-`stable` version-pointer file, `install.sh` rendered for the stable channel,
-and `latest.json` (a copy of `release.json`).
+It contains five native CLI archives (Linux and macOS on x64 and arm64, Windows on x64), `wasmedge-agent-sdk-<version>.tar.gz`, `SHA256SUMS`, `release.json`, the `stable` pointer, the rendered `install.sh` and `latest.json`. The Rust packager writes each archive digest into the manifest.
 
 A beta dispatch publishes two releases. The version release, tagged
-`v<beta-version>` and marked prerelease, carries seven assets: the four packed
-tarballs, `SHA256SUMS`, `release.json`, and the `beta` version-pointer file,
-all built for that beta build. The `beta` channel release has its tag
+`v<beta-version>` and marked prerelease, carries the five CLI archives, SDK source, checksums, manifest, installer and beta pointer for that version. The `beta` channel release has its tag
 force-moved onto the commit just built, and its three assets -- `beta.json`,
 the `beta` version-pointer file, and `install.sh` rendered for the beta channel
 -- are re-uploaded with `--clobber`. Only the channel release update requires
