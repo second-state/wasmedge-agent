@@ -227,10 +227,9 @@ pub async fn run_installer_from(
     let result = execute_script(&handle, &[], prefix, channel, output).await;
     let _ = std::fs::remove_file(&script);
     result?;
-    let version = match installed_version(prefix) {
-        Some(version) => Some(version),
-        None => launcher_version(prefix).await,
-    };
+    let version = launcher_version(prefix)
+        .await
+        .or_else(|| installed_version(prefix));
     Ok(Installed { version })
 }
 
@@ -773,7 +772,7 @@ async fn launcher_version(prefix: &Path) -> Option<String> {
         };
         let first = String::from_utf8_lossy(&output.stdout);
         let version = first.lines().next().map(str::trim).unwrap_or_default();
-        if running_commit(version).is_some() {
+        if output.status.success() && running_commit(version).is_some() {
             return Some(version.to_string());
         }
     }
