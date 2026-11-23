@@ -269,7 +269,15 @@ impl Guest<'_> {
         }
         cmd.arg(module);
         let phase = Instant::now();
-        let output = bridge::run(self.resources.wrap(cmd)?, self, id, code, &token, updates).await;
+        let output = crate::mcp::with_cell_connections(bridge::run(
+            self.resources.wrap(cmd)?,
+            self,
+            id,
+            code,
+            &token,
+            updates,
+        ))
+        .await;
         timings.execution_ms = elapsed(phase);
         Ok((output?, fallback))
     }

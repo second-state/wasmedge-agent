@@ -1,6 +1,4 @@
-//! Host side of MCP integrations. The protocol itself runs Python-side in the
-//! kernel; the host only gates integration skills by auth and serves `mcp.*`
-//! host requests (the OAuth flow lives in the `oauth*` submodules).
+//! Host-side MCP discovery, authentication and streamable HTTP for WASI cells.
 
 mod catalog_plugin_views;
 mod catalog_schema;
@@ -9,6 +7,7 @@ mod catalog_views;
 mod connection_store;
 
 mod cell_client;
+pub(crate) use cell_client::with_cell_connections;
 mod local_catalog;
 mod login;
 mod manager_catalog;
@@ -1025,6 +1024,10 @@ fn is_generic_server_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "../../tests/common/mod.rs"]
+mod test_http;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1062,6 +1065,70 @@ mod tests {
             callback_port: None,
             client_secret: None,
             scopes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cell_mcp_reuses_the_negotiated_session_until_the_cell_exits() {
+        use crate::kernel::shared::HostRequestPayload;
+        use test_http::{ok_json, status, MockServer};
+
+        fn reply(content_type: &str, session: &str, body: &str) -> Vec<u8> {
+            format!("HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\nmcp-session-id: {session}\r\ncontent-length: {}\r\n\r\n{body}", body.len()).into_bytes()
+        }
+        let initialize = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}"#;
+        let list = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"counter"}]}}"#;
+        let events = concat!(": keep-alive\r\n\r\n", "data: {\"method\":\"notifications/progress\"}\r\n\r\n",
+            "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\r\ndata: \"result\":{\"counter\":1}}\r\n\r\n");
+        let server = MockServer::start(vec![
+            reply("application/json", "first", initialize),
+            status(202, "Accepted"),
+            ok_json(list, None),
+            reply("text/event-stream", "first", events),
+            reply("application/json", "second", initialize),
+            status(202, "Accepted"),
+            ok_json(list, None),
+        ])
+        .await;
+        let manager = Arc::new(std::sync::Mutex::new(manager_with(Some(HashMap::from([
+            (
+                "fixture".into(),
+                http_config(&server.url("/mcp"), None, None),
+            ),
+        ])))));
+        let mut handlers = HostRequestHandlers::new();
+        McpManager::register_host_handlers(&manager, &mut handlers);
+        let list_tools = || {
+            handlers.get("mcp.list_tools").unwrap()(HostRequestPayload {
+                data: json!({"server":"fixture"}),
+            })
+        };
+        with_cell_connections(async {
+            assert_eq!(list_tools().await.unwrap()["tools"][0]["name"], "counter");
+            let called = handlers.get("mcp.call_tool").unwrap()(HostRequestPayload {
+                data: json!({"server":"fixture","tool":"counter","arguments":{}}),
+            })
+            .await
+            .unwrap();
+            assert_eq!(called["counter"], 1);
+        })
+        .await;
+        with_cell_connections(list_tools()).await.unwrap();
+        let requests = server.recorded_requests();
+        assert_eq!(requests.len(), 7);
+        for i in [0, 4] {
+            assert!(!requests[i].to_ascii_lowercase().contains("mcp-session-id:"));
+        }
+        for (i, session) in [
+            (1, "first"),
+            (2, "first"),
+            (3, "first"),
+            (5, "second"),
+            (6, "second"),
+        ] {
+            let headers = requests[i].to_ascii_lowercase();
+            assert!(headers.contains(&format!("mcp-session-id: {session}")));
+            assert!(headers.contains("mcp-protocol-version: 2025-03-26"));
         }
     }
 
