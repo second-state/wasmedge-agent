@@ -62,20 +62,10 @@ if [[ "$NO_ENV" == "true" ]]; then
   echo "Running WasmEdge Agent without API keys..."
 fi
 
-# --dist runs the bundled build (what users get; ~3x faster startup than tsx).
-if [[ "$USE_DIST" == "true" ]]; then
-  BUNDLE="$SCRIPT_DIR/packages/coding-agent/dist/bundle/cli.js"
-  if [[ ! -f "$BUNDLE" ]]; then
-    echo "Bundle not found at $BUNDLE. Run npm run build first." >&2
-    exit 1
-  fi
-  exec node "$BUNDLE" ${ARGS[@]+"${ARGS[@]}"}
+if [[ ! -f "$SCRIPT_DIR/packages/coding-agent/dist/native-tool-worker.js" ]]; then
+  npm --prefix "$SCRIPT_DIR" run build:tools
 fi
-
-TSX_BIN="$SCRIPT_DIR/node_modules/.bin/tsx"
-if [[ ! -x "$TSX_BIN" ]]; then
-  echo "tsx not found at $TSX_BIN. Run npm install from the repo root first." >&2
-  exit 1
+if [[ "$USE_DIST" == true ]]; then
+  exec node "$SCRIPT_DIR/packages/coding-agent/dist/native-launch.js" ${ARGS[@]+"${ARGS[@]}"}
 fi
-
-"$TSX_BIN" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}
+exec cargo run --quiet --locked --release --manifest-path "$SCRIPT_DIR/Cargo.toml" --bin wasmedge-agent -- ${ARGS[@]+"${ARGS[@]}"}

@@ -1,0 +1,587 @@
+//! Public streaming facade.
+
+use std::sync::Arc;
+
+use crate::event_stream::AssistantMessageEventStream;
+use crate::providers::simple_options::default_request_max_tokens;
+use crate::registry::{ensure_builtins, get_api_provider};
+use crate::types::{AssistantMessage, Context, Model, SimpleStreamOptions, StreamOptions};
+use crate::utils_inner::ProviderError;
+
+fn resolve_provider(api: &str) -> Result<Arc<dyn crate::registry::Provider>, ProviderError> {
+    ensure_builtins();
+    get_api_provider(api)
+        .ok_or_else(|| ProviderError::Message(format!("No API provider registered for api: {api}")))
+}
+
+/// Estimate a request's input tokens before it is sent: chars/4 over the text the provider will
+/// serialize, images at 1,200 tokens each (the session engine's compaction policy, restated:
+/// `pa-core` cannot be a dependency here).
+fn estimated_input_tokens(context: &Context) -> u64 {
+    const TOOL_ENVELOPE_CHARS: u64 = 48;
+    let mut chars = context
+        .system_prompt
+        .as_deref()
+        .map_or(0, |text| text.chars().count()) as u64;
+    // Tool definitions serialize into every request, so they claim input room like the tool-call
+    // arguments below. Providers wrap each schema in their own envelope on the wire, so every tool
+    // also counts the widest envelope's chars.
+    for tool in context.tools.iter().flatten() {
+        chars = chars.saturating_add(
+            serde_json::to_string(tool)
+                .map_or(0, |json| TOOL_ENVELOPE_CHARS + json.chars().count() as u64),
+        );
+    }
+    for message in &context.messages {
+        chars = chars.saturating_add(match message {
+            crate::types::Message::User(user) => match &user.content {
+                crate::types::UserMessageContent::Text(text) => text.chars().count() as u64,
+                crate::types::UserMessageContent::Blocks(blocks) => {
+                    user_content_block_chars(blocks)
+                }
+            },
+            crate::types::Message::Assistant(assistant) => assistant
+                .content
+                .iter()
+                .map(|block| match block {
+                    crate::types::AssistantContent::Text(text) => text.text.chars().count() as u64,
+                    crate::types::AssistantContent::Thinking(thinking) => {
+                        thinking.thinking.chars().count() as u64
+                    }
+                    crate::types::AssistantContent::ToolCall(call) => {
+                        call.name.chars().count() as u64
+                            + serde_json::to_string(&call.arguments)
+                                .map_or(0, |json| json.chars().count() as u64)
+                    }
+                })
+                .sum(),
+            crate::types::Message::ToolResult(result) => user_content_block_chars(&result.content),
+        });
+    }
+    chars.div_ceil(4)
+}
+
+/// Text chars plus 4,800 per image (1,200 tokens) — the session engine's
+/// per-image estimate; raw blocks count their serialized JSON (`user_block_payload`
+/// passes un-modeled blocks through as text, so their bytes reach the prompt).
+fn user_content_block_chars(blocks: &[crate::types::UserOrToolContent]) -> u64 {
+    blocks
+        .iter()
+        .map(|block| match block {
+            crate::types::UserOrToolContent::Text(text) => text.text.chars().count() as u64,
+            crate::types::UserOrToolContent::Image(_) => 4_800,
+            crate::types::UserOrToolContent::Video(_) => pa_types::ai::VIDEO_ESTIMATED_TOKENS * 4,
+            crate::types::UserOrToolContent::Raw(value) => {
+                serde_json::to_string(value).map_or(0, |json| json.chars().count() as u64)
+            }
+        })
+        .sum()
+}
+
+/// Clamp the requested output budget against the model's combined input+output ceiling: a provider
+/// enforcing `input + max_tokens <= contextWindow` rejects an unsatisfiable request outright, so
+/// the facade shrinks the output budget to whatever room the estimated input leaves.
+///
+/// The TS facade never clamps; this is a deliberate Rust-side guard. Budget-folding thinking
+/// providers (Anthropic, Bedrock) add their budget after this clamp and cap it at
+/// `model.max_tokens`.
+fn clamp_output_budget(model: &Model, context: &Context, options: Option<&mut StreamOptions>) {
+    let Some(options) = options else {
+        return;
+    };
+    if model.context_window == 0 {
+        return; // combined ceiling unknown — leave the request alone
+    }
+    let requested = options
+        .max_tokens
+        .or_else(|| default_request_max_tokens(model));
+    let Some(requested) = requested else {
+        return; // no default budget to clamp
+    };
+    let available = model
+        .context_window
+        .saturating_sub(estimated_input_tokens(context));
+    // Zero room means the input alone fills the window — no budget can save the request, so it
+    // stays as sent for the overflow recovery arm.
+    if requested > available && available > 0 {
+        options.max_tokens = Some(available);
+    }
+}
+
+/// The session-identity header a session-scoped request declares to its inference endpoint.
+///
+/// The `OTel GenAI` semantics put conversation identity in the client's hands: the client declares
+/// its real session id, and the gateway aggregates one session's calls into one trace instead of
+/// fabricating a fallback id per request. The Prime Inference gateway keys its trace aggregation on
+/// this header.
+const SESSION_ID_HEADER: &str = "X-PI-Session-Id";
+
+/// Declare the request's session identity on its caller headers. No session id means no header (a
+/// session-less one-off probe stays bare rather than carrying a fabricated id); an explicit caller
+/// value wins, like every caller header does over the provider's own.
+fn declare_session_identity(options: Option<&mut StreamOptions>) {
+    let Some(options) = options else {
+        return;
+    };
+    let Some(session_id) = options.session_id.clone() else {
+        return;
+    };
+    let headers = options
+        .headers
+        .get_or_insert_with(std::collections::HashMap::new);
+    // Providers dedupe header names case-insensitively, so a caller entry in any casing is the
+    // same header as the injected one: its value always wins instead of racing the injected
+    // entry in the provider's header merging.
+    if headers
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case(SESSION_ID_HEADER))
+    {
+        return;
+    }
+    headers.insert(SESSION_ID_HEADER.to_string(), session_id);
+}
+
+/// Start streaming a completion for `model` using provider-native options.
+///
+/// # Errors
+///
+/// Returns `Err` when no API provider is registered for `model.api`.
+pub fn stream(
+    model: &Model,
+    context: &Context,
+    options: Option<StreamOptions>,
+) -> Result<AssistantMessageEventStream, ProviderError> {
+    let provider = resolve_provider(&model.api)?;
+    let mut options = options;
+    clamp_output_budget(model, context, options.as_mut());
+    declare_session_identity(options.as_mut());
+    Ok(provider.stream(model, context, options.as_ref()))
+}
+
+/// Await the final assistant message of a provider-native stream.
+///
+/// # Errors
+///
+/// Returns `Err` when no API provider is registered for `model.api`.
+pub async fn complete(
+    model: &Model,
+    context: &Context,
+    options: Option<StreamOptions>,
+) -> Result<AssistantMessage, ProviderError> {
+    let stream = stream(model, context, options)?;
+    Ok(stream.result().await)
+}
+
+/// Start a streaming completion with unified reasoning options (`streamSimple`).
+///
+/// # Errors
+///
+/// Returns `Err` when no API provider is registered for `model.api`.
+pub fn stream_simple(
+    model: &Model,
+    context: &Context,
+    options: Option<SimpleStreamOptions>,
+) -> Result<AssistantMessageEventStream, ProviderError> {
+    let provider = resolve_provider(&model.api)?;
+    let mut options = options;
+    // A `None` caller still gets the default output budget downstream
+    // (`build_base_options` fills the per-model default: an explicit
+    // `maxTokens` unchanged, a catalog value `min(model.maxTokens, 32000)`),
+    // so materialize the options to clamp that default too. The
+    // materialized default builds the same request otherwise.
+    let simple = options.get_or_insert_with(SimpleStreamOptions::default);
+    clamp_output_budget(model, context, Some(&mut simple.base));
+    declare_session_identity(Some(&mut simple.base));
+    Ok(provider.stream_simple(model, context, options.as_ref()))
+}
+
+/// Await the final assistant message of a simple stream (`completeSimple`).
+///
+/// # Errors
+///
+/// Returns `Err` when no API provider is registered for `model.api`.
+pub async fn complete_simple(
+    model: &Model,
+    context: &Context,
+    options: Option<SimpleStreamOptions>,
+) -> Result<AssistantMessage, ProviderError> {
+    let stream = stream_simple(model, context, options)?;
+    Ok(stream.result().await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        AssistantContent, AssistantMessage, ImageContent, TextContent, ThinkingContent, ToolCall,
+        ToolResultMessage, Usage, UserMessage, UserMessageContent, UserOrToolContent,
+    };
+    use serde_json::json;
+    use serde_json::Map;
+
+    fn test_model(context_window: u64, max_tokens: u64) -> Model {
+        serde_json::from_value(json!({
+            "id": "m", "name": "m", "api": "openai-completions", "provider": "p",
+            "baseUrl": "http://localhost", "reasoning": false, "input": ["text"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": context_window, "maxTokens": max_tokens,
+        }))
+        .expect("test model")
+    }
+
+    fn text_context(chars: usize) -> Context {
+        Context {
+            system_prompt: None,
+            messages: vec![crate::types::Message::User(UserMessage {
+                content: UserMessageContent::Text("x".repeat(chars)),
+                timestamp: 0,
+                rest: Map::default(),
+            })],
+            tools: None,
+        }
+    }
+
+    #[test]
+    fn the_estimate_counts_the_serialized_tool_schemas() {
+        let tool: crate::types::Tool = serde_json::from_value(json!({
+            "name": "lookup",
+            "description": "x".repeat(1_600),
+            "parameters": {"type": "object"}
+        }))
+        .expect("tool parses");
+        let serialized = serde_json::to_string(&tool).expect("tool serializes");
+        let mut context = text_context(3_000);
+        context.tools = Some(vec![tool]);
+        // The tool schema's serialized bytes plus its wire envelope join the text under chars/4.
+        assert_eq!(
+            estimated_input_tokens(&context),
+            (3_000 + 48 + serialized.chars().count() as u64).div_ceil(4)
+        );
+    }
+
+    #[test]
+    fn the_estimate_counts_raw_blocks_as_their_serialized_json() {
+        // Raw blocks reach the prompt as text (`user_block_payload`'s opaque arm), so their
+        // serialized bytes claim input room.
+        let value = json!({"unmodeled": "y".repeat(4_000)});
+        let serialized = serde_json::to_string(&value).expect("value serializes");
+        let mut context = text_context(3_000);
+        context
+            .messages
+            .push(crate::types::Message::User(UserMessage {
+                content: UserMessageContent::Blocks(vec![UserOrToolContent::Raw(value)]),
+                timestamp: 0,
+                rest: Map::default(),
+            }));
+        assert_eq!(
+            estimated_input_tokens(&context),
+            (3_000 + serialized.chars().count() as u64).div_ceil(4)
+        );
+    }
+
+    #[test]
+    fn video_budget_leaves_room_for_the_measured_longest_clip() {
+        let model = test_model(64_000, 32_000);
+        for role in ["user", "toolResult"] {
+            let mut context = text_context(80_000); // 20K text tokens
+            context.messages.push(
+                serde_json::from_value(json!({
+                    "role": role, "toolCallId": "c", "toolName": "python_repl", "isError": false,
+                    "content": [{"type": "video", "data": "AAAA", "mimeType": "video/mp4"}],
+                    "timestamp": 0,
+                }))
+                .expect("video message"),
+            );
+            let mut options = StreamOptions {
+                max_tokens: Some(32_000),
+                ..Default::default()
+            };
+            clamp_output_budget(&model, &context, Some(&mut options));
+            // The old 4,800-token estimate left 32K output tokens, which cannot fit even the
+            // measured 12.3K-token clip. The fixed budget reserves more than that workload.
+            let output = options.max_tokens.expect("output budget");
+            assert!(
+                output > 0 && output <= 64_000 - 20_000 - 12_300,
+                "{role}: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_schemas_shrink_the_room_the_clamp_leaves() {
+        // The schemas eat the output room; the input must still fit the window — zero room leaves
+        // the budget for the overflow recovery arm instead.
+        let model = test_model(1_000, 40_000);
+        let mut context = text_context(3_000); // 750 text tokens
+        let tool: crate::types::Tool = serde_json::from_value(json!({
+            "name": "lookup",
+            "description": "x".repeat(400),
+            "parameters": {"type": "object"}
+        }))
+        .expect("tool parses");
+        let serialized = serde_json::to_string(&tool).expect("tool serializes");
+        context.tools = Some(vec![tool]);
+        let mut options = StreamOptions {
+            max_tokens: Some(250),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &context, Some(&mut options));
+        // The schema's serialized tokens leave less room than the budget requests, so the budget
+        // clamps to exactly what is left.
+        let room =
+            1_000u64.saturating_sub((3_000 + 48 + serialized.chars().count() as u64).div_ceil(4));
+        assert_eq!(options.max_tokens, Some(room));
+        assert!(room > 0 && room < 250);
+    }
+
+    #[test]
+    fn clamp_shrinks_an_unsatisfiable_output_budget() {
+        // The live failure shape: an input estimate leaving less room than the requested output
+        // budget.
+        let model = test_model(1_000, 40_000);
+        let context = text_context(3_000); // 750 estimated input tokens
+        let mut options = StreamOptions {
+            max_tokens: Some(400),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, Some(250));
+    }
+
+    #[test]
+    fn clamp_resolves_the_default_budget_when_none_set() {
+        // The main-loop shape: no explicit max_tokens, so the effective request budget is
+        // min(model.maxTokens, 32000).
+        let model = test_model(1_000, 40_000);
+        let context = text_context(3_600); // 900 estimated input tokens
+        let mut options = StreamOptions::default();
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, Some(100));
+    }
+
+    #[test]
+    fn satisfiable_requests_pass_through_unchanged() {
+        let model = test_model(1_000, 40_000);
+        let context = text_context(3_000); // 750 estimated input tokens
+        let mut options = StreamOptions {
+            max_tokens: Some(200),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, Some(200));
+        // No explicit budget and the default fits: nothing materializes.
+        let model = test_model(100_000, 4_096); // default request budget 4_096
+        let mut options = StreamOptions::default();
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, None);
+    }
+
+    #[test]
+    fn clamp_takes_whatever_room_exists() {
+        // A sub-floor budget still fits: the clamp honors exactly the room the estimate leaves (250
+        // room -> 250 requested output).
+        let model = test_model(1_000, 40_000);
+        let context = text_context(3_000); // 750 estimated input tokens
+        let mut options = StreamOptions {
+            max_tokens: Some(400),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, Some(250));
+        // The input estimate fills the window: no budget can save the request, so it stays as sent
+        // for the overflow recovery arm.
+        let context = text_context(4_400); // 1,100 estimated input tokens
+        let mut options = StreamOptions {
+            max_tokens: Some(400),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &context, Some(&mut options));
+        assert_eq!(options.max_tokens, Some(400));
+    }
+
+    #[test]
+    fn unknown_window_and_missing_options_leave_the_request_alone() {
+        let model = test_model(0, 40_000);
+        let mut options = StreamOptions {
+            max_tokens: Some(400),
+            ..Default::default()
+        };
+        clamp_output_budget(&model, &text_context(9_000), Some(&mut options));
+        assert_eq!(options.max_tokens, Some(400));
+        // A model declaring no max output sends no budget to clamp.
+        let model = test_model(1_000, 0);
+        let mut options = StreamOptions::default();
+        clamp_output_budget(&model, &text_context(4_200), Some(&mut options));
+        assert_eq!(options.max_tokens, None);
+    }
+
+    /// The facade is the seam every model request crosses, so the session identity rides it as a
+    /// caller header: a session-scoped call declares `X-PI-Session-Id`, an explicit caller value
+    /// wins, and a session-less call fabricates nothing.
+    #[tokio::test]
+    async fn session_scoped_calls_declare_their_session_identity_header() {
+        type Headers = Option<std::collections::HashMap<String, String>>;
+        let received: std::sync::Arc<std::sync::Mutex<Vec<Headers>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = received.clone();
+        let factory =
+            crate::faux::FauxResponseStep::Factory(std::sync::Arc::new(move |_, options, _, _| {
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(options.and_then(|options| options.headers.clone()));
+                Ok(crate::faux::faux_assistant_text_message(
+                    "ok",
+                    crate::faux::FauxAssistantMessageOptions::default(),
+                ))
+            }));
+        let registration =
+            crate::faux::register_faux_provider(crate::faux::RegisterFauxProviderOptions {
+                api: Some("session-identity-test".to_string()),
+                ..Default::default()
+            });
+        registration.set_responses((0..5).map(|_| factory.clone()).collect());
+        let model = registration.get_model();
+        let context = Context::default();
+        let header = |name: &str, value: &str| {
+            std::collections::HashMap::from([(name.to_string(), value.to_string())])
+        };
+
+        // A session-scoped call carries the session id the harness persists.
+        complete_simple(
+            &model,
+            &context,
+            Some(crate::types::SimpleStreamOptions::from_base(
+                crate::types::StreamOptions {
+                    session_id: Some("session-1".into()),
+                    ..Default::default()
+                },
+            )),
+        )
+        .await
+        .expect("stream settles");
+        // An explicit caller header keeps its own value, whatever casing it carries: providers
+        // dedupe header names case-insensitively, so a differently-cased entry must never race
+        // the injected one.
+        for (name, value) in [
+            ("X-PI-Session-Id", "explicit"),
+            ("x-pi-session-id", "explicit-lower"),
+            ("X-Pi-Session-Id", "explicit-mixed"),
+        ] {
+            complete_simple(
+                &model,
+                &context,
+                Some(crate::types::SimpleStreamOptions::from_base(
+                    crate::types::StreamOptions {
+                        session_id: Some("session-1".into()),
+                        headers: Some(header(name, value)),
+                        ..Default::default()
+                    },
+                )),
+            )
+            .await
+            .expect("stream settles");
+        }
+        // A session-less call adds no header.
+        complete_simple(
+            &model,
+            &context,
+            Some(crate::types::SimpleStreamOptions::from_base(
+                crate::types::StreamOptions::default(),
+            )),
+        )
+        .await
+        .expect("stream settles");
+
+        let mut received = received.lock().unwrap();
+        assert_eq!(received.pop().flatten(), None);
+        assert_eq!(
+            received.pop().flatten(),
+            Some(header("X-Pi-Session-Id", "explicit-mixed"))
+        );
+        assert_eq!(
+            received.pop().flatten(),
+            Some(header("x-pi-session-id", "explicit-lower"))
+        );
+        assert_eq!(
+            received.pop().flatten(),
+            Some(header("X-PI-Session-Id", "explicit"))
+        );
+        assert_eq!(
+            received.pop().flatten(),
+            Some(header("X-PI-Session-Id", "session-1"))
+        );
+        registration.unregister();
+    }
+
+    #[test]
+    fn estimator_counts_text_thinking_tool_calls_and_images() {
+        let context = Context {
+            system_prompt: Some("1234".to_string()), // 1 token
+            messages: vec![
+                crate::types::Message::User(UserMessage {
+                    content: UserMessageContent::Blocks(vec![
+                        UserOrToolContent::Text(TextContent {
+                            text: "12345678".to_string(), // 2 tokens
+                            text_signature: None,
+                            rest: Map::default(),
+                        }),
+                        UserOrToolContent::Image(ImageContent {
+                            data: "QQ==".to_string(),
+                            mime_type: "image/png".to_string(),
+                            rest: Map::default(),
+                        }), // 1,200 tokens
+                    ]),
+                    timestamp: 0,
+                    rest: Map::default(),
+                }),
+                crate::types::Message::Assistant(AssistantMessage {
+                    content: vec![
+                        AssistantContent::Thinking(ThinkingContent {
+                            thinking: "12345678".to_string(), // 2 tokens
+                            thinking_signature: None,
+                            redacted: None,
+                            rest: Map::default(),
+                        }),
+                        AssistantContent::ToolCall(ToolCall {
+                            id: "c".to_string(),
+                            name: "bash".to_string(), // 5 chars
+                            arguments: json!({"code": "ls"}).as_object().cloned().unwrap(),
+                            // 12 chars
+                            thought_signature: None,
+                            rest: Map::default(),
+                        }),
+                    ],
+                    api: "openai-completions".into(),
+                    provider: "p".into(),
+                    model: "m".into(),
+                    response_model: None,
+                    response_id: None,
+                    diagnostics: None,
+                    usage: Usage::default(),
+                    stop_reason: crate::types::StopReason::Stop,
+                    stop_reason_raw: None,
+                    error_message: None,
+                    timestamp: 0,
+                    rest: Map::default(),
+                }),
+                crate::types::Message::ToolResult(ToolResultMessage {
+                    tool_call_id: "c".to_string(),
+                    tool_name: "bash".to_string(),
+                    content: vec![UserOrToolContent::Text(TextContent {
+                        text: "12345678".to_string(), // 2 tokens
+                        text_signature: None,
+                        rest: Map::default(),
+                    })],
+                    details: None,
+                    is_error: false,
+                    timestamp: 0,
+                    rest: Map::default(),
+                }),
+            ],
+            tools: None,
+        };
+        // 1 (system) + 2 + 1_200 + 2 + ceil((5 + 12) / 4) = 5 + 1_200 + 2
+        assert_eq!(estimated_input_tokens(&context), 1 + 2 + 1_200 + 2 + 5 + 2);
+    }
+}

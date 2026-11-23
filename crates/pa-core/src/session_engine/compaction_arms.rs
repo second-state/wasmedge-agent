@@ -1,0 +1,536 @@
+use super::compact_session::CompactOutcome;
+use super::{
+    compaction, compaction_trace, ipython_state, provider_adapter, rebuilt_loop_messages, refine,
+    session_message_to_loop, standard_message, AgentMessage, AgentSession, FileEntry,
+    SessionAgentMessage, TrailingAssistantFilter,
+};
+
+impl AgentSession {
+    pub(crate) fn refinement_signal(&self) -> pa_agent::abort::AbortSignal {
+        self.refinement_cancel
+            .lock()
+            .expect("refinement cancellation lock")
+            .signal()
+    }
+
+    pub async fn latest_compaction_timestamp(&self) -> Option<u64> {
+        let state = self.agent.state().await;
+        state
+            .messages
+            .iter()
+            .filter_map(|message| serde_json::to_value(message).ok())
+            .filter_map(|value| serde_json::from_value::<SessionAgentMessage>(value).ok())
+            .filter_map(|message| match message {
+                SessionAgentMessage::CompactionSummary(summary) => Some(summary.timestamp),
+                _ => None,
+            })
+            .max()
+    }
+
+    /// Whether an automatic threshold compaction is due at a turn boundary:
+    /// the live loop context over the model's context window against the
+    /// effective threshold; usage before the latest compaction never re-triggers.
+    pub async fn auto_compaction_due(&self, model: &pa_types::ai::Model) -> bool {
+        let state = self.agent.state().await;
+        // The live loop context is the agent's message list (the same
+        // JSON round-trip `compact` uses).
+        let messages: Vec<SessionAgentMessage> = state
+            .messages
+            .iter()
+            .filter_map(|message| serde_json::to_value(message).ok())
+            .filter_map(|value| serde_json::from_value(value).ok())
+            .collect();
+        compaction::threshold_compaction_due(
+            &messages,
+            model.context_window,
+            // The live thinking level decides whether the request folds a
+            // thinking budget on top of the base output budget.
+            compaction::request_output_budget(
+                model,
+                provider_adapter::model_thinking_level(state.thinking_level),
+            ),
+            &self.compaction_settings(),
+        )
+    }
+
+    /// Remove the trailing assistant message from the loop context, so a
+    /// re-issued request does not re-send the failed turn's error message;
+    /// [`TrailingAssistantFilter::ErrorOnly`] drops only an error assistant.
+    pub async fn drop_trailing_assistant(&self, filter: TrailingAssistantFilter) {
+        let state = self.agent.state().await;
+        let mut messages = state.messages;
+        let matches_filter = |message: &pa_agent::types::AgentMessage| {
+            let Some(pa_agent::types::Message::Assistant(assistant)) = standard_message(message)
+            else {
+                return false;
+            };
+            match filter {
+                TrailingAssistantFilter::Any => true,
+                TrailingAssistantFilter::ErrorOnly => {
+                    assistant.stop_reason == pa_agent::types::StopReason::Error
+                }
+            }
+        };
+        if messages.last().is_some_and(&matches_filter) {
+            messages.pop();
+            self.agent.set_messages(messages).await;
+        }
+    }
+
+    /// Drop the failed continuation pair from the live loop context: the
+    /// trailing no-progress assistant row and the `goal_context` continuation
+    /// row that drove it. A USER turn's corpse stays; only the live loop drops
+    /// (like [`Self::drop_trailing_assistant`]).
+    pub async fn drop_failed_goal_continuation(&self) {
+        // The whole drop runs under ONE state lock (the atomic mutate): a
+        // concurrent append cannot drop rows between the snapshot and replace.
+        self.agent
+            .mutate_messages(|messages| {
+                // The failed assistant row: the LAST assistant, not the last row —
+                // a trailing `provider_retry_outcome` disclosure must not hide
+                // the pair from the cleanup.
+                let Some(corpse_index) = messages
+                    .iter()
+                    .rposition(|message| standard_message(message).is_some())
+                else {
+                    return;
+                };
+                let Some(pa_agent::types::Message::Assistant(corpse)) =
+                    messages.get(corpse_index).and_then(standard_message)
+                else {
+                    return;
+                };
+                let no_progress = corpse.stop_reason == pa_agent::types::StopReason::Error
+                    || super::goal_driver::turn_produced_no_output(corpse);
+                if !no_progress {
+                    return;
+                }
+                // The driving continuation row sits under the corpse: scan backward
+                // over Custom rows only — the first goal_context continuation row wins.
+                let goal_context_row_at = messages[..corpse_index]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .take_while(|(_, message)| {
+                        matches!(message, pa_agent::types::AgentMessage::Custom(_))
+                    })
+                    .find(|(_, message)| {
+                        let pa_agent::types::AgentMessage::Custom(custom) = message else {
+                            return false;
+                        };
+                        custom
+                            .payload
+                            .get("customType")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("goal_context")
+                            && custom
+                                .payload
+                                .get("details")
+                                .and_then(|details| details.get("kind"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("continuation")
+                    })
+                    .map(|(index, _)| index);
+                let Some(context_index) = goal_context_row_at else {
+                    return;
+                };
+                // Remove the later index first so the earlier one keeps its
+                // position.
+                messages.remove(corpse_index);
+                messages.remove(context_index);
+            })
+            .await;
+    }
+
+    /// The last assistant message in the live loop context, in the session
+    /// wire shape: trailing non-assistant rows are skipped.
+    pub async fn last_assistant_message(&self) -> Option<SessionAgentMessage> {
+        let state = self.agent.state().await;
+        state.messages.iter().rev().find_map(|message| {
+            let value = serde_json::to_value(message).ok()?;
+            let message: SessionAgentMessage = serde_json::from_value(value).ok()?;
+            matches!(message, SessionAgentMessage::Assistant(_)).then_some(message)
+        })
+    }
+
+    /// Execute `/compact`: summarize the pre-cut prefix, persist the entry,
+    /// and rebuild the loop context summary-first; a skip leaves the session
+    /// untouched, an aborted run never commits, and a committed run finishes
+    /// its rebuild and kernel notice whatever `abort` does afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns the abort error, or the summarizer/persist failure; a skip is a normal `Ok` outcome.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the compaction summary sink slot's mutex is poisoned.
+    pub async fn compact(
+        &self,
+        custom_instructions: Option<&str>,
+        model: &pa_types::ai::Model,
+        api_key: Option<String>,
+        abort: Option<&pa_agent::abort::AbortSignal>,
+    ) -> anyhow::Result<CompactOutcome> {
+        compaction_trace::trace(
+            "compact.enter",
+            &serde_json::json!({
+                "customInstructions": custom_instructions.is_some(),
+            }),
+        );
+        let started_at = std::time::Instant::now();
+        let summary_delta = self
+            .compaction_summary_sink
+            .lock()
+            .expect("compaction summary sink lock")
+            .clone();
+        let options = crate::session_engine::compact_session::CompactOptions {
+            model: model.clone(),
+            api_key,
+            custom_instructions,
+            settings: self.compaction_settings(),
+            abort,
+            // Captured per attempt inside `compaction_attempts`: a
+            // conflict retry summarizes a new branch, and inputs captured
+            // here would rank the abandoned branch's terms.
+            harness_digest: None,
+            auxiliary: self.auxiliary_model.as_ref(),
+            summary_delta,
+            semantic_edges: self.semantic_edges(),
+        };
+        // The flight spans the attempts, the rebuilt-context replace, and
+        // the kernel-state notice: every path here REPLACES the live loop
+        // context, and the other replacers — `commit_refinement`'s
+        // outcome push and `record_compaction_outcome`'s failure row —
+        // take the same flight. A row pushed onto the context must not
+        // interleave with the replace: it would duplicate in the rebuilt
+        // view or vanish under it while staying durable either way.
+        let _flight = unless_aborted(self.compaction_flight.lock(), abort).await?;
+        let mut outcome = self.compaction_attempts(&options, started_at).await?;
+        if matches!(outcome, CompactOutcome::Skipped(_)) {
+            compaction_trace::trace("compact.skipped", &serde_json::Value::Null);
+            return Ok(outcome);
+        }
+        let rebuilt = {
+            let session = self.session.lock().await;
+            crate::session_engine::compact_session::rebuilt_context_after_compaction(&session)
+        };
+        let loop_messages: Vec<AgentMessage> = rebuilt_loop_messages(rebuilt);
+        let rebuilt_message_count = loop_messages.len();
+        self.agent.set_messages(loop_messages).await;
+        compaction_trace::trace(
+            "compact.rebuilt_context",
+            &serde_json::json!({ "messages": rebuilt_message_count }),
+        );
+        // A kernel that survived the compaction gets its persistence notice —
+        // a durable `ipython_state` row that also keeps a back-to-back second
+        // `/compact` preparing (update mode) instead of skipping.
+        let kernel_state = match self.kernel_state.as_ref() {
+            Some(probe) => {
+                ipython_state::sync_after_compaction(probe.as_ref(), &self.session, &self.agent)
+                    .await?
+            }
+            None => None,
+        };
+        let notice_landed = kernel_state.is_some();
+        if let CompactOutcome::Ran(run) = &mut outcome {
+            run.ipython_state = kernel_state;
+        }
+        compaction_trace::trace(
+            "compact.returned",
+            &serde_json::json!({
+                "notice": notice_landed,
+            }),
+        );
+        Ok(outcome)
+    }
+
+    /// The PREPARE -> SUMMARIZE -> COMMIT loop: prepare under the session
+    /// lock, summarize with no lock held (mid-window appends chain onto
+    /// the leaf and ride the retained tail), then commit under the lock —
+    /// a structural conflict retries from PREPARE, an aborted run stops.
+    async fn compaction_attempts(
+        &self,
+        options: &crate::session_engine::compact_session::CompactOptions<'_>,
+        started_at: std::time::Instant,
+    ) -> anyhow::Result<CompactOutcome> {
+        /// The conflict-retry bound: a branch that keeps changing under
+        /// the compaction fails instead of re-summarizing forever.
+        const MAX_COMPACTION_ATTEMPTS: usize = 3;
+        for _ in 0..MAX_COMPACTION_ATTEMPTS {
+            let mut attempt = {
+                let session = self.session.lock().await;
+                match crate::session_engine::compact_session::prepare_attempt(&session, options) {
+                    Ok(attempt) => attempt,
+                    Err(skip) => return Ok(CompactOutcome::Skipped(skip.user_message())),
+                }
+            };
+            // The digest ranks the branch THIS attempt summarizes: a
+            // conflict retry prepares a new tree, and inputs captured
+            // once before the loop would rank the abandoned branch's
+            // terms. The capture takes the session lock itself, so it
+            // runs off the prepare hold.
+            if !self.harness_refinements_enabled() {
+                attempt.history = super::refinement_gate::without_refinements(attempt.history);
+                attempt.turn_prefix_messages =
+                    super::refinement_gate::without_refinements(attempt.turn_prefix_messages);
+            }
+            let digest_inputs = self.harness_digest_inputs().await;
+            compaction_trace::trace("compact.digest_captured", &serde_json::Value::Null);
+            let attempt_options = crate::session_engine::compact_session::CompactOptions {
+                model: options.model.clone(),
+                api_key: options.api_key.clone(),
+                custom_instructions: options.custom_instructions,
+                settings: options.settings,
+                abort: options.abort,
+                harness_digest: digest_inputs,
+                auxiliary: options.auxiliary,
+                summary_delta: options.summary_delta.clone(),
+                semantic_edges: options.semantic_edges.clone(),
+            };
+            let summaries = UncommittedSummaries {
+                store: std::sync::Arc::clone(&self.usage_store),
+                session_id: self.session_id().await,
+                bill: crate::session_engine::compact_session::SummaryBill::default(),
+            };
+            let summarized = unless_aborted(
+                crate::session_engine::compact_session::summarize_attempt(
+                    &attempt,
+                    &attempt_options,
+                    &summaries.bill,
+                ),
+                options.abort,
+            )
+            .await
+            .and_then(|summarized| summarized);
+            let mut prepared = match summarized {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    // A failed or aborted attempt's resolved calls land before the error returns.
+                    self.record_model_usage(summaries.bill.take()).await;
+                    return Err(error);
+                }
+            };
+            // A toggle during the summarizer request must not re-inject the captured digest.
+            if !self.harness_refinements_enabled() {
+                prepared.entry.harness_digest = None;
+                prepared.entry.harness_state_fingerprint = None;
+            }
+            let committed = {
+                let mut session = self.session.lock().await;
+                crate::session_engine::compact_session::commit_attempt(
+                    &mut session,
+                    &mut attempt,
+                    &prepared,
+                    options.abort,
+                )
+            };
+            let committed = match committed {
+                Ok(committed) => committed,
+                Err(error) => {
+                    self.record_model_usage(summaries.bill.take()).await;
+                    return Err(error);
+                }
+            };
+            if committed {
+                // The committed row carries the attempt's calls.
+                summaries.bill.take();
+                return Ok(CompactOutcome::Ran(Box::new(
+                    crate::session_engine::compact_session::CompactRun {
+                        result: prepared.result,
+                        entry: prepared.entry,
+                        duration_ms: started_at.elapsed().as_millis() as u64,
+                        ipython_state: None,
+                    },
+                )));
+            }
+            // A structural conflict retries from PREPARE: the discarded calls
+            // land first, so the retry builds on their row.
+            self.record_model_usage(summaries.bill.take()).await;
+            pa_agent::abort::throw_if_aborted_signal(options.abort)?;
+        }
+        Err(anyhow::anyhow!(
+            "compaction retried {MAX_COMPACTION_ATTEMPTS} times while the branch kept changing; try again"
+        ))
+    }
+
+    /// Record an unsuccessful compaction outcome: append the durable
+    /// `compaction_outcome` row and push it onto the live loop context. The
+    /// row is a user-facing disclosure, never model context (`convert_to_llm` drops it).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the row cannot be appended or surfaced;
+    /// it is retained in memory either way.
+    pub async fn record_compaction_outcome(
+        &self,
+        reason: crate::session_engine::messages::CompactionOutcomeReason,
+        outcome: crate::session_engine::messages::CompactionOutcomeKind,
+        content: &str,
+    ) -> anyhow::Result<pa_types::session::CustomMessage> {
+        // The same flight as the other live-context replacers: the push
+        // below read-modify-writes the live context, and a replace
+        // interleaving it would roll the pushed row — or the replace —
+        // back.
+        let _flight = self.compaction_flight.lock().await;
+        let row = crate::session_engine::messages::create_compaction_outcome_message(
+            content, reason, outcome,
+        );
+        {
+            let mut session = self.session.lock().await;
+            let (_, write_error) = session.append_custom_message_retained(
+                &row.custom_type,
+                row.content.clone(),
+                row.display,
+                row.details.clone(),
+            );
+            if let Some(error) = write_error {
+                eprintln!("pa-core: compaction outcome row not persisted: {error}");
+            }
+        }
+        if let Some(loop_message) =
+            session_message_to_loop(&SessionAgentMessage::Custom(row.clone()))
+        {
+            let state = self.agent.state().await;
+            let mut messages = state.messages;
+            messages.push(loop_message);
+            self.agent.set_messages(messages).await;
+        }
+        Ok(row)
+    }
+
+    /// Rebuild the live loop context from a durable branch: the session adopts
+    /// the branch entries, and the agent's message list rebuilds from the state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the post-navigation history cannot be read.
+    pub async fn rebuild_branch_context(
+        &self,
+        branch_entries: Vec<FileEntry>,
+    ) -> anyhow::Result<()> {
+        let rebuilt = {
+            let mut session = self.session.lock().await;
+            session.adopt_entries(branch_entries);
+            crate::session_engine::compact_session::rebuilt_context_after_compaction(&session)
+        };
+        self.agent
+            .set_messages(rebuilt_loop_messages(rebuilt))
+            .await;
+        Ok(())
+    }
+
+    /// Start ephemeral background refinement; awaiting the returned task is
+    /// optional for hosts that deliver completion through their event stream.
+    /// Planning never reserves a user turn. Committed rows append at full-run idle.
+    pub fn start_refinement(
+        &self,
+        options: refine::RefineOptions,
+        source: refine::RefinementSource,
+        model: pa_types::ai::Model,
+        api_key: Option<String>,
+    ) -> tokio::task::JoinHandle<anyhow::Result<refine::CommittedRefinement>> {
+        let session = self.session.clone();
+        let agent = self.agent.clone();
+        let flight = self.compaction_flight.clone();
+        let in_flight = self.refinements_in_flight.clone();
+        let cancel = self.refinement_signal();
+        let agent_dir = self.agent_dir.clone();
+        let auxiliary = self.auxiliary_model.clone();
+        let usage_store = self.usage_store.clone();
+        let Ok(stores) = self.refinement_stores() else {
+            return tokio::spawn(async { Err(refine::refinement_stores_missing_error()) });
+        };
+        tokio::spawn(async move {
+            let session_id = session.lock().await.get_session_id().to_string();
+            let refiner =
+                refine::session_refiner_call(auxiliary, &model, api_key, session_id).await?;
+            let refiner =
+                refine::recorded_refiner_call(refiner, "refine", session.clone(), usage_store);
+            refine::run_refinement(
+                session, agent, flight, in_flight, cancel, agent_dir, options, source, model,
+                refiner, stores,
+            )
+            .await
+        })
+    }
+
+    /// One awaited refinement run with an injected refiner call: the seam the
+    /// parity tests use to drive the refinement without a provider. The
+    /// stores derive from the session exactly as the production entry
+    /// points derive them, so the seam cannot drift from the paths the
+    /// kernel and the digest read.
+    #[cfg(test)]
+    pub(crate) async fn refine_with_refiner(
+        &self,
+        options: &refine::RefineOptions,
+        source: refine::RefinementSource,
+        model: &pa_types::ai::Model,
+        refine_call: crate::refinement::executor::RefinerFn,
+    ) -> anyhow::Result<crate::refinement::RefinementResult> {
+        let stores = self.refinement_stores()?;
+        refine::run_refinement(
+            self.session.clone(),
+            self.agent.clone(),
+            self.compaction_flight.clone(),
+            self.refinements_in_flight.clone(),
+            self.refinement_signal(),
+            self.agent_dir.clone(),
+            options.clone(),
+            source,
+            model.clone(),
+            refine::recorded_refiner_call(
+                refine_call,
+                "refine",
+                self.session.clone(),
+                self.usage_store.clone(),
+            ),
+            stores,
+        )
+        .await
+        .map(|committed| committed.result)
+    }
+}
+
+/// Race pre-commit compaction work against the run's abort signal, if it has one.
+async fn unless_aborted<T>(
+    operation: impl std::future::Future<Output = T>,
+    abort: Option<&pa_agent::abort::AbortSignal>,
+) -> anyhow::Result<T> {
+    match abort {
+        Some(signal) => pa_agent::abort::race_with_abort(operation, signal).await,
+        None => Ok(operation.await),
+    }
+}
+
+/// One compaction attempt's summarizer spend until it commits. A commit takes
+/// the bill (the compaction row carries those calls); a conflict, failure, or
+/// abort records it as a `compaction_discarded` `model_usage` row before
+/// `compaction_attempts` moves on. What is left when this drops belongs to a
+/// compaction future the caller dropped mid-flight, recorded from here, in
+/// the session the attempt started in.
+struct UncommittedSummaries {
+    store: std::sync::Arc<dyn super::rlm_usage::RlmChildUsageStore>,
+    session_id: String,
+    bill: crate::session_engine::compact_session::SummaryBill,
+}
+
+impl Drop for UncommittedSummaries {
+    fn drop(&mut self) {
+        let Some(usage) = self.bill.take() else {
+            return;
+        };
+        // A drop cannot await the append, and a dropped compaction future
+        // leaves no caller to await it.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let store = std::sync::Arc::clone(&self.store);
+        let session_id = std::mem::take(&mut self.session_id);
+        runtime.spawn(async move {
+            if let Err(error) = store.append_model_usage(session_id, usage).await {
+                eprintln!("pa-core: model usage row not persisted: {error}");
+            }
+        });
+    }
+}

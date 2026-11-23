@@ -1,0 +1,3214 @@
+// large_futures: stack futures on hot paths by design. too_many_lines:
+// style gate only. Casts: 64-bit targets; narrowing sits at bounded
+// OS/protocol boundaries.
+#![allow(
+    clippy::large_futures,
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
+//! End-to-end ACP-mode verification: the real binary serves the ACP
+//! JSON-RPC surface over stdio on the daemon-attached transport (a
+//! sandboxed supervisor hosting a scripted faux worker), and the emitted
+//! frames are checked against the TS capture corpus
+//! (`crates/pa-daemon/testdata/acp`).
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+/// The child plus the tempdir it runs in.
+struct AcpChild {
+    child: Child,
+    /// `None` once [`AcpChild::close_stdin`] sent EOF.
+    stdin: Option<std::process::ChildStdin>,
+    lines: Receiver<String>,
+    next_id: u64,
+    /// Held (never read) so the child's cwd directory outlives the process:
+    /// dropping the tempdir deletes it and the child's `current_dir` fails.
+    /// `None` for a second child sharing another child's home.
+    _home: Option<tempfile::TempDir>,
+    spawn_stderr: Option<std::process::ChildStderr>,
+    /// The sandboxed supervisor socket the child spawned: the drop shuts
+    /// the supervisor down with it (a killed child must not leak the
+    /// supervisor into later test binaries).
+    socket: std::path::PathBuf,
+}
+
+impl AcpChild {
+    /// Wire one spawned process into the reader thread and the handle:
+    /// the tempdir is held on the struct so the child's cwd directory
+    /// outlives the process, and the supervisor socket is the one the
+    /// drop shuts down.
+    fn wrap(
+        mut child: std::process::Child,
+        home: Option<tempfile::TempDir>,
+        socket: std::path::PathBuf,
+    ) -> AcpChild {
+        let stdin = child.stdin.take().expect("stdin piped");
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        let (tx, lines) = channel();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        AcpChild {
+            child,
+            stdin: Some(stdin),
+            lines,
+            next_id: 0,
+            _home: home,
+            spawn_stderr: Some(stderr),
+            socket,
+        }
+    }
+
+    /// The daemon-attached transport: the child spawns its own sandboxed
+    /// supervisor on `<home>/daemon.sock` and hosts the scripted worker
+    /// through the `WASMEDGE_AGENT_FAUX_SCRIPT` create-config seam;
+    /// the drop shuts the supervisor down. The socket sits on the struct
+    /// for tests that speak raw daemon commands alongside the ACP frames.
+    fn spawn(args: &[&str], script: &serde_json::Value) -> AcpChild {
+        let home = tempfile::TempDir::new().unwrap();
+        let socket = home.path().join("daemon.sock");
+        std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+        let child = daemon_attached_command(home.path(), &socket, args)
+            .spawn()
+            .expect("binary present");
+        Self::wrap(child, Some(home), socket)
+    }
+
+    /// The daemon-attached lane whose worker's kernel runs the given
+    /// interpreter (the env flows ACP -> supervisor -> worker).
+    fn spawn_with_kernel(
+        args: &[&str],
+        script: &serde_json::Value,
+        kernel_python: &std::path::Path,
+    ) -> AcpChild {
+        let home = tempfile::TempDir::new().unwrap();
+        let socket = home.path().join("daemon.sock");
+        std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+        let child = daemon_attached_command(home.path(), &socket, args)
+            .env("WASMEDGE_AGENT_KERNEL_PYTHON", kernel_python)
+            .spawn()
+            .expect("binary present");
+        Self::wrap(child, Some(home), socket)
+    }
+
+    /// The daemon-attached lane whose `rlm.spawn` children are scripted:
+    /// `<home>/child-script.json` rides the `WASMEDGE_AGENT_FAUX_CHILD_SCRIPT`
+    /// create-config seam (the worker already consumes the key), and the
+    /// parent worker's kernel runs the given interpreter (the env flows
+    /// ACP -> supervisor -> worker).
+    fn spawn_with_child_script(
+        args: &[&str],
+        script: &serde_json::Value,
+        child_script: &serde_json::Value,
+        kernel_python: &std::path::Path,
+    ) -> AcpChild {
+        let home = tempfile::TempDir::new().unwrap();
+        let socket = home.path().join("daemon.sock");
+        let child_script_path = home.path().join("child-script.json");
+        std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+        std::fs::write(&child_script_path, child_script.to_string()).unwrap();
+        let child = daemon_attached_command(home.path(), &socket, args)
+            .env("WASMEDGE_AGENT_FAUX_CHILD_SCRIPT", &child_script_path)
+            .env("WASMEDGE_AGENT_KERNEL_PYTHON", kernel_python)
+            .spawn()
+            .expect("binary present");
+        Self::wrap(child, Some(home), socket)
+    }
+
+    fn send(&mut self, frame: &Value) {
+        let mut line = serde_json::to_string(&frame).unwrap();
+        line.push('\n');
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(line.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// Send EOF: the client disconnects.
+    fn close_stdin(&mut self) {
+        self.stdin = None;
+    }
+
+    fn request(&mut self, method: &str, params: &Value) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        id
+    }
+
+    fn notify(&mut self, method: &str, params: &Value) {
+        self.send(&json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+    }
+
+    /// Read frames until the request `id` answers; returns the answer with the notifications seen
+    /// before it, in order.
+    fn wait_response(&mut self, id: u64, timeout: Duration) -> (Value, Vec<Value>) {
+        let deadline = Instant::now() + timeout;
+        let mut notifications = Vec::new();
+        loop {
+            let timeout_left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !timeout_left.is_zero(),
+                "timed out waiting for response {id}"
+            );
+            match self.lines.recv_timeout(timeout_left) {
+                Ok(line) => {
+                    let frame: Value = serde_json::from_str(&line).expect("valid JSON line");
+                    if frame.get("id").and_then(Value::as_u64) == Some(id)
+                        && (frame.get("result").is_some() || frame.get("error").is_some())
+                    {
+                        return (frame, notifications);
+                    }
+                    notifications.push(frame);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("timed out waiting for response {id}")
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("ACP server closed stdout")
+                }
+            }
+        }
+    }
+
+    /// Read frames until one matches — the predicate readiness signal,
+    /// never a timer. The frames before it are dropped.
+    fn wait_frame(
+        &mut self,
+        timeout: Duration,
+        mut frame_matches: impl FnMut(&Value) -> bool,
+    ) -> Value {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let timeout_left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !timeout_left.is_zero(),
+                "the stream never published the awaited frame"
+            );
+            let line = self
+                .lines
+                .recv_timeout(timeout_left)
+                .expect("the ACP stream stayed open");
+            let frame: Value = serde_json::from_str(&line).expect("valid JSON line");
+            if frame_matches(&frame) {
+                return frame;
+            }
+        }
+    }
+
+    /// Read frames until one `sessionUpdate` of `kind` arrives — the
+    /// observed-event readiness signal, never a timer. The frames
+    /// before it are dropped.
+    fn wait_update(&mut self, kind: &str, timeout: Duration) {
+        self.wait_frame(timeout, |frame| {
+            frame["params"]["update"]["sessionUpdate"] == kind
+        });
+    }
+}
+
+/// The daemon-attached child's command on `home` and `socket`: the
+/// supervisor-lost exit (TS `exitIfSupervisorOrphanedForTooLong`) runs on
+/// a short window (the env flows child -> supervisor -> worker) instead
+/// of the 5-minute default, and the worker script is
+/// `<home>/worker-script.json`.
+fn daemon_attached_command(
+    home: &std::path::Path,
+    socket: &std::path::Path,
+    args: &[&str],
+) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_wasmedge-agent"));
+    command
+        .args(args)
+        .arg("--daemon-socket")
+        .arg(socket)
+        .env("HOME", home)
+        .env(
+            "WASMEDGE_AGENT_FAUX_SCRIPT",
+            home.join("worker-script.json"),
+        )
+        .env(
+            pa_daemon::worker::WORKER_SUPERVISOR_LOST_EXIT_MS_ENV,
+            "15000",
+        )
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+/// The sandbox's single worker descriptor.
+fn worker_descriptor(home: &std::path::Path) -> Value {
+    std::fs::read_dir(home.join(".wasmedge-agent/daemon-workers"))
+        .expect("descriptor instances")
+        .flatten()
+        .flat_map(|instance| {
+            std::fs::read_dir(instance.path())
+                .expect("instance dir")
+                .flatten()
+        })
+        .filter_map(|file| {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(file.path()).ok()?).ok()
+        })
+        .find(|descriptor| descriptor.get("authenticationToken").is_some())
+        .expect("the worker descriptor")
+}
+
+impl Drop for AcpChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(mut stderr) = self.spawn_stderr.take() {
+            use std::io::Read;
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            if !text.is_empty() {
+                eprintln!("ACP child stderr: {text}");
+            }
+        }
+        shutdown_sandboxed_daemon(&self.socket);
+    }
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {},
+        "clientInfo": { "name": "acp-e2e", "title": "ACP E2E", "version": "0.0.1" },
+    })
+}
+
+const TIMEOUT: Duration = Duration::from_mins(1);
+
+/// Assert a settled turn's stop reason, printing the whole response
+/// envelope on mismatch: an `internal_error`'s failure text (the
+/// `wasmedge-agent turn failed: <failure>` message) is otherwise lost — the
+/// `stopReason: null` arms of `assert_eq!` show only the null.
+fn assert_end_turn(response: &Value) {
+    assert_eq!(
+        response["result"]["stopReason"], "end_turn",
+        "the turn's response envelope: {response}"
+    );
+}
+
+/// The TS initialize response shape (capture `ts-happy_path.jsonl`), with the
+/// version and sessionId-class fields normalized as volatile.
+#[test]
+fn acp_initialize_matches_the_ts_golden() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let id = client.request("initialize", &initialize_params());
+    let (response, notifications) = client.wait_response(id, TIMEOUT);
+    assert!(notifications.is_empty(), "nothing precedes initialize");
+    let result = &response["result"];
+    assert_eq!(result["protocolVersion"], 1);
+    let capabilities = &result["agentCapabilities"];
+    assert_eq!(capabilities["loadSession"], true);
+    assert_eq!(
+        capabilities["promptCapabilities"],
+        json!({ "image": true, "embeddedContext": true })
+    );
+    assert_eq!(
+        capabilities["sessionCapabilities"],
+        json!({ "close": {}, "list": {} })
+    );
+    // ACP MCP server admission is served, so the http capability is advertised.
+    assert_eq!(capabilities["mcpCapabilities"], json!({ "http": true }));
+    let info = &result["agentInfo"];
+    assert_eq!(info["name"], "wasmedge-agent");
+    assert_eq!(info["title"], "WasmEdge Agent");
+    assert_eq!(
+        result["_meta"],
+        json!({ "ai.primeintellect.prime-agent": {}, "steering": { "supported": true } })
+    );
+}
+
+#[test]
+fn acp_second_initialize_is_served() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp"], &script);
+    let first = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(first, TIMEOUT);
+    let second = client.request("initialize", &initialize_params());
+    let (response, _) = client.wait_response(second, TIMEOUT);
+    assert_eq!(response["result"]["protocolVersion"], 1);
+}
+
+#[test]
+fn acp_prompt_stream_completion_envelope_and_stop_reason_match_ts() {
+    let script = json!({ "engine": "faux", "responses": ["ACP-OK"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "Reply with exactly: ACP-OK" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+
+    // Frame shape sequence from ts-happy_path.jsonl; the faux provider emits its text in one chunk.
+    let mut shapes = Vec::new();
+    for update in &updates {
+        let body = &update["params"]["update"];
+        let meta = &body["_meta"]["ai.primeintellect.prime-agent"];
+        shapes.push((
+            body["sessionUpdate"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            meta["phase"].as_str().unwrap_or_default().to_string(),
+            meta["outcome"].as_str().map(str::to_string),
+            meta["terminalQuiescenceExpected"].as_bool(),
+        ));
+    }
+    let boundary = (
+        "session_info_update".to_string(),
+        "responseBoundary".to_string(),
+        Some("result".to_string()),
+        Some(true),
+    );
+    let completion = (
+        "session_info_update".to_string(),
+        "event".to_string(),
+        None,
+        None,
+    );
+    let terminal = (
+        "session_info_update".to_string(),
+        "terminalQuiescence".to_string(),
+        Some("result".to_string()),
+        None,
+    );
+    assert_eq!(
+        shapes.first().map(|(tag, _, _, _)| tag.clone()),
+        Some("agent_message_chunk".to_string())
+    );
+    assert!(shapes.contains(&boundary), "shapes: {shapes:?}");
+    assert!(shapes.contains(&completion), "shapes: {shapes:?}");
+    assert!(shapes.contains(&terminal), "shapes: {shapes:?}");
+    assert_eq!(shapes.last(), Some(&terminal));
+
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+
+    let mut sequences: Vec<u64> = Vec::new();
+    for update in &updates {
+        sequences.push(
+            update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["eventSequence"]
+                .as_u64()
+                .unwrap(),
+        );
+    }
+    let mut sorted = sequences.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sequences, sorted, "eventSequence strictly increases");
+
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+}
+
+#[test]
+fn acp_prompt_chunk_carries_the_assistant_message_id() {
+    let script = json!({ "engine": "faux", "responses": ["ACP-OK"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "hello" }] }),
+    );
+    let (_, updates) = client.wait_response(prompt, TIMEOUT);
+    let chunk = updates
+        .iter()
+        .find(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .expect("a message chunk");
+    assert_eq!(
+        chunk["params"]["update"]["messageId"],
+        "wasmedge-agent-assistant-1"
+    );
+    assert_eq!(
+        chunk["params"]["update"]["content"],
+        json!({ "type": "text", "text": "ACP-OK" })
+    );
+    assert_eq!(
+        chunk["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"],
+        json!({ "promptTurnId": 1, "eventSequence": 1, "phase": "event" })
+    );
+}
+
+#[test]
+fn acp_cwd_mismatch_is_reported_not_adopted() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "cwd": "/tmp", "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let meta = &new_response["result"]["_meta"]["ai.primeintellect.prime-agent"]["cwd"];
+    assert_eq!(meta["requested"], "/tmp");
+    // The actual cwd is the temp dir the client runs in; only the mismatch shape is asserted here
+    // (the value is tempdir-random).
+    assert!(meta["actual"]
+        .as_str()
+        .is_some_and(|actual| actual.starts_with(std::path::MAIN_SEPARATOR)));
+}
+
+#[test]
+fn acp_error_shapes_match_the_ts_goldens() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+
+    // Unknown session (ts-errors.jsonl).
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": "bogus-session", "prompt": [{ "type": "text", "text": "hi" }] }),
+    );
+    let (response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32603);
+    assert_eq!(response["error"]["message"], "Internal error");
+    assert_eq!(
+        response["error"]["data"]["details"],
+        "Unknown ACP session: bogus-session"
+    );
+
+    let close = client.request("session/close", &json!({ "sessionId": "bogus-session" }));
+    let (response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(
+        response["error"]["data"]["details"],
+        "Unknown ACP session: bogus-session"
+    );
+
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A second session/new on a live connection (ts-errors.jsonl).
+    let again = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (response, _) = client.wait_response(again, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32603);
+    assert_eq!(
+        response["error"]["data"]["details"],
+        "wasmedge-agent ACP mode hosts one session per connection; start another wasmedge-agent process for a second session"
+    );
+
+    // Unknown method (ts-errors.jsonl).
+    let unknown = client.request("unknown/method", &json!({}));
+    let (response, _) = client.wait_response(unknown, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32601);
+    assert_eq!(
+        response["error"]["message"],
+        "\"Method not found\": unknown/method"
+    );
+    assert_eq!(response["error"]["data"]["method"], "unknown/method");
+
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(response["result"], json!({}));
+}
+
+#[test]
+fn acp_initialize_with_string_protocol_version_is_invalid_params() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let id = client.request(
+        "initialize",
+        &json!({ "protocolVersion": "1", "clientCapabilities": {} }),
+    );
+    let (response, _) = client.wait_response(id, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32602);
+    assert_eq!(response["error"]["message"], "Invalid params");
+    assert_eq!(
+        response["error"]["data"]["protocolVersion"]["_errors"][0],
+        "Invalid input: expected number, received string"
+    );
+}
+
+#[test]
+fn acp_image_block_without_mime_type_is_invalid_params() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "image", "data": "AAAA" }] }),
+    );
+    let (response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32602);
+    assert_eq!(response["error"]["message"], "Invalid params");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "image block requires base64 `data` and `mimeType` strings"
+    );
+}
+
+#[test]
+fn acp_cancel_without_an_active_turn_is_a_noop() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    client.notify("session/cancel", &json!({ "sessionId": session_id }));
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, notifications) = client.wait_response(close, TIMEOUT);
+    assert!(notifications.is_empty(), "a no-op cancel publishes nothing");
+    assert_eq!(close_response["result"], json!({}));
+}
+
+#[test]
+fn acp_mcp_admission_accepts_valid_servers_and_close_releases() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "capture-stdio", "type": "stdio", "command": "cat", "args": [], "env": [{"name": "A", "value": "1"}] },
+            { "name": "capture-http", "type": "http", "url": "https://mcp.invalid/capture", "headers": [{"name": "X-A", "value": "yes"}] },
+        ]}),
+    );
+    let (response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = response["result"]["sessionId"]
+        .as_str()
+        .expect("admission succeeds")
+        .to_string();
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+}
+
+#[test]
+fn acp_mcp_admission_rejects_a_second_session_only_when_open() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "first", "type": "stdio", "command": "cat", "args": [], "env": [] },
+        ]}),
+    );
+    let (response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = response["result"]["sessionId"]
+        .as_str()
+        .expect("admission succeeds")
+        .to_string();
+    let second = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "second", "type": "stdio", "command": "cat", "args": [], "env": [] },
+        ]}),
+    );
+    let (second_response, _) = client.wait_response(second, TIMEOUT);
+    assert_eq!(second_response["error"]["code"], -32603);
+    assert_eq!(second_response["error"]["message"], "Internal error");
+    assert_eq!(
+        second_response["error"]["data"]["details"],
+        "wasmedge-agent ACP mode hosts one session per connection; start another wasmedge-agent process for a second session"
+    );
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+    let replacement = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "replacement", "type": "stdio", "command": "cat", "args": [], "env": [] },
+        ]}),
+    );
+    let (replacement_response, _) = client.wait_response(replacement, TIMEOUT);
+    assert!(
+        replacement_response["result"]["sessionId"].is_string(),
+        "replacement admission succeeds"
+    );
+}
+
+#[test]
+fn acp_mcp_admission_rejects_invalid_params_with_the_ts_reasons() {
+    let script = json!({ "responses": ["unused"] });
+    let cases: &[(Value, &str)] = &[
+        (
+            json!([{ "name": "-bad", "type": "stdio", "command": "cat", "args": [], "env": [] }]),
+            "MCP server names must start with an alphanumeric character and contain at most 64 alphanumeric, underscore, or hyphen characters",
+        ),
+        (
+            json!([
+                { "name": "dup", "type": "stdio", "command": "cat", "args": [], "env": [] },
+                { "name": "dup", "type": "stdio", "command": "cat", "args": [], "env": [] },
+            ]),
+            "duplicate MCP server name: dup",
+        ),
+        (
+            json!([{ "name": "n", "type": "stdio", "command": "cat\u{0}", "args": [], "env": [] }]),
+            "MCP server n has an invalid stdio command",
+        ),
+        (
+            json!([{ "name": "e", "type": "stdio", "command": "cat", "args": [], "env": [
+                { "name": "A", "value": "1" }, { "name": "A", "value": "2" },
+            ]}]),
+            "MCP server e has duplicate environment A",
+        ),
+        (
+            json!([{ "name": "h", "type": "http", "url": "https://mcp.invalid/x", "headers": [
+                { "name": "X-A", "value": "1" }, { "name": "x-a", "value": "2" },
+            ]}]),
+            "MCP server h has duplicate header x-a",
+        ),
+        (
+            json!([{ "name": "s", "type": "sse", "url": "https://mcp.invalid/x", "headers": [] }]),
+            "MCP server s uses unsupported sse transport",
+        ),
+        (
+            json!([{ "name": "c", "type": "http", "url": "https://user:pw@mcp.invalid/x", "headers": [] }]),
+            "MCP server c must use an HTTP(S) URL without embedded credentials",
+        ),
+    ];
+    for (servers, reason) in cases {
+        let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+        let init = client.request("initialize", &initialize_params());
+        let _ = client.wait_response(init, TIMEOUT);
+        let new = client.request("session/new", &json!({ "mcpServers": servers }));
+        let (response, _) = client.wait_response(new, TIMEOUT);
+        assert_eq!(response["error"]["code"], -32602, "case {reason}");
+        assert_eq!(response["error"]["message"], "Invalid params");
+        assert_eq!(response["error"]["data"]["reason"], *reason);
+    }
+}
+
+#[test]
+fn acp_mcp_schema_invalid_entries_are_dropped_like_the_sdk() {
+    // The SDK zod filter (`vecSkipError(zMcpServer)`) silently drops entries
+    // that miss required fields; admission succeeds with the surviving list.
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request(
+        "session/new",
+        // No `env` (required), invalid env item, http without headers.
+        &json!({ "mcpServers": [
+            { "name": "no-env", "type": "stdio", "command": "cat", "args": [] },
+            { "name": "bad-item", "type": "stdio", "command": "cat", "args": [], "env": [{"name": 1, "value": "x"}] },
+            { "name": "no-headers", "type": "http", "url": "https://mcp.invalid/x" },
+        ]}),
+    );
+    let (response, _) = client.wait_response(new, TIMEOUT);
+    assert!(
+        response["result"]["sessionId"].is_string(),
+        "schema-invalid entries are dropped, not rejected"
+    );
+}
+
+#[test]
+fn acp_mcp_long_names_fail_at_tool_derivation_with_internal_error() {
+    let script = json!({ "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let long = format!("a{}", "b".repeat(50));
+    let new = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": long, "type": "stdio", "command": "cat", "args": [], "env": [] },
+        ]}),
+    );
+    let (response, _) = client.wait_response(new, TIMEOUT);
+    assert_eq!(response["error"]["code"], -32603);
+    assert_eq!(
+        response["error"]["data"]["details"],
+        format!("Invalid ACP MCP server name: {long}")
+    );
+}
+
+#[test]
+fn acp_daemon_attached_close_clears_the_connection_mcp_servers() {
+    let script = json!({ "engine": "faux", "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "close-clear", "type": "http", "url": "https://mcp.invalid/close-clear", "headers": [] },
+        ]}),
+    );
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .expect("admission succeeds")
+        .to_string();
+    let active_session_id = wait_live_session(&socket)["activeSessionId"]
+        .as_str()
+        .expect("the daemon session id")
+        .to_string();
+    let owned = probe_acp_mcp_servers(&socket, &active_session_id);
+    assert_eq!(
+        owned["success"], false,
+        "the open session owns its admitted servers: {owned}"
+    );
+    assert_eq!(
+        owned["error"],
+        "ACP MCP configuration is owned by another client"
+    );
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+    let released = probe_acp_mcp_servers(&socket, &active_session_id);
+    assert_eq!(
+        released["success"], true,
+        "session/close released the connection's servers: {released}"
+    );
+}
+
+#[test]
+fn acp_daemon_attached_eof_teardown_clears_the_connection_mcp_servers() {
+    let script = json!({ "engine": "faux", "responses": ["unused"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp"], &script);
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request(
+        "session/new",
+        &json!({ "mcpServers": [
+            { "name": "eof-clear", "type": "http", "url": "https://mcp.invalid/eof-clear", "headers": [] },
+        ]}),
+    );
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    assert!(
+        new_response["result"]["sessionId"].is_string(),
+        "admission succeeds: {new_response}"
+    );
+    let active_session_id = wait_live_session(&socket)["activeSessionId"]
+        .as_str()
+        .expect("the daemon session id")
+        .to_string();
+    let owned = probe_acp_mcp_servers(&socket, &active_session_id);
+    assert_eq!(
+        owned["success"], false,
+        "the open session owns its admitted servers: {owned}"
+    );
+    client.close_stdin();
+    assert!(client.child.wait().expect("the ACP child exits").success());
+    let released = probe_acp_mcp_servers(&socket, &active_session_id);
+    assert_eq!(
+        released["success"], true,
+        "the EOF teardown released the connection's servers: {released}"
+    );
+}
+
+#[test]
+fn acp_mode_daemon_unreachable_exits_1_without_fallback() {
+    let home = tempfile::TempDir::new().unwrap();
+    let socket = home.path().join("daemon.sock");
+    std::fs::write(&socket, "not a socket").unwrap();
+    std::fs::write(
+        home.path().join("worker-script.json"),
+        json!({ "engine": "faux", "responses": ["unused"] }).to_string(),
+    )
+    .unwrap();
+    let output = daemon_attached_command(home.path(), &socket, &["--mode", "acp", "--no-session"])
+        .output()
+        .expect("binary present");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "exit 1: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "no ACP frames on stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Error: "),
+        "the startup failure is an error line: {stderr}"
+    );
+    assert!(
+        stderr.contains("Timed out waiting for the WasmEdge Agent daemon to start"),
+        "the daemon never became reachable: {stderr}"
+    );
+}
+
+#[test]
+fn acp_daemon_attached_cancels_mid_turn() {
+    // A scripted worker with a slow turn: the cancel lands while the
+    // turn runs, and the prompt resolves `{stopReason: "cancelled"}`
+    // with no boundary frames — the TS daemon-attached cancel shape.
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "responses": [{ "text": "a slow answer", "delayMs": 8000 }] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, Duration::from_mins(1));
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+            "session/prompt",
+            &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+        );
+    client.notify("session/cancel", &json!({ "sessionId": session_id }));
+    let (prompt_response, updates) = client.wait_response(prompt, Duration::from_mins(1));
+    assert_eq!(prompt_response["result"]["stopReason"], "cancelled");
+    assert!(
+        updates.is_empty(),
+        "a cancelled turn publishes no boundary frames after the cancel"
+    );
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, Duration::from_mins(1));
+    assert_eq!(close_response["result"], json!({}));
+    drop(client);
+}
+
+#[test]
+fn acp_daemon_attached_overlapping_prompt_is_refused() {
+    // A second prompt while the first runs is refused; the running turn
+    // is untouched and the next prompt after its settle runs.
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [
+            { "text": "a paced answer that streams slowly enough to overlap a prompt" },
+            "SECOND-OK",
+        ] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    // Readiness is the turn's own first streamed chunk, not a timer.
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    let second = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "the overlap" }] }),
+    );
+    let (second_response, _) = client.wait_response(second, TIMEOUT);
+    assert_eq!(
+        second_response["error"]["code"], -32603,
+        "the overlapping prompt is refused: {second_response}"
+    );
+    assert!(
+        second_response["error"]["data"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("A prompt turn is already running for this ACP session"),
+        "the refusal names the running-turn rule: {second_response}"
+    );
+    let (first_response, _) = client.wait_response(first, TIMEOUT);
+    assert_eq!(
+        first_response["result"]["stopReason"], "end_turn",
+        "the refused overlap never touched the running turn: {first_response}"
+    );
+    let third = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "after the settle" }] }),
+    );
+    let (third_response, updates) = client.wait_response(third, TIMEOUT);
+    assert_eq!(
+        third_response["result"]["stopReason"], "end_turn",
+        "the turn slot frees at the settle: {third_response}"
+    );
+    let chunk = updates
+        .iter()
+        .find(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .expect("the next turn streams its scripted answer");
+    assert_eq!(
+        chunk["params"]["update"]["content"],
+        json!({ "type": "text", "text": "SECOND-OK" })
+    );
+}
+
+#[test]
+fn acp_daemon_attached_close_mid_turn_answers_cancelled() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [
+            { "text": "a paced answer that streams slowly enough to close mid-turn" },
+        ] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (prompt_response, frames) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"]["stopReason"], "cancelled",
+        "a prompt closed mid-turn answers cancelled: {prompt_response}"
+    );
+    let close_response = frames
+        .into_iter()
+        .find(|frame| frame["id"] == close)
+        .unwrap_or_else(|| client.wait_response(close, TIMEOUT).0);
+    assert_eq!(close_response["result"], json!({}));
+}
+
+/// `initialize` + `session/new` on a daemon-attached child; the ACP session id.
+fn initialize_and_new_session(client: &mut AcpChild) -> String {
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    new_session(client)
+}
+
+fn new_session(client: &mut AcpChild) -> String {
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session/new succeeds: {new_response}"))
+        .to_string()
+}
+
+fn assert_prompt_ends_turn(client: &mut AcpChild, session_id: &str, text: &str) -> Vec<Value> {
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, Duration::from_mins(2));
+    assert_eq!(
+        prompt_response["result"]["stopReason"], "end_turn",
+        "{prompt_response}"
+    );
+    updates
+}
+
+/// The supervisor's live sessions (`list`).
+fn live_sessions(socket: &std::path::Path) -> Vec<Value> {
+    let list = daemon_request(
+        socket,
+        "live-sessions",
+        &json!({ "type": "list", "includeClientOwned": true }),
+    );
+    list["data"]["sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a session list: {list}"))
+        .clone()
+}
+
+fn probe_acp_mcp_servers(socket: &std::path::Path, active_session_id: &str) -> Value {
+    daemon_request(
+        socket,
+        "acp-mcp-replace",
+        &json!({
+            "type": "replace_acp_mcp_servers",
+            "activeSessionId": active_session_id,
+            "ownerId": "acp-e2e-probe",
+            "servers": [{
+                "type": "http",
+                "name": "probe",
+                "url": "https://mcp.invalid/probe",
+                "headers": {},
+            }],
+        }),
+    )
+}
+
+fn wait_live_session(socket: &std::path::Path) -> Value {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let sessions = live_sessions(socket);
+        if let Some(session) = sessions.first() {
+            return session.clone();
+        }
+        let timeout_left = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !timeout_left.is_zero(),
+            "no daemon session ever registered on {}",
+            socket.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn acp_daemon_attached_default_session_persists_and_resumes() {
+    // Without --no-session the daemon session is saved and resident: it
+    // survives the client's EOF, and --resume binds the same live worker.
+    let home = tempfile::TempDir::new().unwrap();
+    let home_path = home.path().to_path_buf();
+    let socket = home_path.join("daemon.sock");
+    std::fs::write(
+        home_path.join("worker-script.json"),
+        json!({ "engine": "faux", "responses": ["The Nile.", "Everest."] }).to_string(),
+    )
+    .unwrap();
+    let child = daemon_attached_command(&home_path, &socket, &["--mode", "acp"])
+        .env("DO_NOT_TRACK", "1")
+        .spawn()
+        .expect("binary present");
+    let mut first = AcpChild::wrap(child, Some(home), socket.clone());
+    let session_id = initialize_and_new_session(&mut first);
+    assert_prompt_ends_turn(&mut first, &session_id, "Name a river.");
+
+    let sessions = live_sessions(&socket);
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    let active_session_id = sessions[0]["activeSessionId"].clone();
+    let session_file = sessions[0]["sessionFile"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a saved session: {sessions:?}"))
+        .to_string();
+    assert!(
+        std::path::Path::new(&session_file)
+            .parent()
+            .is_some_and(|dir| dir.ends_with("agent/sessions")),
+        "the session is saved in the session dir: {session_file}"
+    );
+    assert!(std::fs::read_to_string(&session_file)
+        .unwrap()
+        .contains("Name a river."));
+    let descriptor = worker_descriptor(&home_path);
+    assert_eq!(descriptor["telemetryDisabled"], json!(true), "{descriptor}");
+    assert!(
+        descriptor.get("ownerClientId").is_none(),
+        "a resident session has no owner: {descriptor}"
+    );
+
+    first.close_stdin();
+    assert!(first.child.wait().expect("the ACP child exits").success());
+    let sessions = live_sessions(&socket);
+    assert_eq!(
+        sessions.len(),
+        1,
+        "a resident session survives EOF: {sessions:?}"
+    );
+    assert_eq!(sessions[0]["activeSessionId"], active_session_id);
+
+    // A relative `--resume` selector resolves against the CLI's working
+    // directory: the agent dir here, not the stored session cwd.
+    let file_name = std::path::Path::new(&session_file)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("a session file name");
+    let agent_dir = std::path::Path::new(&session_file)
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the agent dir holding the session dir");
+    let child = daemon_attached_command(
+        &home_path,
+        &socket,
+        &[
+            "--mode",
+            "acp",
+            "--resume",
+            &format!("sessions/{file_name}"),
+        ],
+    )
+    .current_dir(agent_dir)
+    .spawn()
+    .expect("binary present");
+    let mut second = AcpChild::wrap(child, None, socket.clone());
+    let session_id = initialize_and_new_session(&mut second);
+    assert_prompt_ends_turn(&mut second, &session_id, "Name a mountain.");
+    let sessions = live_sessions(&socket);
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(
+        sessions[0]["activeSessionId"], active_session_id,
+        "--resume binds the live worker"
+    );
+    let saved = std::fs::read_to_string(&session_file).unwrap();
+    assert!(saved.contains("Name a river.") && saved.contains("Name a mountain."));
+}
+
+#[test]
+fn acp_session_load_refused_by_a_busy_worker_keeps_the_startup_binding() {
+    // Loading a session another client is mid-turn on, with an MCP server,
+    // fails at the worker's busy MCP replace; the connection keeps its own
+    // startup session instead of rebinding to the loaded one.
+    let home = tempfile::TempDir::new().unwrap();
+    let home_path = home.path().to_path_buf();
+    let socket = home_path.join("daemon.sock");
+    let answer = "a paced answer that keeps the worker busy while another client loads the session, streaming slowly enough to outlast the load";
+    std::fs::write(
+        home_path.join("worker-script.json"),
+        json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [{ "text": answer }] })
+            .to_string(),
+    )
+    .unwrap();
+    let child = daemon_attached_command(&home_path, &socket, &["--mode", "acp"])
+        .spawn()
+        .expect("binary present");
+    let mut first = AcpChild::wrap(child, Some(home), socket.clone());
+    let session_id = initialize_and_new_session(&mut first);
+    let _ = first.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    first.wait_update("agent_message_chunk", TIMEOUT);
+
+    let child = daemon_attached_command(&home_path, &socket, &["--mode", "acp"])
+        .spawn()
+        .expect("binary present");
+    let mut second = AcpChild::wrap(child, None, socket);
+    let init = second.request("initialize", &initialize_params());
+    let _ = second.wait_response(init, TIMEOUT);
+    let load = second.request(
+        "session/load",
+        &json!({ "sessionId": session_id, "cwd": home_path.display().to_string(), "mcpServers": [
+            { "type": "http", "name": "probe", "url": "https://mcp.invalid/probe", "headers": [] },
+        ] }),
+    );
+    let (load_response, _) = second.wait_response(load, TIMEOUT);
+    assert!(
+        load_response["error"]["data"]["details"]
+            .as_str()
+            .is_some_and(|details| details.contains("while the agent is running")),
+        "{load_response}"
+    );
+    let startup_session_id = new_session(&mut second);
+    assert_ne!(startup_session_id, session_id);
+}
+
+#[test]
+fn acp_session_list_and_load_restore_a_saved_session_in_a_new_process() {
+    // The first process's resident session is listed by its wasmedge-agent
+    // session id and loads in a second process: the conversation replays
+    // before the load response, and the next prompt runs on the same live
+    // worker (the script's second answer).
+    let home = tempfile::TempDir::new().unwrap();
+    let home_path = home.path().to_path_buf();
+    let socket = home_path.join("daemon.sock");
+    std::fs::write(
+        home_path.join("worker-script.json"),
+        json!({ "engine": "faux", "responses": ["The Nile.", "Everest."] }).to_string(),
+    )
+    .unwrap();
+    let child = daemon_attached_command(&home_path, &socket, &["--mode", "acp"])
+        .spawn()
+        .expect("binary present");
+    let mut first = AcpChild::wrap(child, Some(home), socket.clone());
+    let session_id = initialize_and_new_session(&mut first);
+    assert_prompt_ends_turn(&mut first, &session_id, "Name a river.");
+    first.close_stdin();
+    assert!(first.child.wait().expect("the ACP child exits").success());
+
+    let child = daemon_attached_command(&home_path, &socket, &["--mode", "acp"])
+        .spawn()
+        .expect("binary present");
+    let mut second = AcpChild::wrap(child, None, socket);
+    let init = second.request("initialize", &initialize_params());
+    let (init_response, _) = second.wait_response(init, TIMEOUT);
+    let capabilities = &init_response["result"]["agentCapabilities"];
+    assert_eq!(capabilities["loadSession"], true);
+    assert_eq!(capabilities["sessionCapabilities"]["list"], json!({}));
+
+    let list = second.request("session/list", &json!({}));
+    let (list_response, _) = second.wait_response(list, TIMEOUT);
+    let row = list_response["result"]["sessions"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["sessionId"] == session_id))
+        .unwrap_or_else(|| panic!("the saved session is listed: {list_response}"))
+        .clone();
+    let cwd = row["cwd"].as_str().expect("a listed cwd");
+    assert_eq!(
+        std::fs::canonicalize(cwd).unwrap(),
+        std::fs::canonicalize(&home_path).unwrap()
+    );
+    assert_eq!(row["title"], "Name a river.");
+
+    // A load that fails (an invalid MCP server) keeps the startup binding:
+    // the next session/new hosts the startup session, not the saved one.
+    let bad_load = second.request(
+        "session/load",
+        &json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [
+            { "name": "n", "type": "stdio", "command": "", "args": [], "env": [] },
+        ] }),
+    );
+    let (bad_response, _) = second.wait_response(bad_load, TIMEOUT);
+    assert_eq!(bad_response["error"]["code"], -32602, "{bad_response}");
+    let startup_session_id = new_session(&mut second);
+    assert_ne!(startup_session_id, session_id);
+    let close = second.request("session/close", &json!({ "sessionId": startup_session_id }));
+    let (close_response, _) = second.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+
+    let load = second.request(
+        "session/load",
+        &json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] }),
+    );
+    let (load_response, replay) = second.wait_response(load, TIMEOUT);
+    assert!(
+        load_response["result"]["configOptions"].is_array(),
+        "{load_response}"
+    );
+    let chunks: Vec<(String, String)> = replay
+        .iter()
+        .filter(|frame| frame["params"]["sessionId"] == session_id)
+        .map(|frame| &frame["params"]["update"])
+        .filter(|update| {
+            update["sessionUpdate"]
+                .as_str()
+                .is_some_and(|kind| kind.ends_with("_message_chunk"))
+        })
+        .map(|update| {
+            (
+                update["sessionUpdate"].as_str().unwrap().to_string(),
+                update["content"]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        chunks,
+        [
+            (
+                "user_message_chunk".to_string(),
+                "Name a river.".to_string()
+            ),
+            ("agent_message_chunk".to_string(), "The Nile.".to_string()),
+        ],
+        "{replay:?}"
+    );
+
+    let updates = assert_prompt_ends_turn(&mut second, &session_id, "Name a mountain.");
+    assert!(
+        updates.iter().any(|frame| {
+            frame["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+                && frame["params"]["update"]["content"]["text"] == "Everest."
+        }),
+        "{updates:?}"
+    );
+}
+
+#[test]
+fn acp_daemon_attached_resident_eof_mid_turn_cancels_the_prompt() {
+    let answer = "a paced answer that streams slowly enough to close mid-turn";
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [{ "text": answer }] }),
+    );
+    let socket = client.socket.clone();
+    let session_id = initialize_and_new_session(&mut client);
+    let _ = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    let session = live_sessions(&socket).remove(0);
+    let active_session_id = session["activeSessionId"].clone();
+    let session_file = session["sessionFile"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a saved session: {session}"))
+        .to_string();
+
+    client.close_stdin();
+    assert!(client.child.wait().expect("the ACP child exits").success());
+    let idle = daemon_request(
+        &socket,
+        "idle",
+        &json!({ "type": "wait_for_idle", "activeSessionId": active_session_id }),
+    );
+    assert_eq!(idle["success"], true, "{idle}");
+    let sessions = live_sessions(&socket);
+    assert_eq!(
+        sessions.len(),
+        1,
+        "a resident session survives EOF: {sessions:?}"
+    );
+    assert_eq!(sessions[0]["activeSessionId"], active_session_id);
+    let saved = std::fs::read_to_string(&session_file).unwrap();
+    assert!(saved.contains("a slow question"), "{saved}");
+    assert!(
+        !saved.contains(answer),
+        "the EOF cancelled the running prompt: {saved}"
+    );
+}
+
+/// EOF while `session/new` is still running: the reader awaits the
+/// handler before it reads further, so the teardown at EOF releases the
+/// session it installs and the process exits.
+#[test]
+fn acp_daemon_attached_eof_during_session_new_exits() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp"],
+        &json!({ "engine": "faux", "responses": ["The Nile."] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    client.close_stdin();
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    assert!(
+        new_response["result"]["sessionId"].is_string(),
+        "session/new answers: {new_response}"
+    );
+    assert!(client.child.wait().expect("the ACP child exits").success());
+}
+
+#[test]
+fn acp_daemon_attached_close_keeps_the_worker_and_new_rebinds_it() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": ["The Nile.", "Everest."] }),
+    );
+    let socket = client.socket.clone();
+    let first = initialize_and_new_session(&mut client);
+    let wrong = client.request("session/close", &json!({ "sessionId": "not-the-session" }));
+    let (wrong_response, _) = client.wait_response(wrong, TIMEOUT);
+    assert_eq!(
+        wrong_response["error"]["data"]["details"], "Unknown ACP session: not-the-session",
+        "{wrong_response}"
+    );
+    assert_prompt_ends_turn(&mut client, &first, "Name a river.");
+    let active_session_id = live_sessions(&socket)[0]["activeSessionId"].clone();
+    let descriptor = worker_descriptor(socket.parent().unwrap());
+    let owner = json!(format!("acp:{}", client.child.id()));
+    assert_eq!(descriptor["ownerClientId"], owner, "{descriptor}");
+
+    let close = client.request("session/close", &json!({ "sessionId": first }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+    let sessions = live_sessions(&socket);
+    assert_eq!(sessions.len(), 1, "close keeps the worker: {sessions:?}");
+    assert_eq!(sessions[0]["activeSessionId"], active_session_id);
+
+    let second = new_session(&mut client);
+    // The ACP session id is the daemon session's wasmedge-agent session id.
+    assert_eq!(second, first);
+    let updates = assert_prompt_ends_turn(&mut client, &second, "Name a mountain.");
+    let chunk = updates
+        .iter()
+        .find(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .expect("a message chunk");
+    // The event mapping restarts with the session, like TS.
+    assert_eq!(
+        chunk["params"]["update"]["messageId"],
+        "wasmedge-agent-assistant-1"
+    );
+    let sessions = live_sessions(&socket);
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(
+        sessions[0]["activeSessionId"], active_session_id,
+        "session/new binds the same daemon session"
+    );
+}
+
+#[test]
+fn acp_daemon_attached_prompt_and_steering_during_cancel_are_refused() {
+    // A prompt behind a cancel is refused while the stop runs, and the
+    // cancelled response comes after the stop, so a resend right after it
+    // runs.
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [
+            { "text": "a paced answer that streams slowly enough to cancel mid-turn" },
+            "AFTER-STOP",
+        ] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    client.notify("session/cancel", &json!({ "sessionId": session_id }));
+    let steer = client.request(
+        "_session/steering",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": "during the stop" }],
+        }),
+    );
+    let second = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "behind the stop" }] }),
+    );
+    let (second_response, second_frames) = client.wait_response(second, TIMEOUT);
+    let steer_response = second_frames
+        .iter()
+        .find(|frame| frame["id"] == json!(steer))
+        .cloned()
+        .unwrap_or_else(|| client.wait_response(steer, TIMEOUT).0);
+    assert_eq!(
+        steer_response["result"],
+        json!({ "outcome": "promptRequired", "reason": "noRunningTurn" }),
+        "the steer cannot enter a turn whose cancel has begun: {steer_response}"
+    );
+    assert_eq!(
+        second_response["error"]["code"], -32603,
+        "the prompt behind the cancel is refused: {second_response}"
+    );
+    assert_eq!(
+        second_response["error"]["data"]["details"],
+        format!("ACP session is cancelling: {session_id}"),
+        "the refusal names the cancelling window: {second_response}"
+    );
+    let (first_response, _) = client.wait_response(first, TIMEOUT);
+    assert_eq!(
+        first_response["result"]["stopReason"], "cancelled",
+        "the cancel settles the running turn: {first_response}"
+    );
+    // The resend also resumes the queued-input admission the cancel
+    // suspended (TS sends `followUp` + `queueIfBusy: true`).
+    let third = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "the resend" }] }),
+    );
+    let (third_response, updates) = client.wait_response(third, TIMEOUT);
+    assert_eq!(
+        third_response["result"]["stopReason"], "end_turn",
+        "the stop cleared before the cancelled response: {third_response}"
+    );
+    let chunk = updates
+        .iter()
+        .find(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .expect("the resent turn streams its scripted answer");
+    assert_eq!(
+        chunk["params"]["update"]["content"],
+        json!({ "type": "text", "text": "AFTER-STOP" })
+    );
+}
+
+#[test]
+fn acp_daemon_attached_failed_turn_publishes_only_the_error_boundary() {
+    // A failed turn (here: the empty-prompt rejection) publishes one
+    // error boundary and no terminal-quiescence update (TS settle catch).
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": [] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"]["code"], -32603,
+        "the failed turn errors the request: {prompt_response}"
+    );
+    assert!(
+        prompt_response["error"]["data"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Prompt cannot be empty"),
+        "the worker's failure is the error: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["kind"], "other",
+        "the harness failure is classified as the generic kind: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["retryable"], false,
+        "a harness failure is never boundary-retryable: {prompt_response}"
+    );
+    let mut boundaries = 0;
+    for update in &updates {
+        let body = &update["params"]["update"];
+        let meta = &body["_meta"]["ai.primeintellect.prime-agent"];
+        assert_ne!(
+            meta["phase"], "terminalQuiescence",
+            "a failed turn never publishes a terminal frame: {updates:?}"
+        );
+        if meta["phase"] == "responseBoundary" {
+            boundaries += 1;
+            assert_eq!(
+                meta["terminalQuiescenceExpected"], false,
+                "the one boundary declares no terminal expectation: {updates:?}"
+            );
+            assert_eq!(meta["outcome"], "error");
+        }
+    }
+    assert_eq!(
+        boundaries, 1,
+        "the failed turn published exactly one correlated error boundary: {updates:?}"
+    );
+}
+
+#[test]
+fn acp_failed_prompt_error_data_classifies_the_transport_failure() {
+    // A provider connection failure fails the turn: the ACP error data
+    // carries the nano-rlm #200 contract — `kind: "model_transport"` (the
+    // one retryable class), the fine #2117 `category` alongside — so a
+    // host separates retryable model transport from harness bugs without
+    // parsing the details text. `repeatLastResponse` keeps every
+    // auto-retry attempt failing with the same connection-reset
+    // disclosure, so the settled turn error is the scripted transport
+    // failure.
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({
+            "engine": "faux",
+            "repeatLastResponse": true,
+            "responses": [
+                { "stopReason": "error", "errorMessage": "ECONNRESET: model connection reset mid-stream" }
+            ]
+        }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a question" }] }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"]["code"], -32603,
+        "the failed turn errors the request: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["kind"], "model_transport",
+        "the connection reset reports the #200 model_transport kind: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["category"], "network",
+        "the fine #2117 category rides separately: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["retryable"], true,
+        "the exhausted connection family is the one retryable class: {prompt_response}"
+    );
+    assert!(
+        prompt_response["error"]["data"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ECONNRESET"),
+        "the raw failure still rides the details text: {prompt_response}"
+    );
+}
+
+#[test]
+fn acp_failed_prompt_error_data_marks_provider_failures_not_retryable() {
+    // The other half of the #200 contract: a 401 classifies as
+    // `authentication` and is never marked retryable — the boundary's
+    // `retryable` covers only the model connection family, not the
+    // auto-retry policy's verdicts (a host retry is a fresh prompt, not
+    // an idempotent replay).
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({
+            "engine": "faux",
+            "repeatLastResponse": true,
+            "responses": [
+                { "stopReason": "error", "errorMessage": "401 unauthorized" }
+            ]
+        }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a question" }] }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"]["code"], -32603,
+        "the failed turn errors the request: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["kind"], "authentication",
+        "the 401 carries its provider category as the kind: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["category"], "authentication",
+        "the fine #2117 category matches the kind off the transport family: {prompt_response}"
+    );
+    assert_eq!(
+        prompt_response["error"]["data"]["retryable"], false,
+        "an authentication failure is never boundary-retryable: {prompt_response}"
+    );
+    assert!(
+        prompt_response["error"]["data"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("401"),
+        "the raw failure still rides the details text: {prompt_response}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn acp_daemon_attached_supervisor_loss_fails_the_prompt() {
+    // The supervisor dies while a prompt is in flight: the pending
+    // request must fail fast with an error response, never hang, because
+    // the link close is the turn's liveness bound (turn-long requests
+    // carry no timer).
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [
+            { "text": "a paced answer that streams slowly enough to outlive the supervisor" },
+        ] }),
+    );
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    // Readiness is the turn's own first streamed chunk: the prompt is
+    // provably in flight before the supervisor goes away.
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    // Crash the supervisor (no graceful drain, so the in-flight response
+    // can never arrive). Its pid comes from the hello frame every new
+    // connection receives.
+    let probe = pa_types::platform::transport::connect_blocking(&socket).expect("daemon socket");
+    let reader = probe.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(Duration::from_mins(2));
+    let hello = BufReader::new(reader)
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(&line.expect("daemon line")).expect("daemon JSON")
+        })
+        .find(|frame| frame["type"] == json!("daemon_hello"))
+        .expect("the daemon closed without a hello");
+    let pid = hello["supervisorPid"].as_u64().expect("supervisor pid");
+    drop(probe);
+    let killed = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .expect("kill the supervisor");
+    assert!(killed.success(), "the supervisor crash did not run");
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"],
+        json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {
+                "details": "the daemon connection closed mid-request",
+                // The lost supervisor link is classified like every other
+                // failed-prompt arm: typed data a host can distinguish
+                // from an untyped error, and never retryable — the turn's
+                // outcome is unknown, so a host retry may re-run
+                // side-effecting tools.
+                "kind": "other",
+                "category": "other",
+                "retryable": false,
+            }
+        }),
+        "the in-flight prompt fails fast on supervisor loss: {prompt_response}"
+    );
+}
+
+#[test]
+fn acp_daemon_attached_image_only_prompt_reaches_the_session() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": ["SAW-IMAGE"] }),
+    );
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // 1x1 PNG
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [
+                { "type": "image", "data": png, "mimeType": "image/png" },
+            ],
+        }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"]["stopReason"], "end_turn",
+        "an image-only prompt runs a turn: {prompt_response}"
+    );
+    // The stored user row carries the image: an empty text block first,
+    // then the images (TS `_buildPromptContent`).
+    let list = daemon_request(&socket, "img-list", &json!({ "type": "list" }));
+    let active_session_id = &list["data"]["sessions"][0]["activeSessionId"];
+    let messages = daemon_request(
+        &socket,
+        "img-msgs",
+        &json!({ "type": "get_messages", "activeSessionId": active_session_id }),
+    );
+    let user = messages["data"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "user")
+        .unwrap();
+    assert_eq!(
+        user["content"],
+        json!([
+            { "type": "text", "text": "" },
+            { "type": "image", "data": png, "mimeType": "image/png" },
+        ])
+    );
+}
+
+/// The verifiers `AgentRun.steer()` contract over the ACP SDK's extension
+/// method form (`_session/steering`): idle steering is refused without a
+/// turn, a steer during a running turn reaches the model inside that turn
+/// before the prompt answers, and a `messageId` retry delivers once.
+#[test]
+fn acp_steering_reaches_the_running_turn_before_the_prompt_answers() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "tokensPerSecond": 2, "responses": [
+            { "text": "a paced answer that streams slowly enough to steer mid-turn" },
+            "STEERED-OK",
+        ] }),
+    );
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let steering = |text: &str| {
+        json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": text }],
+            "messageId": "steer-1",
+            "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+        })
+    };
+    let no_turn = json!({ "outcome": "promptRequired", "reason": "noRunningTurn" });
+
+    let idle = client.request("_session/steering", &steering("too early"));
+    let (idle_response, _) = client.wait_response(idle, TIMEOUT);
+    assert_eq!(idle_response["result"], no_turn, "{idle_response}");
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "a slow question" }] }),
+    );
+    client.wait_update("agent_message_chunk", TIMEOUT);
+    let steer = client.request("_session/steering", &steering("STEER-NOTE"));
+    let (steer_response, before_receipt) = client.wait_response(steer, TIMEOUT);
+    assert_eq!(
+        steer_response["result"],
+        json!({ "outcome": "injected" }),
+        "{steer_response}"
+    );
+    assert!(
+        before_receipt
+            .iter()
+            .all(|frame| frame["id"] != json!(prompt)),
+        "the prompt answered before the steer was injected"
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_end_turn(&prompt_response);
+    assert!(
+        before_receipt.iter().chain(&updates).any(|update| {
+            update["params"]["update"]["content"] == json!({ "type": "text", "text": "STEERED-OK" })
+        }),
+        "the steered model call answers inside the prompt turn: {updates:?}"
+    );
+
+    let retry = client.request("_session/steering", &steering("STEER-NOTE"));
+    let (retry_response, _) = client.wait_response(retry, TIMEOUT);
+    assert_eq!(retry_response["result"], json!({ "outcome": "injected" }));
+    let conflict = client.request("_session/steering", &steering("other text"));
+    let (conflict_response, _) = client.wait_response(conflict, TIMEOUT);
+    assert_eq!(
+        conflict_response["error"]["code"], -32602,
+        "{conflict_response}"
+    );
+    let mut after = steering("after the turn");
+    after["messageId"] = json!("steer-2");
+    let after = client.request("_session/steering", &after);
+    let (after_response, _) = client.wait_response(after, TIMEOUT);
+    assert_eq!(after_response["result"], no_turn, "{after_response}");
+
+    let list = daemon_request(&socket, "steer-list", &json!({ "type": "list" }));
+    let active_session_id = &list["data"]["sessions"][0]["activeSessionId"];
+    let messages = daemon_request(
+        &socket,
+        "steer-msgs",
+        &json!({ "type": "get_messages", "activeSessionId": active_session_id }),
+    );
+    let user_texts: Vec<&Value> = messages["data"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| &message["content"])
+        .collect();
+    assert_eq!(
+        user_texts.len(),
+        2,
+        "the prompt and one steer reached the model: {user_texts:?}"
+    );
+    assert!(
+        user_texts[1].to_string().contains("STEER-NOTE"),
+        "the steer is the second user message: {user_texts:?}"
+    );
+}
+
+/// Stop the sandboxed supervisor a test spawned (the shared-daemon
+/// product behavior leaves it running; a test owns its sandbox).
+fn shutdown_sandboxed_daemon(socket: &std::path::Path) {
+    use std::io::Write as _;
+    let Ok(mut stream) = pa_types::platform::transport::connect_blocking(socket) else {
+        return;
+    };
+    let frame = format!(
+            "{{\"type\":\"command\",\"id\":\"shutdown-test\",\"protocol\":{{\"name\":\"prime-agent.daemon\",\"version\":{}}},\"command\":{{\"type\":\"shutdown\"}}}}\n",
+            pa_types::daemon::DAEMON_PROTOCOL_VERSION
+        );
+    let _ = stream.write_all(frame.as_bytes());
+    let _ = stream.flush();
+    // The supervisor exits after the shutdown response.
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+#[test]
+fn acp_compact_command_publishes_the_compaction_meta_and_end_turn() {
+    // The faux session is short, so `/compact` skips (TS
+    // `CompactionSkippedError`): the observable parity is the
+    // `compaction: {}` namespaced update and the normal end_turn response.
+    let script = json!({ "engine": "faux", "responses": ["one answer"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "/compact" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+
+    let compaction = updates
+        .iter()
+        .find(|update| {
+            let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+            meta.get("compaction").is_some_and(|value| !value.is_null())
+        })
+        .expect("a compaction meta frame");
+    let meta = &compaction["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+    assert_eq!(
+        meta["compaction"],
+        json!({}),
+        "a skipped compaction publishes the empty payload"
+    );
+    assert_eq!(meta["phase"], "event");
+
+    let boundary = updates.iter().any(|update| {
+        let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+        meta["phase"] == "responseBoundary" && meta["terminalQuiescenceExpected"] == true
+    });
+    assert!(boundary, "updates: {updates:?}");
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+}
+
+#[test]
+fn acp_goal_command_publishes_goal_meta_and_runs_the_continuation() {
+    // `/goal` start schedules its continuation as the turn's model segment:
+    // the goal meta frame precedes the streamed answer, and the usage
+    // accounting publishes a second goal frame after the message settles.
+    // The tiny budget bounds the goal loop the worker turn loop
+    // hosts (TS parity: the continuation loop runs inside the same
+    // session/prompt request): the crossing turn's budget-limit steer is
+    // the second model segment, and the budget_limited goal settles the
+    // prompt with end_turn instead of looping forever.
+    let script = json!({ "engine": "faux", "responses": ["GOAL-PROGRESS", "WRAP-UP"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "/goal --budget 5 reply with exactly: GOAL-PROGRESS" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+
+    let goal_frames: Vec<&Value> = updates
+        .iter()
+        .filter(|update| {
+            let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+            meta.get("goal").is_some_and(|value| !value.is_null())
+        })
+        .collect();
+    assert!(!goal_frames.is_empty(), "updates: {updates:?}");
+    let first =
+        &goal_frames[0]["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["goal"];
+    assert_eq!(first["status"], "active");
+    assert_eq!(first["objective"], "reply with exactly: GOAL-PROGRESS");
+    assert_eq!(first["tokenBudget"], 5);
+    assert_eq!(first["tokensUsed"], 0);
+    // The tiny budget crosses at the first turn, so the goal is budget_limited before the wrap-up
+    // steer segment runs.
+    assert!(goal_frames.len() >= 2, "goal frames: {goal_frames:?}");
+    let second =
+        &goal_frames[1]["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["goal"];
+    assert_eq!(second["status"], "budget_limited");
+    assert!(second["tokensUsed"].as_u64().unwrap_or(0) > 0);
+    // The steer's streamed answer is the second scripted response; the faux
+    // pacing may split it into chunks, so the joined text carries the contract.
+    let streamed: String = updates
+        .iter()
+        .filter_map(|update| update["params"]["update"]["content"]["text"].as_str())
+        .collect();
+    assert!(streamed.contains("GOAL-PROGRESS"), "updates: {updates:?}");
+    assert!(streamed.contains("WRAP-UP"), "updates: {updates:?}");
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+}
+
+#[test]
+fn acp_autonomous_token_limit_maps_to_max_tokens_stop_reason() {
+    // A one-token budget is exhausted by the first turn: the driver stops
+    // with the token limit, the completion envelope carries the autonomous
+    // accounting, and the stop reason is `max_tokens`.
+    let script = json!({ "engine": "faux", "responses": ["an answer"] });
+    let mut client = AcpChild::spawn(
+        &[
+            "--mode",
+            "acp",
+            "--no-session",
+            "--autonomous",
+            "--autonomous-max-tokens",
+            "1",
+        ],
+        &script,
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "do the thing" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+
+    let completion = updates
+        .iter()
+        .find(|update| {
+            let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+            meta["phase"] == "event" && meta.get("autonomous").is_some_and(|v| !v.is_null())
+        })
+        .expect("an autonomous completion meta");
+    let autonomous =
+        &completion["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["autonomous"];
+    assert_eq!(autonomous["enabled"], true);
+    assert_eq!(autonomous["turnsUsed"], 1);
+    let quiescence =
+        &completion["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["quiescence"];
+    assert_eq!(quiescence["outstandingSubagents"], 0);
+
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "max_tokens" })
+    );
+}
+
+#[test]
+fn acp_autonomous_disabled_reports_end_turn_without_accounting() {
+    // Without autonomous flags the completion envelope carries no autonomous
+    // meta and the stop reason is end_turn.
+    let script = json!({ "engine": "faux", "responses": ["an answer"] });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "hi" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    for update in &updates {
+        let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+        assert!(
+            meta.get("autonomous")
+                .is_none_or(serde_json::Value::is_null),
+            "no autonomous meta"
+        );
+    }
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+}
+
+#[test]
+fn acp_truncated_final_response_retries_then_fails_the_turn() {
+    // A final reply cut off at the provider's output-token cap never ends
+    // the turn as its answer: it is retried once, and a second cut-off
+    // fails the prompt with an error instead of a stop reason. The stop
+    // reason stays per-turn: the following /compact prompt runs no model
+    // call and resolves end_turn.
+    let script = json!({
+        "engine": "faux",
+        "responses": [
+            { "text": "half an answer", "stopReason": "length" },
+            { "text": "half an answer again", "stopReason": "length" },
+            { "text": "never reached" },
+        ],
+    });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "write a long essay" }] }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"]["code"], -32603,
+        "the turn's response envelope: {prompt_response}"
+    );
+    assert!(prompt_response["error"]["data"]["details"]
+        .as_str()
+        .is_some_and(|details| details.contains("cut off at its output limit")));
+
+    let slash = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "/compact" }] }),
+    );
+    let (slash_response, _) = client.wait_response(slash, TIMEOUT);
+    assert_eq!(
+        slash_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+}
+
+#[test]
+fn acp_silent_final_response_is_retried_before_the_turn_ends() {
+    // A thinking-only clean stop is not an answer: the retry's reply is.
+    let script = json!({
+        "engine": "faux",
+        "responses": [
+            { "content": [{ "type": "thinking", "thinking": "planned the answer" }], "stopReason": "stop" },
+            "the answer",
+        ],
+    });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "explain the slow query" }] }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_end_turn(&prompt_response);
+    let streamed: String = updates
+        .iter()
+        .filter(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .filter_map(|update| update["params"]["update"]["content"]["text"].as_str())
+        .collect();
+    assert_eq!(streamed, "the answer");
+}
+
+#[test]
+fn acp_daemon_attached_reports_autonomous_accounting_and_limit_stop_reason() {
+    // An autonomous run with --max-turns 1: the completion envelope carries
+    // the _meta.autonomous accounting (TS waitForHeadlessCompletion), the
+    // quiescence observation counts the remaining continuations, and the
+    // turn limit surfaces as max_turn_requests (TS acpStopReason).
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": [
+            "enabling the run",
+            "one turn runs, then the limit stops the run",
+        ] }),
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, Duration::from_mins(1));
+    assert!(
+        new_response["result"]["sessionId"].is_string(),
+        "daemon-attached admission succeeds: {new_response}"
+    );
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let enable = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": "/autonomous on --max-turns 1" }],
+        }),
+    );
+    let (enable_response, updates) = client.wait_response(enable, Duration::from_mins(2));
+    assert_eq!(enable_response["result"]["stopReason"], "end_turn");
+    // The enabled accounting is already visible on the command turn's completion envelope.
+    let enabled_meta = updates.iter().find_map(|update| {
+        let meta =
+            &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["autonomous"];
+        (!meta.is_null()).then(|| meta.clone())
+    });
+    let enabled_meta = enabled_meta.expect("the enabled run's accounting reached the surface");
+    assert_eq!(enabled_meta["enabled"], true);
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": "say something" }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, Duration::from_mins(2));
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "max_turn_requests" }),
+        "the turn limit maps to the TS stop reason: {prompt_response}"
+    );
+    let accounted = updates.iter().find_map(|update| {
+        let meta =
+            &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["autonomous"];
+        (meta["enabled"] == json!(true) && meta["turnsUsed"] == json!(1)).then(|| meta.clone())
+    });
+    let accounted = accounted.expect("the limited turn's accounting reached the surface");
+    assert_eq!(accounted["continuationsUsed"], 0);
+    // The named `--max-turns 1` flag makes the unnamed limits the JSON-safe
+    // unlimited sentinel (TS parseAutonomousCommand budget fill).
+    let remaining = updates.iter().find_map(|update| {
+        let quiescence =
+            &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["quiescence"];
+        (!quiescence.is_null()).then(|| quiescence["remainingAutonomousContinuations"].clone())
+    });
+    assert_eq!(
+        remaining,
+        Some(json!(9_007_199_254_740_991u64)),
+        "the run's unlimited continuation budget minus used"
+    );
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, Duration::from_mins(1));
+    assert_eq!(close_response["result"], json!({}));
+    drop(client);
+}
+
+/// One raw daemon command on a fresh connection (the hello frame is skipped by the id match).
+fn daemon_request(socket: &std::path::Path, id: &str, command: &Value) -> Value {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let mut writer =
+        pa_types::platform::transport::connect_blocking(socket).expect("daemon socket");
+    let reader = writer.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(Duration::from_mins(2));
+    let protocol = json!({ "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION });
+    let frame = json!({ "type": "command", "id": id, "protocol": protocol, "command": command });
+    writeln!(writer, "{frame}").expect("daemon frame");
+    writer.flush().expect("daemon flush");
+    BufReader::new(reader)
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(&line.expect("daemon line")).expect("daemon JSON")
+        })
+        .find(|frame| frame["id"] == json!(id))
+        .unwrap_or_else(|| panic!("the daemon closed without answering {id}"))
+}
+
+#[test]
+fn acp_daemon_attached_forwards_cli_session_options() {
+    // Outside the agent dir: only --skill loads it.
+    let skill_home = tempfile::TempDir::new().unwrap();
+    let skill_dir = skill_home.path().join("argv-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: acp-argv-probe\ndescription: probe\n---",
+    )
+    .unwrap();
+    let skill = skill_dir.to_str().unwrap().to_string();
+    let mut client = AcpChild::spawn(
+        &[
+            "--mode",
+            "acp",
+            "--no-session",
+            "--append-system-prompt",
+            "ACP_ARGV_MARKER",
+            "--skill",
+            &skill,
+            "--autonomous",
+            "--autonomous-max-turns",
+            "1",
+        ],
+        &json!({ "engine": "faux", "responses": ["one turn, then the limit stops"] }),
+    );
+    let socket = client.socket.clone();
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let list = daemon_request(&socket, "argv-list", &json!({ "type": "list" }));
+    let active_session_id = &list["data"]["sessions"][0]["activeSessionId"];
+    let get_prompt = json!({ "type": "get_system_prompt", "activeSessionId": active_session_id });
+    let reply = daemon_request(&socket, "argv-prompt", &get_prompt);
+    let system_prompt = reply["data"]["systemPrompt"].as_str().unwrap_or_else(|| {
+        panic!("the worker's system prompt: {reply} (list: {list}, new: {new_response})")
+    });
+    assert!(
+        system_prompt.contains("ACP_ARGV_MARKER"),
+        "--append-system-prompt reaches the worker"
+    );
+    assert!(
+        system_prompt.contains("<name>acp-argv-probe</name>"),
+        "--skill reaches the worker"
+    );
+    let turn = client.request(
+        "session/prompt",
+        &json!({ "sessionId": new_response["result"]["sessionId"], "prompt": [{ "type": "text", "text": "say something" }] }),
+    );
+    let (turn_response, _) = client.wait_response(turn, Duration::from_mins(2));
+    assert_eq!(
+        turn_response["result"],
+        json!({ "stopReason": "max_turn_requests" })
+    );
+    drop(client);
+}
+
+/// Spawn with compaction settings written into the worker's agent dir
+/// (`<home>/.wasmedge-agent`: the worker inherits the child's HOME).
+fn spawn_with_compaction_settings(
+    args: &[&str],
+    script: &serde_json::Value,
+    reserve_tokens: u64,
+    keep_recent_tokens: u64,
+) -> AcpChild {
+    let home = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".wasmedge-agent")).expect("agent dir");
+    std::fs::write(
+        home.path().join(".wasmedge-agent/settings.json"),
+        json!({
+            "compaction": {
+                "enabled": true,
+                "reserveTokens": reserve_tokens,
+                "keepRecentTokens": keep_recent_tokens,
+            }
+        })
+        .to_string(),
+    )
+    .expect("write settings.json");
+    let socket = home.path().join("daemon.sock");
+    std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+    let child = daemon_attached_command(home.path(), &socket, args)
+        .spawn()
+        .expect("binary present");
+    AcpChild::wrap(child, Some(home), socket)
+}
+
+/// The compaction metas among a turn's updates (a ran compaction carries
+/// `tokensBefore`/`summary`, the others the empty payload).
+fn compaction_metas(updates: &[Value]) -> Vec<Value> {
+    updates
+        .iter()
+        .filter_map(|update| {
+            let meta = &update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"];
+            Some(meta["compaction"].clone()).filter(|value| !value.is_null())
+        })
+        .collect()
+}
+
+/// A settled turn crossing the reserve headroom compacts at the boundary and publishes the
+/// `compaction` meta (a single-turn skip publishes the empty payload).
+#[test]
+fn acp_threshold_auto_compaction_publishes_the_compaction_meta() {
+    let script = json!({
+        "engine": "faux",
+        "contextWindow": 128_000,
+        "maxTokens": 4_096,
+        "responses": [
+            { "text": "turn one reply" },
+            { "text": "turn two reply" },
+            { "text": "the auto summary" },
+        ]
+    });
+    let mut client = spawn_with_compaction_settings(
+        &["--mode", "acp", "--no-session"],
+        &script,
+        128_000 - 4_096 - 500,
+        10,
+    );
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": format!("turn one {}", "x".repeat(8_000)) }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_end_turn(&prompt_response);
+    let metas = compaction_metas(&updates);
+    assert!(!metas.is_empty(), "the threshold arm ran: {updates:?}");
+    assert!(
+        metas
+            .iter()
+            .all(|meta| meta.as_object().is_some_and(serde_json::Map::is_empty)),
+        "the single-turn compaction skipped: {metas:?}"
+    );
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": "turn two" }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_end_turn(&prompt_response);
+    let metas = compaction_metas(&updates);
+    let ran = metas
+        .iter()
+        .find(|meta| {
+            meta["summary"]
+                .as_str()
+                .is_some_and(|summary| summary.contains("the auto summary"))
+        })
+        .unwrap_or_else(|| panic!("the compaction ran and published: {metas:?}"));
+    assert!(ran["tokensBefore"].as_u64().unwrap() > 0);
+}
+
+/// A settled turn's response implies the next prompt is admissible: the
+/// turn releases the session's single-prompt slot before its reply
+/// leaves, so a client that prompts again the instant it reads the
+/// response is admitted. Twenty back-to-back prompts keep every
+/// settle-to-next-admission window covered.
+#[test]
+fn acp_settled_prompt_immediately_admits_the_next_prompt() {
+    let script = json!({
+        "engine": "faux",
+        "contextWindow": 128_000,
+        "responses": (0..30)
+            .map(|index| json!({ "text": format!("settled turn reply {index}") }))
+            .collect::<Vec<_>>(),
+    });
+    let mut client = AcpChild::spawn(&["--mode", "acp", "--no-session"], &script);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for turn in 0..20 {
+        let prompt = client.request(
+            "session/prompt",
+            &json!({
+                "sessionId": session_id,
+                "prompt": [{ "type": "text", "text": format!("settled turn {turn}") }],
+            }),
+        );
+        let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+        assert_eq!(
+            prompt_response["result"]["stopReason"], "end_turn",
+            "turn {turn}: the settled turn raced the next prompt's admission: {prompt_response}"
+        );
+    }
+}
+
+/// The overflow arm on the ACP turn path: a provider context-overflow
+/// error runs one compact-and-retry at the boundary and the retried turn
+/// settles the prompt with `end_turn` instead of the error (TS
+/// `_checkCompaction` Case 1, binary level).
+#[test]
+fn acp_overflow_recovery_compacts_and_retries_the_turn() {
+    let script = json!({
+        "engine": "faux",
+        "contextWindow": 128_000,
+        "responses": [
+            { "text": "seed reply" },
+            {
+                "text": "",
+                "stopReason": "error",
+                "errorMessage": "prompt is too long: 213462 tokens > 200000 maximum",
+            },
+            { "text": "the summary" },
+            { "text": "recovered reply" },
+        ]
+    });
+    let mut client =
+        spawn_with_compaction_settings(&["--mode", "acp", "--no-session"], &script, 1, 10);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": format!("seed turn {}", "x".repeat(48_000)) }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(prompt_response["result"]["stopReason"], "end_turn");
+    assert!(
+        compaction_metas(&updates).is_empty(),
+        "nothing fires below the headroom"
+    );
+
+    // The overflow probe: the arm compacts once (the summarizer consumed
+    // the third scripted response) and the retried turn recovers. The
+    // daemon path releases the prompt slot before it answers the seed
+    // turn, so the probe cannot bounce off the running-turn guard.
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": format!("overflow probe {}", "x".repeat(2_000)) }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" }),
+        "the retry recovered the turn: {prompt_response}"
+    );
+    let metas = compaction_metas(&updates);
+    assert_eq!(metas.len(), 1, "one compaction meta: {metas:?}");
+    assert_eq!(metas[0]["summary"], "the summary");
+    assert!(metas[0]["tokensBefore"].as_u64().unwrap() > 0);
+}
+
+/// The byte-size overflow class through the arm end to end: a 413 whose
+/// live body carries `error.type: "invalid_request_error"` (the gateway's
+/// shape for a request over the body-size cap) must run the same
+/// compact-and-retry as a token overflow — the unrecognized shape is the
+/// wedged image-heavy session: a permanent invalid request that replays the
+/// same oversized body forever.
+#[test]
+fn acp_overflow_recovery_recovers_from_the_live_413_body() {
+    let script = json!({
+        "engine": "faux",
+        "contextWindow": 128_000,
+        "responses": [
+            { "text": "seed reply" },
+            {
+                "text": "",
+                "stopReason": "error",
+                "errorMessage": "413 Hosted decision request exceeds the body size limit.",
+            },
+            { "text": "the summary" },
+            { "text": "recovered reply" },
+        ]
+    });
+    let mut client =
+        spawn_with_compaction_settings(&["--mode", "acp", "--no-session"], &script, 1, 10);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let new = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (new_response, _) = client.wait_response(new, TIMEOUT);
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": format!("seed turn {}", "x".repeat(48_000)) }],
+        }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_end_turn(&prompt_response);
+
+    // The live 413 body settles as the overflow arm's input, not a
+    // permanent invalid request: one compaction, the retried turn recovers.
+    // (The seed turn carries mass so the compaction cut leaves history to
+    // summarize; the live body's wording is the only variable.)
+    let prompt = client.request(
+        "session/prompt",
+        &json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": format!("overflow probe {}", "x".repeat(2_000)) }],
+        }),
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" }),
+        "the retry recovered the turn: {prompt_response}"
+    );
+    let metas = compaction_metas(&updates);
+    assert_eq!(metas.len(), 1, "one compaction meta: {metas:?}");
+    assert_eq!(metas[0]["summary"], "the summary");
+}
+
+/// The kernel Python with wasmedge-agent-runtime installed; set
+/// `PA_E2E_KERNEL_PYTHON` to point at an explicit interpreter instead.
+/// Without one, the live RLM quiescence lanes below skip (with a note).
+fn kernel_python() -> Option<std::path::PathBuf> {
+    if let Some(explicit) = std::env::var_os("PA_E2E_KERNEL_PYTHON") {
+        let explicit = std::path::PathBuf::from(explicit);
+        assert!(
+            explicit.exists(),
+            "PA_E2E_KERNEL_PYTHON {} not found",
+            explicit.display()
+        );
+        return Some(explicit);
+    }
+    let candidate = std::path::PathBuf::from(std::env::var("HOME").map_or_else(
+        |_| "/home/ubuntu/.wasmedge-agent/kernel-venv/bin/python".to_string(),
+        |home| format!("{home}/.wasmedge-agent/kernel-venv/bin/python"),
+    ));
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    eprintln!(
+        "kernel python {} not found; skipping live RLM quiescence e2e",
+        candidate.display()
+    );
+    None
+}
+
+/// The namespaced wasmedge-agent payload of one session/update frame.
+fn update_meta(frame: &Value) -> &Value {
+    &frame["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]
+}
+
+/// The kernel cell of the spawn turn (the worker's
+/// `rlm_quiescence_barrier_e2e` lane): spawn one RLM child through the
+/// product `rlm.spawn` surface and record its child id.
+fn spawn_cell() -> &'static str {
+    "handle = await rlm.spawn(\"run the lane task\", name=\"kid\")\nprint(handle.rlm_child_id)"
+}
+
+/// The parent faux script whose turns run the spawn cell; the third
+/// response answers the settled child's terminal-notice turn (the no-reply
+/// notice the watcher queues on the parent).
+fn spawn_parent_script(spawn_cell: &str) -> Value {
+    json!({
+        "engine": "faux",
+        "responses": [
+            { "content": [
+                { "type": "toolCall", "name": "python_repl", "arguments": { "code": spawn_cell } },
+            ] },
+            { "text": "spawn turn done" },
+            { "text": "notice seen" },
+        ],
+    })
+}
+
+/// One scripted-children lane: a daemon-attached resident session whose
+/// parent turns spawn a held scripted child (resident because the RLM spawn
+/// ledger needs the parent's session file — a `--no-session` parent cannot
+/// spawn children). The parent's active session id is read at setup, before
+/// the spawn: once a child runs, `live_sessions` lists both workers.
+fn spawn_lane(
+    args: &[&str],
+    child_hold_ms: u64,
+    kernel_python: &std::path::Path,
+) -> (AcpChild, String, String) {
+    let parent = spawn_parent_script(spawn_cell());
+    let child_script = json!({ "responses": [ { "text": "kid done", "delayMs": child_hold_ms } ] });
+    let mut client = AcpChild::spawn_with_child_script(args, &parent, &child_script, kernel_python);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let session_id = new_session(&mut client);
+    let socket = client.socket.clone();
+    let active_session_id = live_sessions(&socket).remove(0)["activeSessionId"]
+        .as_str()
+        .expect("the parent session id")
+        .to_string();
+    (client, session_id, active_session_id)
+}
+
+/// The ACP settle waits for RLM quiescence (TS #1612): the completion
+/// update reports the live outstanding-subagent count, the terminal update
+/// reports zero, and the settled child's terminal-notice turn ("notice
+/// seen") drains inside the barrier, between the two.
+#[test]
+fn acp_prompt_settles_after_rlm_quiescence() {
+    let Some(kernel_python) = kernel_python() else {
+        return;
+    };
+    let (mut client, session_id, _) = spawn_lane(&["--mode", "acp"], 5_000, &kernel_python);
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "spawn the kid" }] }),
+    );
+    // Readiness is the completion update itself: the parent turn settled,
+    // the held child turn is still in flight.
+    let completion = client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        meta["phase"] == "event" && !meta["quiescence"].is_null()
+    });
+    assert_eq!(
+        update_meta(&completion)["quiescence"]["outstandingSubagents"],
+        1,
+        "the completion reports the live child: {completion}"
+    );
+    // The settled child's terminal-notice turn drains inside the barrier:
+    // its streamed answer lands between the completion and the terminal.
+    let mut notice_seen = false;
+    let terminal = client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        if meta["phase"] != "terminalQuiescence" {
+            notice_seen |= frame["params"]["update"]["content"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("notice seen"));
+            return false;
+        }
+        true
+    });
+    assert!(
+        notice_seen,
+        "the settled child's notice turn drained inside the barrier: {terminal}"
+    );
+    assert_eq!(
+        update_meta(&terminal)["quiescence"]["outstandingSubagents"],
+        0,
+        "the terminal reports a quiet family: {terminal}"
+    );
+    let (prompt_response, updates) = client.wait_response(prompt, TIMEOUT);
+    assert!(
+        updates.is_empty(),
+        "the terminal frame is the last notification before the response: {updates:?}"
+    );
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+}
+
+/// The bash quiescence observation (the eval harness's `terminalQuiescence`
+/// meta): a turn that launches a detached `bash()` job settles clean while
+/// the job still runs, and the completion and terminal quiescence frames
+/// report the outstanding background job — never the subagent count — so a
+/// host that closes on quiescence holds the episode. After the job's
+/// `[bash-done]` wake is consumed, a quiet turn reports zero.
+#[test]
+fn acp_prompt_reports_outstanding_background_bash_jobs() {
+    let Some(kernel_python) = kernel_python() else {
+        return;
+    };
+    let script = json!({
+        "engine": "faux",
+        "responses": [
+            { "content": [
+                { "type": "toolCall", "name": "python_repl", "arguments": { "code":
+                    "from rlm import bash\nhandle = bash('sleep 5; echo QUIESCENT_JOB_DONE')\nprint('job launched', handle.running)" } },
+            ] },
+            { "text": "bash lane turn done" },
+            { "text": "notice seen" },
+            { "text": "quiet turn" },
+        ],
+    });
+    let mut client = AcpChild::spawn_with_kernel(&["--mode", "acp"], &script, &kernel_python);
+    let init = client.request("initialize", &initialize_params());
+    let _ = client.wait_response(init, TIMEOUT);
+    let session_id = new_session(&mut client);
+
+    // THE TURN: the tool call launches the detached job, the model ends the
+    // turn clean, and the ACP settle observes quiescence while the job runs.
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "run the detached job" }] }),
+    );
+    let completion = client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        meta["phase"] == "event" && !meta["quiescence"].is_null()
+    });
+    assert_eq!(
+        update_meta(&completion)["quiescence"]["outstandingBackgroundJobs"],
+        1,
+        "the completion never reported the live background job: {completion}"
+    );
+    let terminal = client.wait_frame(TIMEOUT, |frame| {
+        update_meta(frame)["phase"] == "terminalQuiescence"
+    });
+    assert_eq!(
+        update_meta(&terminal)["quiescence"]["outstandingSubagents"],
+        0,
+        "the background job must count as bash work, not a subagent: {terminal}"
+    );
+    assert_eq!(
+        update_meta(&terminal)["quiescence"]["outstandingBackgroundJobs"],
+        1,
+        "the terminal quiescence never reported the live background job: {terminal}"
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+
+    // The job finishes and its `[bash-done]` wake is consumed by the session
+    // (the "notice seen" turn can only follow the notice).
+    client.wait_frame(TIMEOUT, |frame| {
+        frame["params"]["update"]["content"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("notice seen"))
+    });
+
+    // THE QUIET TURN: nothing will wake the session from the bash lane —
+    // both quiescence frames report zero.
+    let quiet = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "are we quiet now" }] }),
+    );
+    let quiet_completion = client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        meta["phase"] == "event" && !meta["quiescence"].is_null()
+    });
+    assert_eq!(
+        update_meta(&quiet_completion)["quiescence"]["outstandingBackgroundJobs"],
+        0,
+        "the quiet turn's completion still reported background work: {quiet_completion}"
+    );
+    let quiet_terminal = client.wait_frame(TIMEOUT, |frame| {
+        update_meta(frame)["phase"] == "terminalQuiescence"
+    });
+    assert_eq!(
+        update_meta(&quiet_terminal)["quiescence"]["outstandingBackgroundJobs"],
+        0,
+        "the quiet turn's terminal quiescence still reported background work: {quiet_terminal}"
+    );
+    let (quiet_response, updates) = client.wait_response(quiet, TIMEOUT);
+    assert_eq!(
+        quiet_response["result"],
+        json!({ "stopReason": "end_turn" })
+    );
+    assert!(
+        updates.iter().all(|frame| {
+            let meta = update_meta(frame);
+            meta["phase"] != "terminalQuiescence"
+                || meta["quiescence"]["outstandingBackgroundJobs"] == 0
+        }),
+        "every terminal frame must report a quiet bash lane: {updates:?}"
+    );
+}
+
+/// A cancel during the settle cancels the outstanding subagents (TS
+/// `cancelOutstandingRlmChildren` inside `stopSessionWork`): the prompt
+/// answers cancelled once the stop sequence cancelled the held child, and
+/// the roster reports the child cancelled. Close goes through the same
+/// stop sequence, so it is not retested here.
+#[test]
+fn acp_cancel_during_settle_cancels_the_subagents() {
+    let Some(kernel_python) = kernel_python() else {
+        return;
+    };
+    let (mut client, session_id, active_session_id) =
+        spawn_lane(&["--mode", "acp"], 120_000, &kernel_python);
+    let socket = client.socket.clone();
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "spawn the kid" }] }),
+    );
+    // Readiness is the completion update with the held child outstanding:
+    // the settle is provably waiting on it.
+    client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        meta["phase"] == "event" && meta["quiescence"]["outstandingSubagents"] == 1
+    });
+    client.notify("session/cancel", &json!({ "sessionId": session_id }));
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["result"],
+        json!({ "stopReason": "cancelled" }),
+        "the cancel settles the prompt: {prompt_response}"
+    );
+    // The roster shows the child the stop sequence cancelled.
+    let roster = daemon_request(
+        &socket,
+        "children",
+        &json!({ "type": "get_rlm_children", "activeSessionId": active_session_id }),
+    );
+    let children = roster["data"]["children"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a children roster: {roster}"))
+        .clone();
+    assert_eq!(children.len(), 1, "one spawned child: {children:?}");
+    assert_eq!(
+        children[0]["status"], "cancelled",
+        "the stop cancelled the held child: {children:?}"
+    );
+}
+
+/// EOF during the settle exits without waiting for the outstanding
+/// subagents (TS aborts the controller and exits): the process is gone
+/// while the resident session's held child still runs — EOF does not
+/// cancel a resident session's children.
+#[test]
+fn acp_eof_during_settle_exits_and_leaves_resident_subagents() {
+    let Some(kernel_python) = kernel_python() else {
+        return;
+    };
+    let (mut client, session_id, active_session_id) =
+        spawn_lane(&["--mode", "acp"], 120_000, &kernel_python);
+    let socket = client.socket.clone();
+    client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "spawn the kid" }] }),
+    );
+    client.wait_frame(TIMEOUT, |frame| {
+        let meta = update_meta(frame);
+        meta["phase"] == "event" && meta["quiescence"]["outstandingSubagents"] == 1
+    });
+    client.close_stdin();
+    assert!(client.child.wait().expect("the ACP child exits").success());
+    // The resident session survives with the held child still running.
+    let roster = daemon_request(
+        &socket,
+        "children",
+        &json!({ "type": "get_rlm_children", "activeSessionId": active_session_id }),
+    );
+    let children = roster["data"]["children"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a children roster: {roster}"))
+        .clone();
+    assert_eq!(children.len(), 1, "one spawned child: {children:?}");
+    assert_eq!(
+        children[0]["status"], "running",
+        "EOF left the resident child running: {children:?}"
+    );
+}
+
+/// A heartbeat change on the bound session broadcasts
+/// `heartbeats_changed` to every client; the ACP link publishes the
+/// change at origin turn 0 (connection-scoped like TS, never the active
+/// prompt turn).
+#[test]
+fn acp_heartbeat_change_publishes_turn_zero_meta() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp"],
+        &json!({ "engine": "faux", "responses": ["The Nile."] }),
+    );
+    let socket = client.socket.clone();
+    let _session_id = initialize_and_new_session(&mut client);
+    let active_session_id = live_sessions(&socket)[0]["activeSessionId"].clone();
+    let set = daemon_request(
+        &socket,
+        "heartbeat-set",
+        &json!({
+            "type": "heartbeat_set",
+            "activeSessionId": active_session_id,
+            "schedule": "every 90 seconds",
+            "prompt": "check in",
+        }),
+    );
+    assert_eq!(set["success"], true, "{set}");
+    let change = client.wait_frame(TIMEOUT, |frame| {
+        update_meta(frame)["heartbeatsChanged"] == json!(true)
+    });
+    assert_eq!(update_meta(&change)["promptTurnId"], 0, "{change}");
+    assert_eq!(update_meta(&change)["phase"], "event", "{change}");
+}
+
+/// A bash run another client started on the bound session (the daemon's
+/// `execute_bash`) surfaces as one synthetic tool call keyed by run id:
+/// the started run, the streamed chunk, and the settled status.
+#[test]
+fn acp_user_bash_maps_to_a_synthetic_tool_call() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp"],
+        &json!({ "engine": "faux", "responses": ["The Nile."] }),
+    );
+    let socket = client.socket.clone();
+    let _session_id = initialize_and_new_session(&mut client);
+    let active_session_id = live_sessions(&socket)[0]["activeSessionId"].clone();
+    let run = daemon_request(
+        &socket,
+        "bash",
+        &json!({
+            "type": "execute_bash",
+            "activeSessionId": active_session_id,
+            "command": "printf hi",
+            "runId": "r1",
+        }),
+    );
+    assert_eq!(run["success"], true, "{run}");
+    let start = client.wait_frame(TIMEOUT, |frame| {
+        frame["params"]["update"]["sessionUpdate"] == "tool_call"
+    });
+    assert_eq!(
+        start["params"]["update"]["toolCallId"],
+        "prime-agent-bash-r1"
+    );
+    assert_eq!(start["params"]["update"]["title"], "printf hi");
+    assert_eq!(start["params"]["update"]["kind"], "execute");
+    assert_eq!(
+        start["params"]["update"]["rawInput"],
+        json!({ "command": "printf hi" })
+    );
+    let output = client.wait_frame(TIMEOUT, |frame| {
+        frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+            && frame["params"]["update"]["toolCallId"] == "prime-agent-bash-r1"
+            && frame["params"]["update"]["status"] == "in_progress"
+    });
+    assert_eq!(
+        output["params"]["update"]["content"][0]["content"]["text"], "hi",
+        "{output}"
+    );
+    let end = client.wait_frame(TIMEOUT, |frame| {
+        frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+            && frame["params"]["update"]["toolCallId"] == "prime-agent-bash-r1"
+            && frame["params"]["update"]["status"] == "completed"
+    });
+    assert!(end["params"]["update"].get("content").is_none(), "{end}");
+}
+
+#[cfg(unix)]
+#[test]
+fn acp_daemon_attached_close_stop_failure_fences_the_session() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": ["unused"] }),
+    );
+    let session_id = initialize_and_new_session(&mut client);
+    let probe =
+        pa_types::platform::transport::connect_blocking(&client.socket).expect("daemon socket");
+    let reader = probe.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(Duration::from_mins(2));
+    let hello = BufReader::new(reader)
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(&line.expect("daemon line")).expect("daemon JSON")
+        })
+        .find(|frame| frame["type"] == json!("daemon_hello"))
+        .expect("the daemon closed without a hello");
+    let pid = hello["supervisorPid"].as_u64().expect("supervisor pid");
+    drop(probe);
+    let killed = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .expect("kill the supervisor");
+    assert!(killed.success(), "the supervisor crash did not run");
+
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(
+        close_response["error"]["code"], -32603,
+        "the failed stop errors the close: {close_response}"
+    );
+    let stop_failure = close_response["error"]["data"]["details"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        stop_failure.contains("the daemon connection"),
+        "the stop error is the fence's message: {stop_failure}"
+    );
+
+    let prompt = client.request(
+        "session/prompt",
+        &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": "after the failed stop" }] }),
+    );
+    let (prompt_response, _) = client.wait_response(prompt, TIMEOUT);
+    assert_eq!(
+        prompt_response["error"]["data"]["details"],
+        format!("ACP session stop failed: {stop_failure}"),
+        "a prompt while the stop failed answers the TS fence: {prompt_response}"
+    );
+
+    let refused = client.request("session/new", &json!({ "mcpServers": [] }));
+    let (refused_response, _) = client.wait_response(refused, TIMEOUT);
+    assert_eq!(
+        refused_response["error"]["data"]["details"],
+        "wasmedge-agent ACP mode hosts one session per connection; start another wasmedge-agent process for a second session",
+        "the close-failed session keeps the single-session slot: {refused_response}"
+    );
+
+    let close_again = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (again_response, _) = client.wait_response(close_again, TIMEOUT);
+    assert_eq!(again_response["error"]["code"], -32603);
+    assert_ne!(
+        again_response["error"]["data"]["details"],
+        format!("Unknown ACP session: {session_id}"),
+        "the session stays bound after the failed close: {again_response}"
+    );
+    drop(client);
+}
+
+#[test]
+fn acp_daemon_attached_close_holds_the_input_pause_until_the_next_session_new() {
+    let mut client = AcpChild::spawn(
+        &["--mode", "acp", "--no-session"],
+        &json!({ "engine": "faux", "responses": ["first", { "text": "FOREIGN", "delayMs": 150_000 }] }),
+    );
+    let socket = client.socket.clone();
+    let session_id = initialize_and_new_session(&mut client);
+    assert_prompt_ends_turn(&mut client, &session_id, "one");
+
+    let close = client.request("session/close", &json!({ "sessionId": session_id }));
+    let (close_response, _) = client.wait_response(close, TIMEOUT);
+    assert_eq!(close_response["result"], json!({}));
+
+    let active_session_id = live_sessions(&socket)[0]["activeSessionId"]
+        .as_str()
+        .expect("the resident session")
+        .to_string();
+    let _ = daemon_request(
+        &socket,
+        "foreign-follow-up",
+        &json!({ "type": "follow_up", "activeSessionId": active_session_id, "message": "foreign" }),
+    );
+    let idle = daemon_request(
+        &socket,
+        "foreign-idle",
+        &json!({ "type": "wait_for_idle", "activeSessionId": active_session_id }),
+    );
+    assert!(
+        idle["success"] == json!(true),
+        "no foreign turn runs on the resident session while the close holds the input pause: {idle}"
+    );
+
+    let _second = new_session(&mut client);
+    drop(client);
+}

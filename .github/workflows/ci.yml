@@ -22,7 +22,7 @@ jobs:
   build-check:
     name: Build and check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -51,7 +51,7 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build:tools
 
       - name: Check
         run: npm run check
@@ -110,7 +110,7 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build:tools
 
       - name: Test
         working-directory: ${{ matrix.package }}
@@ -122,7 +122,7 @@ jobs:
   test-rust-cell:
     name: Cell runtime (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -237,7 +237,15 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build:tools
+
+      - name: Build and exercise the native agent host
+        if: startsWith(matrix.shard, '1/')
+        run: |
+          cargo fmt --all --check
+          cargo check --workspace --all-targets --locked
+          npm run build:native
+          node scripts/test-native-cells.mjs
 
       - name: Cell tests (integration + suite)
         working-directory: packages/coding-agent

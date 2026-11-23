@@ -2,15 +2,17 @@
 
 **A runtime-swap fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent): the model writes Rust instead of Python, and every cell runs sandboxed in [WasmEdge](https://github.com/WasmEdge/WasmEdge).**
 
-Status: the core Rust/WasmEdge runtime is implemented; further design work is
-tracked in `DESIGN.md`. The public
-surface is the fork's own: the command is `wasmedge-agent`, the environment
-prefix is `WASMEDGE_AGENT_*`, and configuration lives in `~/.wasmedge-agent`.
-`DESIGN.md` D25 held those at upstream identities until M5; that rename has
-since landed. The inherited npm workspace identifiers in the source tree are
-implementation details, not the public install path.
+The CLI, TUI, daemon, agent loop, session management and providers run in the
+upstream Rust workspace, synchronized through [`798d9703`](https://github.com/PrimeIntellect-ai/prime-agent/commit/798d97032a3ec6d70142cc75c0420cb2b260f194).
+The native host invokes the fork's existing Node tool worker for Rust/WASI cells
+and the host shell. The worker owns Cargo builds, the WasmEdge process, library
+transactions, resource controls and the guest bridge. The TypeScript SDK and
+historical benchmark harness remain available in `packages/`.
 
-## What changes, what stays
+The executable is `wasmedge-agent`, environment overrides use `WASMEDGE_AGENT_*`,
+and configuration lives in `~/.wasmedge-agent`.
+
+## Runtime comparison
 
 The benchmark baseline's design — one programmatic control-environment tool, recursive
 `rlm(...)` subagents, the continual harness — stays. What this fork replaces is
@@ -18,13 +20,13 @@ the runtime under it:
 
 | | Benchmark baseline (`c22549a3`) | This fork |
 |---|---|---|
-| Host harness | TypeScript | Retained and adapted TypeScript harness |
+| Host harness | TypeScript | Native Rust host and Node tool worker |
 | Model-facing tool | `ipython` (persistent kernel) | `rust` (cell = complete program) |
 | Execution | host Python, no sandbox | `wasm32-wasip1` in WasmEdge, capability-scoped preopens |
 | Persistence | in-memory namespace + dill snapshots | explicit: `rlm::state` KV/blobs + growable `agent_lib` crate + files |
 | Feedback loop | runtime tracebacks | rustc diagnostics (compile errors are first-class feedback) |
 
-This comparison describes the pinned baseline, not today's upstream main.
+The October benchmark reports measure the pinned TypeScript hosts.
 The fork changes tool registration, session wiring, prompts, and persistence
 as well as the cell runtime. Cell builds are mandatory; sandboxed tests gate
 skill registration, not every edit. The runner rejects direct guest network
@@ -47,6 +49,26 @@ Evidence and design:
 - **Project design:** [feasibility study](REPORT.md), [design decisions](DESIGN.md), and [runtime reference](packages/coding-agent/docs/rlm-runtime.md).
 
 Rebuild the October 8 standalone reports with `uv run --with markdown==3.10.2 python poc/bench/consolidated-report.py`. The English exporter also regenerates their nine supporting HTML readers. It uses saved data and makes no model calls. For the October 10 workload reports, use the runner's `analyze` command described in the [documentation guide](docs/README.md).
+
+## Build and run
+
+From the checkout, install the Node dependencies and build the tool worker and
+the native host. Rust, the `wasm32-wasip1` target and a WasmEdge CLI are needed
+to execute a cell.
+
+```sh
+npm ci
+rustup target add wasm32-wasip1
+npm run build
+./wasmedge-agent.sh --dist doctor --json
+./wasmedge-agent.sh --dist
+```
+
+The native binary is `target/release/wasmedge-agent`. The launcher sets the
+package root for the bundled assets and applies the one-release legacy name
+fallbacks. A source run with `./wasmedge-agent.sh` rebuilds the native binary.
+Run `npm run check` for the fork checks and `node scripts/test-native-cells.mjs`
+for an offline end-to-end run with real WasmEdge cells.
 
 ## Try it
 

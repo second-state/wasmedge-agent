@@ -1,0 +1,1510 @@
+//! End-to-end RLM child machinery against the real `pa-daemon` supervisor: child sessions
+//! spawn through the supervisor link, run in their own worker processes, appear in the
+//! supervisor roster, settle with an answer, and die on delete (`rlm.spawn`/
+//! `list_subagents`/`collect`/`delete_subagent`/`create_session`).
+// Stack-resident futures by design; boxing for a lint tick is a perf regression.
+#![allow(clippy::large_futures)]
+// 64-bit-only targets; narrowing casts sit at bounded OS/protocol boundaries.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+// Fn length is a style gate, not correctness.
+#![allow(clippy::too_many_lines)]
+// API-shape opinions, not defects; the surfaces are deliberate.
+#![allow(
+    clippy::unnecessary_wraps,
+    clippy::zero_sized_map_values,
+    clippy::struct_excessive_bools,
+    clippy::struct_field_names
+)]
+#![cfg(unix)]
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use pa_core::session_engine::rlm_host::{
+    RlmCreateSessionRequest, RlmSpawnKind, RlmSpawnRequest, RlmSubagentHost,
+};
+use pa_daemon::rlm_children::{ParentIdentity, SupervisorChildSessions};
+use pa_daemon::supervisor_link::SupervisorLink;
+use serde_json::{json, Value};
+
+struct Daemon {
+    child: Child,
+    #[allow(dead_code)]
+    socket: PathBuf,
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+// The timeout panic path cannot wait on the child; the test exits and reaps it.
+#[allow(clippy::zombie_processes)]
+fn spawn_daemon(socket: &Path, agent_dir: &Path) -> Daemon {
+    let binary = env!("CARGO_BIN_EXE_pa-daemon");
+    let child = Command::new(binary)
+        .arg("supervisor")
+        .arg("--socket")
+        .arg(socket)
+        .arg("--agent-dir")
+        .arg(agent_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // A supervisor killed at teardown must not leak its session workers into later
+        // test binaries: the supervisor-lost exit runs here.
+        .env(
+            pa_daemon::worker::WORKER_SUPERVISOR_LOST_EXIT_MS_ENV,
+            "15000",
+        )
+        // The harness session dir must not leak: the supervisor keys its
+        // spawn ledger and default sessions by `WASMEDGE_AGENT_SESSION_DIR`,
+        // so an inherited override parts the ledger from the files these
+        // tests read.
+        .env_remove(pa_daemon::paths::SESSION_DIR_ENV)
+        .spawn()
+        .expect("spawn pa-daemon supervisor");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if socket.exists() {
+            return Daemon {
+                child,
+                socket: socket.to_path_buf(),
+            };
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("supervisor socket never appeared");
+}
+
+/// Minimal JSONL supervisor client (list / kill / `get_last_assistant_text`).
+struct Client {
+    reader: BufReader<UnixStream>,
+    writer: UnixStream,
+}
+
+impl Client {
+    fn connect(socket: &Path) -> (Self, Value) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match UnixStream::connect(socket) {
+                Ok(stream) => break stream,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("connect supervisor: {error}"),
+            }
+        };
+        let write_stream = stream.try_clone().expect("clone socket");
+        let mut client = Client {
+            reader: BufReader::new(stream),
+            writer: write_stream,
+        };
+        let hello = client.read_line();
+        (client, hello)
+    }
+
+    fn send_command(&mut self, id: &str, command: &Value) {
+        let envelope = json!({
+            "type": "command",
+            "id": id,
+            "protocol": { "name": "prime-agent.daemon", "version": 7 },
+            "command": command,
+        });
+        let mut line = serde_json::to_string(&envelope).expect("serialize command");
+        line.push('\n');
+        self.writer.write_all(line.as_bytes()).expect("send");
+        self.writer.flush().expect("flush");
+    }
+
+    fn read_line(&mut self) -> Value {
+        self.read_line_with_budget(Duration::from_secs(15))
+    }
+
+    /// `read_line` with a caller-chosen budget: a raw `create` that launches a worker answers
+    /// after the worker's connect budget (up to 30s, past the shared 15s line budget).
+    fn read_line_with_budget(&mut self, budget: Duration) -> Value {
+        let mut line = String::new();
+        let deadline = Instant::now() + budget;
+        self.reader
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("set timeout");
+        loop {
+            match self.reader.read_line(&mut line) {
+                Ok(0) => panic!("supervisor closed the connection"),
+                Ok(_) if line.trim().is_empty() => line.clear(),
+                Ok(_) => return serde_json::from_str(line.trim()).expect("parse response line"),
+                Err(error) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for supervisor line: {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn read_response(&mut self, id: &str) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            assert!(Instant::now() < deadline, "no response for id {id}");
+            let line = self.read_line();
+            if line.get("id").and_then(|v| v.as_str()) == Some(id) {
+                return line;
+            }
+        }
+    }
+
+    /// `read_response` with a worker-boot budget (the raw-create path's reader): every
+    /// line waits on the remaining wall budget, covering the host's `CREATE_TIMEOUT_MS`.
+    fn read_response_slow(&mut self, id: &str) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "no response for id {id}");
+            let line = self.read_line_with_budget(remaining);
+            if line.get("id").and_then(|v| v.as_str()) == Some(id) {
+                return line;
+            }
+        }
+    }
+}
+
+/// One scripted-response script file (the child worker's scripted engine).
+fn write_script(dir: &Path, answer: &str) -> PathBuf {
+    let script = dir.join("script.json");
+    std::fs::write(
+        &script,
+        json!({ "responses": [ { "text": answer, "delayMs": 30 } ] }).to_string(),
+    )
+    .expect("write script");
+    script
+}
+
+fn child_session_file(session_dir: &str) -> PathBuf {
+    std::fs::read_dir(session_dir)
+        .expect("child session directory")
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|extension| extension.to_str()) == Some("jsonl"))
+        .expect("child session file")
+}
+
+fn spawn_kickoff_count(session_file: &Path, child_id: &str) -> usize {
+    let kickoff_id = format!("spawn:{child_id}");
+    std::fs::read_to_string(session_file)
+        .expect("read child session file")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row.get("type").and_then(Value::as_str) == Some("custom_message")
+                && row.pointer("/details/id").and_then(Value::as_str) == Some(&kickoff_id)
+        })
+        .count()
+}
+
+/// Children registry bound to the running supervisor, with a parent identity rooted at `agent_dir`.
+fn children(socket: &Path, agent_dir: &Path, script: &Path, depth: u32) -> SupervisorChildSessions {
+    let sessions = SupervisorChildSessions::new(
+        Arc::new(SupervisorLink::new(socket.to_path_buf())),
+        agent_dir.to_path_buf(),
+        "parent-active-id".to_string(),
+        std::sync::Arc::new(pa_daemon::model_allowlist::ModelRefusalTelemetry::new(
+            agent_dir.to_path_buf(),
+            /*telemetry_disabled*/ true,
+        )),
+        String::new(),
+    );
+    sessions.set_identity(ParentIdentity {
+        rlm_depth: depth,
+        rlm_max_depth: 2,
+        // Off-catalog on purpose: scripted children do not resolve models.
+        model: Some("scripted/faux-1".to_string()),
+        cwd: Some(agent_dir.to_string_lossy().to_string()),
+        session_id: Some("parent-session-uuid".to_string()),
+        session_file: Some(agent_dir.join("parent.jsonl").to_string_lossy().to_string()),
+        thinking: None,
+        child_script: Some(script.to_string_lossy().to_string()),
+        builtin_tools: None,
+    });
+    sessions.set_parent_session_name(Some("parent-name".to_string()));
+    sessions
+}
+
+/// Poll a sync probe (JSONL supervisor client) until it yields a value.
+fn wait_until<T>(deadline: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + deadline;
+    loop {
+        if let Some(value) = probe() {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "condition never became true");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn spawn_request(name: &str, prompt: &str) -> RlmSpawnRequest {
+    RlmSpawnRequest {
+        prompt: prompt.to_string(),
+        name: Some(name.to_string()),
+        model: None,
+        thinking: None,
+        cwd: None,
+        kind: RlmSpawnKind::Subagent,
+        spawned_by_request_id: None,
+        factory: None,
+    }
+}
+
+/// A child spawned with a relative `cwd` runs in that directory and loads only
+/// its project context; a missing directory refuses the spawn.
+#[tokio::test]
+async fn rlm_spawn_cwd_starts_the_child_in_that_directory() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    let main = dir.path().join("main");
+    let project = dir.path().join("project");
+    let marker = format!("SPAWN_CWD_CONTEXT_{}", uuid::Uuid::new_v4().simple());
+    let main_marker = format!("SPAWN_CWD_PARENT_CONTEXT_{}", uuid::Uuid::new_v4().simple());
+    for (path, content) in [(&main, &main_marker), (&project, &marker)] {
+        std::fs::create_dir_all(path).expect("project dir");
+        std::fs::write(path.join("AGENTS.md"), content).expect("write AGENTS.md");
+    }
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, _) = Client::connect(&socket);
+    // The faux engine (and its faux model) runs the real agent engine, so the
+    // child builds its system prompt.
+    let script = dir.path().join("faux.json");
+    std::fs::write(
+        &script,
+        json!({ "engine": "faux", "responses": [ { "text": "child answer" } ] }).to_string(),
+    )
+    .expect("write script");
+    let children = children(&socket, &agent_dir, &script, 0);
+    children.set_identity(ParentIdentity {
+        rlm_depth: 0,
+        rlm_max_depth: 2,
+        model: Some("faux/faux-1".to_string()),
+        cwd: Some(main.to_string_lossy().to_string()),
+        session_id: Some("parent-session-uuid".to_string()),
+        session_file: Some(agent_dir.join("parent.jsonl").to_string_lossy().to_string()),
+        thinking: None,
+        child_script: Some(script.to_string_lossy().to_string()),
+        builtin_tools: None,
+    });
+
+    let handle = children
+        .spawn(RlmSpawnRequest {
+            cwd: Some("../project".to_string()),
+            ..spawn_request("worker-cwd", "ship the lane")
+        })
+        .await
+        .expect("spawn");
+    let summary = wait_until(Duration::from_secs(10), || {
+        client.send_command("l1", &json!({ "type": "list" }));
+        let list = client.read_response("l1");
+        list["data"]["sessions"].as_array().and_then(|sessions| {
+            sessions
+                .iter()
+                .find(|summary| summary["sessionName"] == "worker-cwd")
+                .cloned()
+        })
+    });
+    assert_eq!(
+        summary["cwd"],
+        json!(project.canonicalize().expect("project"))
+    );
+    client.send_command(
+        "prompt",
+        &json!({ "type": "get_system_prompt", "activeSessionId": summary["id"] }),
+    );
+    let context = client.read_response("prompt");
+    let system_prompt = context["data"]["systemPrompt"].as_str().unwrap_or_default();
+    assert!(system_prompt.contains(&marker), "{context}");
+    assert!(!system_prompt.contains(&main_marker), "{context}");
+
+    let missing = project.join("missing");
+    let error = children
+        .spawn(RlmSpawnRequest {
+            cwd: Some(missing.to_string_lossy().to_string()),
+            ..spawn_request("worker-missing", "ship the lane")
+        })
+        .await
+        .expect_err("missing cwd");
+    assert_eq!(
+        error.to_string(),
+        format!("rlm.spawn cwd {} is not a directory", missing.display())
+    );
+    let _ = children.delete_subagent(handle.rlm_child_id).await;
+}
+
+/// Spawn a child through the supervisor, observe it in both rosters, collect its answer,
+/// then delete it (both rosters drop it).
+#[tokio::test]
+async fn rlm_children_spawn_roster_collect_delete_end_to_end() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, hello) = Client::connect(&socket);
+    assert_eq!(hello["type"], "daemon_hello");
+    let script = write_script(dir.path(), "child answer");
+    let children = children(&socket, &agent_dir, &script, 0);
+
+    // Spawn: one child worker session created through the supervisor.
+    let handle = children
+        .spawn(spawn_request("worker-a", "ship the lane"))
+        .await
+        .expect("spawn");
+    // The registry sits outside a live worker turn here: release the
+    // detached task prompt at the boundary the worker would signal.
+    children.notify_turn_done();
+    assert_eq!(handle.name, "worker-a");
+    assert!(handle.rlm_child_id.starts_with("sub-"), "{handle:?}");
+    assert_eq!(handle.model, "scripted/faux-1");
+    // TS child-session layout: the child persists inside its per-child
+    // directory under the parent's session-artifacts tree.
+    let expected_dir = agent_dir
+        .join("session-artifacts")
+        .join("parent-session-uuid")
+        .join(&handle.rlm_child_id);
+    assert_eq!(handle.session_dir, expected_dir.to_string_lossy());
+    // Same layout, alongside the per-child display file the passive roster reads.
+    let child_files: Vec<std::fs::DirEntry> = std::fs::read_dir(&expected_dir)
+        .expect("child session dir")
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("jsonl")
+        })
+        .collect();
+    assert_eq!(child_files.len(), 1, "one session file in the child dir");
+    assert!(child_files[0].path().to_string_lossy().ends_with(".jsonl"));
+    let display: Value = serde_json::from_str(
+        &std::fs::read_to_string(expected_dir.join("rlm-subagent.json")).expect("display file"),
+    )
+    .expect("parse display file");
+    assert_eq!(display["type"], "rlm_subagent");
+    assert_eq!(display["childId"], handle.rlm_child_id);
+    assert_eq!(display["sessionName"], "worker-a");
+    assert_eq!(display["status"], "running");
+    assert_eq!(
+        display["model"],
+        json!({ "provider": "scripted", "modelId": "faux-1" })
+    );
+    // The child session header records the recursion identity (TS parity:
+    // parentSession + rlmDepth).
+    let header: Value = {
+        let content =
+            std::fs::read_to_string(child_files[0].path()).expect("read child session file");
+        let first = content.lines().next().expect("header line");
+        serde_json::from_str(first).expect("parse header")
+    };
+    assert_eq!(
+        header["parentSession"],
+        agent_dir.join("parent.jsonl").to_string_lossy().to_string()
+    );
+    assert_eq!(header["rlmDepth"], 1);
+
+    // The supervisor roster shows the child as a depth-1 subagent session.
+    let roster_summary = wait_until(Duration::from_secs(10), || {
+        client.send_command("l1", &json!({ "type": "list" }));
+        let list = client.read_response("l1");
+        list["data"]["sessions"].as_array().and_then(|sessions| {
+            sessions
+                .iter()
+                .find(|summary| summary["runtimeKind"] == "subagent")
+                .cloned()
+        })
+    });
+    assert_eq!(roster_summary["rlmDepth"], 1);
+    assert_eq!(roster_summary["sessionName"], "worker-a");
+
+    // The parent roster settles with the child's answer preview.
+    let entries = {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let entries = children.list_subagents().await.expect("list subagents");
+            if entries
+                .iter()
+                .any(|entry| entry.answer_preview.as_deref() == Some("child answer"))
+            {
+                break entries;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child never settled: {entries:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    assert_eq!(entries.len(), 1, "one child in the roster");
+    let entry = &entries[0];
+    assert_eq!(entry.rlm_child_id, handle.rlm_child_id);
+    assert_eq!(entry.status, "completed");
+    assert_eq!(entry.session_name, "worker-a");
+    assert_eq!(entry.label.as_deref(), Some("ship the lane"));
+    assert!(entry.session_dir.ends_with(&handle.rlm_child_id));
+
+    // The kickoff row (TS `spawnMessage`): the task prompt lands as the
+    // parent-attributed `agent_message` custom row — never a user row —
+    // carrying the promised `[task from parent]` label, the raw prompt as
+    // `details.message`, `details.id "spawn:<child id>"`, and the
+    // delivery's parent/child endpoints.
+    let rows: Vec<Value> = std::fs::read_to_string(child_files[0].path())
+        .expect("read child session file")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    let Some(kickoff) = rows
+        .iter()
+        .find(|row| row.get("type").and_then(Value::as_str) == Some("custom_message"))
+    else {
+        panic!("no custom_message row in the child file: {rows:?}");
+    };
+    assert_eq!(kickoff["customType"], "agent_message");
+    assert_eq!(kickoff["content"], "[task from parent]\n\nship the lane");
+    assert_eq!(
+        kickoff["details"],
+        json!({
+            "id": format!("spawn:{}", handle.rlm_child_id),
+            "message": "ship the lane",
+            "from": {
+                "activeSessionId": "parent-active-id",
+                "sessionId": "parent-session-uuid",
+                "sessionName": "parent-name",
+            },
+            "fromRelationship": "parent",
+        }),
+    );
+    // The kickoff is the child's only prompt: no user row exists.
+    assert!(
+        rows.iter()
+            .filter(|row| row.get("type").and_then(Value::as_str) == Some("message"))
+            .all(|row| row.pointer("/message/role").and_then(Value::as_str) != Some("user")),
+        "the kickoff left a user row: {rows:?}"
+    );
+
+    // Collect: settled snapshot of the child, and the selector errors.
+    let results = children
+        .collect(vec![handle.rlm_child_id.clone()], 5_000)
+        .await
+        .expect("collect");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, "done");
+    assert!(results[0].settled);
+    assert_eq!(results[0].answer_preview.as_deref(), Some("child answer"));
+    let snapshot = children.collect(vec![], 0).await.expect("collect all");
+    assert_eq!(snapshot.len(), 1);
+    let missing = children
+        .collect(vec!["ghost".to_string()], 0)
+        .await
+        .expect_err("unknown selector");
+    assert_eq!(
+        missing.to_string(),
+        "No direct RLM child matches \"ghost\" in the current parent session"
+    );
+
+    // A live duplicate name is rejected with the TS conflict error.
+    let duplicate = children
+        .spawn(spawn_request("worker-a", "same name again"))
+        .await
+        .expect_err("duplicate name");
+    assert_eq!(
+        duplicate.to_string(),
+        "Agent name \"worker-a\" is unavailable: an agent of that name already exists at depth 1 under this parent"
+    );
+
+    // Delete: the child dies and leaves both rosters.
+    let deleted = children
+        .delete_subagent(handle.rlm_child_id.clone())
+        .await
+        .expect("delete");
+    assert_eq!(deleted.outcome, Some("deleted"));
+    assert_eq!(deleted.subagent.rlm_child_id, handle.rlm_child_id);
+    let remaining = children.list_subagents().await.expect("list after delete");
+    assert!(remaining.is_empty(), "child removed from the parent roster");
+    wait_until(Duration::from_secs(10), || {
+        client.send_command("l2", &json!({ "type": "list" }));
+        let list = client.read_response("l2");
+        list["data"]["sessions"]
+            .as_array()
+            .filter(|sessions| sessions.is_empty())
+            .map(|_| ())
+    });
+
+    // Retirement is idempotent (the M5 class): a re-delete of the deleted
+    // child's name answers from the tombstone with the row's status at its
+    // delete instead of the selector miss, so a repeated retire never
+    // reports the name slot as still held.
+    let redeleted = children
+        .delete_subagent("worker-a".to_string())
+        .await
+        .expect("the re-delete of a retired child is idempotent");
+    assert_eq!(redeleted.outcome, Some("deleted"));
+    assert_eq!(redeleted.subagent.rlm_child_id, handle.rlm_child_id);
+    // An unknown delete target keeps the TS selector miss.
+    let gone = children
+        .delete_subagent("ghost-worker".to_string())
+        .await
+        .expect_err("an unknown selector still errors");
+    assert_eq!(
+        gone.to_string(),
+        "No direct RLM subagent matches \"ghost-worker\" in the current parent session"
+    );
+
+    // TS #2388 F4: a just-deleted target resolves immediately to the settled cancelled
+    // envelope its delete receipt promised (by child id or name), without the timeout budget.
+    let cancelled = children
+        .collect(vec![handle.rlm_child_id.clone()], 0)
+        .await
+        .expect("collect the deleted child by id");
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(cancelled[0].rlm_child_id, handle.rlm_child_id);
+    assert_eq!(cancelled[0].session_name.as_deref(), Some("worker-a"));
+    assert_eq!(cancelled[0].status, "cancelled");
+    assert!(cancelled[0].settled);
+    assert_eq!(
+        cancelled[0].error.as_deref(),
+        Some("Deleted by parent orchestrator")
+    );
+    let cancelled_by_name = children
+        .collect(vec!["worker-a".to_string()], 0)
+        .await
+        .expect("collect the deleted child by name");
+    assert_eq!(cancelled_by_name.len(), 1);
+    assert_eq!(cancelled_by_name[0].rlm_child_id, handle.rlm_child_id);
+    assert_eq!(cancelled_by_name[0].status, "cancelled");
+    assert!(cancelled_by_name[0].settled);
+    assert_eq!(
+        cancelled_by_name[0].error.as_deref(),
+        Some("Deleted by parent orchestrator")
+    );
+    // An unknown selector keeps the TS miss.
+    let missing = children
+        .collect(vec!["ghost".to_string()], 0)
+        .await
+        .expect_err("unknown selector");
+    assert_eq!(
+        missing.to_string(),
+        "No direct RLM child matches \"ghost\" in the current parent session"
+    );
+
+    // A reused name owns the selector again: the live respawn answers, never the tombstone.
+    let replacement = children
+        .spawn(spawn_request("worker-a", "second shard"))
+        .await
+        .expect("respawn under the freed name");
+    children.notify_turn_done();
+    let live = children
+        .collect(vec!["worker-a".to_string()], 0)
+        .await
+        .expect("collect the live respawn");
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].rlm_child_id, replacement.rlm_child_id);
+    assert_ne!(live[0].rlm_child_id, handle.rlm_child_id);
+    // The live respawn answers, never the deleted generation's envelope.
+    assert_ne!(live[0].status, "cancelled");
+}
+
+/// A loopback `systemone` endpoint: every POST answers with the fixed
+/// left-choice envelope, so a decision request's one model call is a real
+/// HTTP round trip. Returns the endpoint's base URL.
+fn spawn_systemone_mock() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind systemone mock");
+    let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let envelope = r#"{"model":"decision-fixture/clef","usage":{"input_tokens":177,"output_tokens":0},"answers":{"action":{"choice":"left","confidence":0.9,"probabilities":{"left":0.9,"right":0.1}}}}"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{envelope}",
+        envelope.len(),
+    )
+    .into_bytes();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let reply = reply.clone();
+            std::thread::spawn(move || {
+                // Drain the request before answering so its body never
+                // outranks the reply in the socket buffer.
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                });
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or_default() == 0 {
+                        return;
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = value.trim().parse().unwrap_or_default();
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                if content_length > 0 && reader.read_exact(&mut body).is_err() {
+                    return;
+                }
+                let _ = stream.write_all(&reply);
+            });
+        }
+    });
+    url
+}
+
+/// A decision child (`rlm.spawn kind="decision"`) spawns through the real
+/// supervisor on the settings decision model and runs the decision engine
+/// end to end: the spawn prompt settles as the engine's ready answer, one
+/// decision request answers through the loopback `systemone` endpoint, and
+/// the tagged `decision_api.decision` reply with its `seq` lands in the
+/// live parent's queue. The durable create command must ride the
+/// `decisionChild` flag to the worker's launch env — a dropped flag
+/// respawns the child as a regular agent session whose turn fails on the
+/// decision model.
+#[tokio::test]
+async fn a_decision_child_spawn_runs_the_decision_engine_end_to_end() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    // The settings gate, the registry recipe, and the stored login on the
+    // loopback `systemone` endpoint: one decision request makes one real
+    // model call.
+    let systemone = spawn_systemone_mock();
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        json!({ "decisionModel": "decision-fixture/clef" }).to_string(),
+    )
+    .expect("write settings");
+    std::fs::write(
+        agent_dir.join("models.json"),
+        json!({ "providers": { "decision-fixture": {
+            "baseUrl": systemone,
+            "apiKey": "DECISION_FIXTURE_KEY",
+            "api": "systemone",
+            "models": [ { "id": "clef", "input": ["text"] } ],
+        } } })
+        .to_string(),
+    )
+    .expect("write models");
+    std::fs::write(
+        agent_dir.join("auth.json"),
+        json!({ "decision-fixture": { "type": "api_key", "key": "fixture-key" } }).to_string(),
+    )
+    .expect("write auth");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, hello) = Client::connect(&socket);
+    assert_eq!(hello["type"], "daemon_hello");
+    // A live parent session: the decision child's tagged replies ride the
+    // follow-up lane into its queue, the row a busy parent reads at its
+    // next wake.
+    let parent = children(
+        &socket,
+        &agent_dir,
+        &write_script(dir.path(), "parent settled"),
+        0,
+    )
+    .create_session(RlmCreateSessionRequest {
+        prompt: "start the decision parent".to_string(),
+        name: Some("decision-parent".to_string()),
+        model: None,
+        thinking: None,
+        cwd: Some(agent_dir.to_string_lossy().to_string()),
+    })
+    .await
+    .expect("create the parent session");
+    // The children registry without a child script: the decision child is
+    // an engine choice, never a scripted child. Its parent edge names the
+    // live session above, so the spawn's ledger edge and the child's
+    // summary address a real worker.
+    let children = {
+        let sessions = SupervisorChildSessions::new(
+            Arc::new(SupervisorLink::new(socket.clone())),
+            agent_dir.clone(),
+            parent.active_session_id.clone(),
+            std::sync::Arc::new(pa_daemon::model_allowlist::ModelRefusalTelemetry::new(
+                agent_dir.clone(),
+                /*telemetry_disabled*/ true,
+            )),
+            String::new(),
+        );
+        sessions.set_identity(ParentIdentity {
+            rlm_depth: 0,
+            rlm_max_depth: 2,
+            model: Some("scripted/faux-1".to_string()),
+            cwd: Some(agent_dir.to_string_lossy().to_string()),
+            session_id: Some(parent.session_id.clone()),
+            session_file: Some(parent.session_file.clone()),
+            thinking: None,
+            child_script: None,
+            builtin_tools: None,
+        });
+        sessions
+    };
+    let request = RlmSpawnRequest {
+        prompt: "You are System 1, the decision child of a real-time control loop.".to_string(),
+        name: Some("system-1".to_string()),
+        model: None,
+        thinking: None,
+        kind: RlmSpawnKind::Decision,
+        cwd: None,
+        spawned_by_request_id: None,
+        factory: None,
+    };
+    let handle = children
+        .spawn(request)
+        .await
+        .expect("spawn the decision child");
+    children.notify_turn_done();
+    // The spawn seam resolves the settings decision model, not the parent's.
+    assert_eq!(handle.model, "decision-fixture/clef", "{handle:?}");
+    // The child settles with the decision engine's protocol answer — the
+    // spawn prompt makes no model call — with its live active id for the
+    // request below.
+    let (entries, child_active_id) = {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let entries = children.list_subagents().await.expect("list subagents");
+            if let Some(active_id) = entries
+                .iter()
+                .find(|entry| entry.answer_preview.as_deref() == Some("Decision child ready."))
+                .and_then(|entry| entry.active_session_id.clone())
+            {
+                break (entries, active_id);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "decision child never settled ready: {entries:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    assert_eq!(entries.len(), 1, "one child in the roster");
+    assert_eq!(entries[0].session_name, "system-1");
+    // The supervisor roster carries the same settled decision child.
+    let roster_summary = wait_until(Duration::from_secs(10), || {
+        client.send_command("l1", &json!({ "type": "list" }));
+        let list = client.read_response("l1");
+        list["data"]["sessions"].as_array().and_then(|sessions| {
+            sessions
+                .iter()
+                .find(|summary| summary["sessionName"] == "system-1")
+                .cloned()
+        })
+    });
+    assert_eq!(roster_summary["rlmDepth"], 1);
+    // The decision child keeps its subagent parent edge: the create arm
+    // extracts the runtime identity, so the child's summary (and every
+    // reply route off it) reaches the live parent above.
+    assert_eq!(
+        roster_summary["parentActiveSessionId"],
+        parent.active_session_id.as_str()
+    );
+    // The spawn admission recorded the durable ledger edge: recovery
+    // after parent replacement and the nonresident wake resolve the
+    // decision child through it.
+    let ledger =
+        pa_daemon::rlm_ledger::RlmSpawnLedger::new(&agent_dir, &agent_dir.join("sessions"), |_| {});
+    let edge = ledger
+        .edges(true)
+        .expect("ledger edges")
+        .into_iter()
+        .find(|edge| edge.child_id == handle.rlm_child_id)
+        .expect("the decision child's ledger edge");
+    // The ledger records the parent file's canonical path: recovery
+    // resolves the edge through it after the parent worker is replaced.
+    let parent_file = Path::new(&parent.session_file)
+        .canonicalize()
+        .expect("the parent session file exists");
+    assert_eq!(
+        Path::new(&edge.parent),
+        parent_file,
+        "the edge names the parent session file for recovery"
+    );
+    assert_eq!(edge.name, "system-1", "the edge carries the spawn name");
+    assert!(edge.decision_child, "the edge carries the decision kind");
+
+    // The persisted create command's `decisionChild` key feeds the worker
+    // launch, while the runtime metadata carries the ordinary subagent
+    // identity every lifecycle gate accepts.
+    let descriptor_dir = pa_daemon::descriptor::descriptor_dir(&agent_dir, &socket);
+    let create = std::fs::read_dir(&descriptor_dir)
+        .expect("the worker descriptor dir")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .find_map(|path| {
+            let value: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+            (value["createCommand"]["runtimeMetadata"]["rlmChildId"]
+                == handle.rlm_child_id.as_str())
+            .then_some(value)
+        })
+        .expect("the decision child's persisted worker descriptor");
+    assert_eq!(create["createCommand"]["decisionChild"], json!(true));
+    assert_eq!(
+        create["createCommand"]["runtimeMetadata"]["kind"], "subagent",
+        "the decision flag never rides the runtime metadata"
+    );
+    // The main path: one decision request (state plus one typed choice
+    // question) rides a plain prompt to the child; the answer returns to
+    // the parent as the tagged `decision_api.decision` reply carrying the
+    // request's seq.
+    let decision_request = json!({
+        "seq": 42,
+        "state": { "observation": "the target moved left" },
+        "questions": { "action": {
+            "type": "choice",
+            "criteria": { "left": "go left", "right": "go right" }
+        } }
+    });
+    client.send_command(
+        "d1",
+        &json!({
+            "type": "prompt",
+            "activeSessionId": child_active_id,
+            "message": decision_request.to_string(),
+        }),
+    );
+    let admitted = client.read_response("d1");
+    assert_eq!(
+        admitted["success"], true,
+        "the decision request prompt failed: {admitted}"
+    );
+    // The replies land in the parent's session file as the agent-message
+    // rows the parent reads at its next wake — the follow-up delivery the
+    // decision child's answers ride. The kickoff's ready answer is the
+    // first tagged reply: its null seq distinguishes it from the
+    // request's answer.
+    let replies = wait_until(Duration::from_secs(20), || {
+        let rows: Vec<Value> = std::fs::read_to_string(&parent.session_file)
+            .expect("read the parent session file")
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|row| {
+                let message = row.get("details")?.get("message")?.as_str()?;
+                let reply: Value = serde_json::from_str(message).ok()?;
+                (reply["type"] == json!("decision_api.decision")).then_some(reply)
+            })
+            .collect();
+        (rows.len() >= 2).then_some(rows)
+    });
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply["seq"] == Value::Null && reply["note"] == "Decision child ready."),
+        "the kickoff's ready answer is the child's first tagged reply: {replies:?}"
+    );
+    let reply = replies
+        .iter()
+        .find(|reply| reply["seq"] == json!(42))
+        .expect("the request's answer reply");
+    assert_eq!(reply["seq"], json!(42), "the reply carries its seq");
+    assert_eq!(reply["model"], "decision-fixture/clef", "{reply}");
+    assert_eq!(reply["decision"]["choice"], "left", "{reply}");
+    // The spawn task settled ready long before this request answered, so
+    // its settle tail has run: the ledger display row still says
+    // `running`, because a decision child is a service — a completed
+    // display would stop the update roster from reviving a child meant
+    // to serve.
+    let child_session_dir = entries[0].session_dir.clone();
+    let display: Value = wait_until(Duration::from_secs(10), || {
+        let file = Path::new(&child_session_dir).join("rlm-subagent.json");
+        serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?
+    });
+    assert_eq!(
+        display["status"], "running",
+        "a decision child meant to serve never completes its ledger display: {display}"
+    );
+    // The ready answer was the child's reply, so the spawn's settle
+    // watcher owes the parent no exit notice.
+    let session_file = std::fs::read_to_string(&parent.session_file).unwrap_or_default();
+    assert!(
+        !session_file.contains("no-reply"),
+        "a replied decision child never receives the no-reply exit notice"
+    );
+}
+
+/// A passivated Decision API child revives as a decision child: the fresh
+/// wake create replays the child's durable identity — the ledger edge's
+/// decision flag and parent session id — or the revived
+/// worker boots the agent engine and the parent never hears a decision.
+#[tokio::test]
+async fn a_passivated_decision_child_revives_as_a_decision_child_and_answers() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    let sessions_dir = agent_dir.join("sessions");
+    std::fs::create_dir_all(&sessions_dir).expect("sessions dir");
+    // The same fixtures as the spawn e2e: the settings gate, the registry
+    // recipe, and the stored login on the loopback `systemone` endpoint.
+    let systemone = spawn_systemone_mock();
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        json!({ "decisionModel": "decision-fixture/clef", "idleEvictionMinutes": 1 }).to_string(),
+    )
+    .expect("write settings");
+    std::fs::write(
+        agent_dir.join("models.json"),
+        json!({ "providers": { "decision-fixture": {
+            "baseUrl": systemone,
+            "apiKey": "DECISION_FIXTURE_KEY",
+            "api": "systemone",
+            "models": [ { "id": "clef", "input": ["text"] } ],
+        } } })
+        .to_string(),
+    )
+    .expect("write models");
+    std::fs::write(
+        agent_dir.join("auth.json"),
+        json!({ "decision-fixture": { "type": "api_key", "key": "fixture-key" } }).to_string(),
+    )
+    .expect("write auth");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, hello) = Client::connect(&socket);
+    assert_eq!(hello["type"], "daemon_hello");
+    let parent = children(
+        &socket,
+        &agent_dir,
+        &write_script(dir.path(), "parent settled"),
+        0,
+    )
+    .create_session(RlmCreateSessionRequest {
+        prompt: "start the decision parent".to_string(),
+        name: Some("decision-parent".to_string()),
+        model: None,
+        thinking: None,
+        cwd: Some(agent_dir.to_string_lossy().to_string()),
+    })
+    .await
+    .expect("create the parent session");
+    let children = {
+        let sessions = SupervisorChildSessions::new(
+            Arc::new(SupervisorLink::new(socket.clone())),
+            agent_dir.clone(),
+            parent.active_session_id.clone(),
+            std::sync::Arc::new(pa_daemon::model_allowlist::ModelRefusalTelemetry::new(
+                agent_dir.clone(),
+                /*telemetry_disabled*/ true,
+            )),
+            String::new(),
+        );
+        sessions.set_identity(ParentIdentity {
+            rlm_depth: 0,
+            rlm_max_depth: 2,
+            model: Some("scripted/faux-1".to_string()),
+            cwd: Some(agent_dir.to_string_lossy().to_string()),
+            session_id: Some(parent.session_id.clone()),
+            session_file: Some(parent.session_file.clone()),
+            thinking: None,
+            child_script: None,
+            builtin_tools: None,
+        });
+        sessions
+    };
+    let request = RlmSpawnRequest {
+        prompt: "You are System 1, the decision child of a real-time control loop.".to_string(),
+        name: Some("system-1".to_string()),
+        model: None,
+        thinking: None,
+        kind: RlmSpawnKind::Decision,
+        cwd: None,
+        spawned_by_request_id: None,
+        factory: None,
+    };
+    let handle = children
+        .spawn(request)
+        .await
+        .expect("spawn the decision child");
+    children.notify_turn_done();
+    // The child settles ready with its spawn-time active id.
+    let (entries, child_active_id) = {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let entries = children.list_subagents().await.expect("list subagents");
+            if let Some(active_id) = entries
+                .iter()
+                .find(|entry| entry.answer_preview.as_deref() == Some("Decision child ready."))
+                .and_then(|entry| entry.active_session_id.clone())
+            {
+                break (entries, active_id);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "decision child never settled ready: {entries:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    let child_session_dir = entries[0].session_dir.clone();
+    // The child's resident row serves the live supervisor list while the
+    // worker hosts it (the plain list serves live residents only).
+    wait_until(Duration::from_secs(10), || {
+        client.send_command("l0", &json!({ "type": "list" }));
+        let list = client.read_response("l0");
+        list["data"]["sessions"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["sessionName"] == "system-1")
+                .map(|_| ())
+        })
+    });
+    // THE PASSIVATION: the child worker's supervisor-link request, the same
+    // ask the idle clock sends — the whole worker retires, the session file
+    // stays.
+    let child_token = worker_token(&agent_dir, &child_active_id).expect("the child worker's token");
+    client.send_command(
+        "passivate",
+        &json!({
+            "type": "worker_idle_passivation",
+            "workerToken": child_token,
+            "idleMinutes": 1,
+        }),
+    );
+    let passivated = client.read_response("passivate");
+    assert_eq!(
+        passivated["success"], true,
+        "the idle passivation stop must succeed: {passivated}"
+    );
+    // The passivation retires the live row: the request below must find no
+    // resident and wake a fresh worker.
+    wait_until(Duration::from_secs(30), || {
+        client.send_command("lp1", &json!({ "type": "list" }));
+        let list = client.read_response("lp1");
+        let present = list["data"]["sessions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["sessionName"] == "system-1"));
+        (!present).then_some(())
+    });
+    // THE REQUEST to the passivated child by its durable name: the wake
+    // resolves it through the spawn ledger's live edges and launches a
+    // fresh worker over the saved file (the refusals-to-wake would leave
+    // "Unknown active session: system-1").
+    let decision_request = json!({
+        "seq": 7,
+        "state": { "observation": "the target moved left" },
+        "questions": { "action": {
+            "type": "choice",
+            "criteria": { "left": "go left", "right": "go right" }
+        } }
+    });
+    client.send_command(
+        "d1",
+        &json!({
+            "type": "send_message",
+            "targetActiveSessionId": "system-1",
+            "message": decision_request.to_string(),
+        }),
+    );
+    let sent = client.read_response("d1");
+    assert_eq!(sent["success"], true, "the wake delivery failed: {sent}");
+    let receipt = &sent["data"];
+    assert_eq!(receipt["deliveryStatus"], "delivered", "{receipt}");
+    let revived_id = receipt["target"]["activeSessionId"]
+        .as_str()
+        .expect("the revived worker's active id")
+        .to_string();
+    assert_ne!(
+        revived_id, child_active_id,
+        "the wake must launch a fresh worker, not reuse the passivated one"
+    );
+    // The revived child SERVES the decision: the one decision-engine answer
+    // lands in the parent's session file as the tagged reply carrying the
+    // request's seq (an agent-engine revival can never produce it).
+    let reply = wait_until(Duration::from_secs(30), || {
+        let rows: Vec<Value> = std::fs::read_to_string(&parent.session_file)
+            .ok()?
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|row| {
+                let message = row.get("details")?.get("message")?.as_str()?;
+                let reply: Value = serde_json::from_str(message).ok()?;
+                (reply["type"] == json!("decision_api.decision") && reply["seq"] == json!(7))
+                    .then_some(reply)
+            })
+            .collect();
+        rows.into_iter().next()
+    });
+    assert_eq!(reply["model"], "decision-fixture/clef", "{reply}");
+    assert_eq!(reply["decision"]["choice"], "left", "{reply}");
+    // The revived worker's durable create command replays the flag and the
+    // durable parent edge (the record every later respawn and wake reads).
+    let descriptor_dir = pa_daemon::descriptor::descriptor_dir(&agent_dir, &socket);
+    let descriptor = wait_until(Duration::from_secs(15), || {
+        let path = descriptor_dir.join(format!("{revived_id}.json"));
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        (value["createCommand"]["runtimeMetadata"]["rlmChildId"] == handle.rlm_child_id.as_str())
+            .then_some(value)
+    });
+    assert_eq!(
+        descriptor["createCommand"]["decisionChild"],
+        json!(true),
+        "the wake create replays the decision flag: {descriptor}"
+    );
+    assert_eq!(
+        descriptor["createCommand"]["runtimeMetadata"]["parentSessionId"],
+        parent.session_id.as_str(),
+        "the wake create restores the durable parent edge: {descriptor}"
+    );
+    // The parent path rides the create config into the durable create's
+    // replay keys, the same shape the original spawn writes.
+    assert_eq!(
+        descriptor["createCommand"]["parentSessionPath"],
+        std::fs::canonicalize(&parent.session_file)
+            .expect("the parent session file exists")
+            .to_string_lossy()
+            .to_string(),
+        "the wake create restores the parent path for a respawn: {descriptor}"
+    );
+    // The child's session dir stays the same: the revival replays the file,
+    // never forks a new one.
+    assert!(
+        std::path::Path::new(&child_session_dir)
+            .join("rlm-subagent.json")
+            .exists(),
+        "the display entry survives the revival"
+    );
+}
+
+/// The worker's auth token from its persisted descriptor.
+fn worker_token(agent_dir: &Path, active_session_id: &str) -> Option<String> {
+    let instances = std::fs::read_dir(agent_dir.join("daemon-workers")).ok()?;
+    for instance in instances.flatten() {
+        let descriptor_path = instance.path().join(format!("{active_session_id}.json"));
+        let Ok(content) = std::fs::read_to_string(&descriptor_path) else {
+            continue;
+        };
+        let Ok(descriptor) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        if let Some(token) = descriptor
+            .get("authenticationToken")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+        {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+/// A positive collect during a parent turn releases only its selected child.
+#[tokio::test]
+async fn blocking_collect_releases_only_its_selected_task_prompt() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let script = write_script(dir.path(), "child answer");
+    let children = children(&socket, &agent_dir, &script, 0);
+    children.notify_turn_started();
+
+    let selected = children
+        .spawn(spawn_request("worker-selected", "selected task"))
+        .await
+        .expect("spawn selected child");
+    let deferred = children
+        .spawn(spawn_request("worker-deferred", "deferred task"))
+        .await
+        .expect("spawn deferred child");
+    let selected_file = child_session_file(&selected.session_dir);
+    let deferred_file = child_session_file(&deferred.session_dir);
+
+    let selected_result = children
+        .collect(vec![selected.rlm_child_id.clone()], 10_000)
+        .await
+        .expect("collect selected child");
+    assert_eq!(selected_result.len(), 1);
+    assert_eq!(selected_result[0].status, "done");
+    assert!(selected_result[0].settled);
+    assert_eq!(
+        selected_result[0].answer_preview.as_deref(),
+        Some("child answer")
+    );
+    assert_eq!(
+        spawn_kickoff_count(&selected_file, &selected.rlm_child_id),
+        1
+    );
+    assert_eq!(
+        spawn_kickoff_count(&deferred_file, &deferred.rlm_child_id),
+        0
+    );
+
+    children.notify_turn_done();
+    let deferred_result = children
+        .collect(vec![deferred.rlm_child_id.clone()], 10_000)
+        .await
+        .expect("collect child released at the turn boundary");
+    assert_eq!(deferred_result.len(), 1);
+    assert_eq!(deferred_result[0].status, "done");
+    assert!(deferred_result[0].settled);
+    assert_eq!(
+        deferred_result[0].answer_preview.as_deref(),
+        Some("child answer")
+    );
+
+    let repeated = children
+        .collect(
+            vec![selected.rlm_child_id.clone(), deferred.rlm_child_id.clone()],
+            1_000,
+        )
+        .await
+        .expect("repeat collect does not resend either prompt");
+    assert_eq!(repeated.len(), 2);
+    assert!(repeated
+        .iter()
+        .all(|result| result.status == "done" && result.settled));
+    assert_eq!(
+        spawn_kickoff_count(&selected_file, &selected.rlm_child_id),
+        1
+    );
+    assert_eq!(
+        spawn_kickoff_count(&deferred_file, &deferred.rlm_child_id),
+        1
+    );
+
+    children
+        .delete_subagent(selected.rlm_child_id)
+        .await
+        .expect("delete selected child");
+    children
+        .delete_subagent(deferred.rlm_child_id)
+        .await
+        .expect("delete deferred child");
+}
+
+#[tokio::test]
+async fn rlm_create_session_spawns_a_prompted_depth_zero_session() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, _hello) = Client::connect(&socket);
+    let script = write_script(dir.path(), "root session answer");
+    let children = children(&socket, &agent_dir, &script, 0);
+
+    let handle = children
+        .create_session(RlmCreateSessionRequest {
+            prompt: "start a root session".to_string(),
+            name: Some("root-b".to_string()),
+            model: None,
+            thinking: None,
+            cwd: Some(agent_dir.to_string_lossy().to_string()),
+        })
+        .await
+        .expect("create session");
+    assert_eq!(handle.name, "root-b");
+    assert!(Path::new(&handle.session_file)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")));
+    assert!(Path::new(&handle.session_file).exists());
+    assert_eq!(handle.model, "scripted/faux-1");
+
+    // A depth-0 resident session, not a subagent roster row.
+    client.send_command("l1", &json!({ "type": "list" }));
+    let list = client.read_response("l1");
+    let sessions = list["data"]["sessions"].as_array().expect("sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["rlmDepth"], 0);
+    assert_eq!(sessions[0]["runtimeKind"], "top-level");
+    let roster = children.list_subagents().await.expect("roster");
+    assert!(
+        roster.is_empty(),
+        "create_session children are not subagents"
+    );
+
+    // The session was prompted: its worker answered.
+    let active_id = handle.active_session_id.clone();
+    let answer = wait_until(Duration::from_secs(10), || {
+        client.send_command(
+            "g1",
+            &json!({ "type": "get_last_assistant_text", "activeSessionId": active_id }),
+        );
+        let final_answer = client.read_response("g1");
+        final_answer["data"]["text"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    });
+    assert_eq!(answer, "root session answer");
+
+    // Killing the session removes it from the supervisor roster.
+    client.send_command(
+        "k1",
+        &json!({ "type": "kill", "activeSessionId": active_id }),
+    );
+    let killed = client.read_response("k1");
+    assert_eq!(killed["success"], true, "kill failed: {killed}");
+    wait_until(Duration::from_secs(10), || {
+        client.send_command("l2", &json!({ "type": "list" }));
+        let list = client.read_response("l2");
+        list["data"]["sessions"]
+            .as_array()
+            .filter(|sessions| sessions.is_empty())
+            .map(|_| ())
+    });
+}
+
+#[tokio::test]
+async fn rlm_recursion_bound_is_enforced() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let script = write_script(dir.path(), "unreachable");
+    // A depth-2 parent (the default bound): spawns are refused.
+    let children = children(&socket, &agent_dir, &script, 2);
+    let error = children
+        .spawn(spawn_request("too-deep", "nope"))
+        .await
+        .expect_err("depth limit");
+    assert_eq!(
+        error.to_string(),
+        "RLM recursion depth limit reached (RLM_DEPTH=2, RLM_MAX_DEPTH=2)"
+    );
+    let error = children
+        .create_session(RlmCreateSessionRequest {
+            prompt: "nope".to_string(),
+            name: None,
+            model: None,
+            thinking: None,
+            cwd: None,
+        })
+        .await
+        .expect_err("create_session from depth 2");
+    assert_eq!(
+        error.to_string(),
+        "rlm.create_session is available only from a depth-0 session"
+    );
+}
+
+/// TS #2396's daemon-wide half: the supervisor holds a subagent spawn's name under a
+/// reservation for the whole fresh-launch admission; once the winner is gone, the name
+/// admits again.
+#[tokio::test]
+async fn parallel_same_name_subagent_creates_admit_exactly_one() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let socket = dir.path().join("daemon.sock");
+    let agent_dir = dir.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    let _daemon = spawn_daemon(&socket, &agent_dir);
+    let (mut client, _hello) = Client::connect(&socket);
+    let script = write_script(dir.path(), "twin answer");
+    let parent_file = agent_dir.join("parent.jsonl");
+    let parent_file = parent_file.to_string_lossy().to_string();
+
+    // The raw create a worker's `rlm.spawn` routes: a scripted subagent with the reserved name.
+    let subagent_create = |child_id: &str| {
+        let session_dir = agent_dir
+            .join("session-artifacts")
+            .join("parent-session-uuid")
+            .join(child_id);
+        std::fs::create_dir_all(&session_dir).expect("child session dir");
+        json!({
+            "type": "create",
+            "name": "twin-worker",
+            "config": {
+                "cwd": agent_dir.to_string_lossy(),
+                "sessionDir": session_dir.to_string_lossy(),
+                "rlmDepth": 1,
+                "rlmMaxDepth": 2,
+                "provider": "scripted",
+                "model": "faux-1",
+                "script": script.to_string_lossy(),
+                "childScript": script.to_string_lossy(),
+                "parentSessionPath": parent_file,
+            },
+            "runtimeMetadata": {
+                "kind": "subagent",
+                "rlmChildId": child_id,
+                "parentActiveSessionId": "parent-active-id",
+                "parentSessionId": "parent-session-uuid",
+                "parentSessionFile": parent_file,
+                "rlmDepth": 1,
+                "createdAt": 0,
+            },
+            "lifecycle": "resident",
+        })
+    };
+
+    // Four parallel same-name creates of the same parent scope: responses arrive out of order
+    // (the losers fail in milliseconds) - drain until every id is answered.
+    let ids = ["c1", "c2", "c3", "c4"];
+    for id in ids {
+        client.send_command(id, &subagent_create(&format!("sub-{id}")));
+    }
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut responses: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    while responses.len() < ids.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "never answered: {ids:?}");
+        let line = client.read_line_with_budget(remaining);
+        if let Some(id) = line.get("id").and_then(Value::as_str).map(str::to_string) {
+            responses.insert(id, line);
+        }
+    }
+    let mut successes = Vec::new();
+    let mut failures = 0;
+    for id in ids {
+        let response = &responses[id];
+        if response["success"].as_bool().unwrap_or(false) {
+            successes.push(response.clone());
+        } else {
+            failures += 1;
+            assert_eq!(
+                response["error"].as_str().expect("failure error"),
+                "Agent name \"twin-worker\" is unavailable: an agent of that name already exists at depth 1 under this parent",
+                "the losing create fails closed with the TS unavailability error"
+            );
+        }
+    }
+    assert_eq!(successes.len(), 1, "exactly one same-name create admits");
+    assert_eq!(failures, 3, "every racing create fails closed");
+
+    let winner = &successes[0];
+    let active_id = winner["data"]["activeSessionId"]
+        .as_str()
+        .expect("winner active id");
+    client.send_command(
+        "k1",
+        &json!({ "type": "kill", "activeSessionId": active_id }),
+    );
+    let killed = client.read_response_slow("k1");
+    assert!(
+        killed["success"].as_bool().unwrap_or(false),
+        "kill winner: {killed}"
+    );
+    wait_until(Duration::from_secs(10), || {
+        client.send_command("l1", &json!({ "type": "list" }));
+        let list = client.read_response("l1");
+        list["data"]["sessions"]
+            .as_array()
+            .filter(|sessions| sessions.is_empty())
+            .map(|_| ())
+    });
+    client.send_command("c5", &subagent_create("sub-c5"));
+    let retry = client.read_response_slow("c5");
+    assert!(
+        retry["success"].as_bool().unwrap_or(false),
+        "the freed name admits again: {retry}"
+    );
+}

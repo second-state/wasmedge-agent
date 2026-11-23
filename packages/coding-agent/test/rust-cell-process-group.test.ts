@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,6 +8,7 @@ import { RustCellProvisioner } from "../src/core/rust-cell/index.js";
 import { runProcess } from "../src/core/rust-cell/process.js";
 import { ProcessResourceGroup } from "../src/core/rust-cell/process-group.js";
 import { resourceLimitedCommand, systemdUserEnvironment } from "../src/core/rust-cell/process-limits.js";
+import { openProcessTree } from "../src/core/rust-cell/process-tree.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { hasProcessLimits } from "./fixtures/process-limits.js";
 
@@ -39,6 +41,29 @@ describe.skipIf(!available)("shared process groups", () => {
 		root = undefined;
 	});
 
+	it("keeps the native workers' shared slice until their last membership closes", async () => {
+		root = mkdtempSync(join(tmpdir(), "native-process-tree-"));
+		const id = randomUUID();
+		const first = await openProcessTree(root, id, { tasksMax: 64 });
+		try {
+			const second = await openProcessTree(root, id, { tasksMax: 64 });
+			try {
+				expect(first.group.unit).toBe(second.group.unit);
+				const command = await run(first.group, "cat /proc/self/cgroup");
+				expect(command.exitCode, command.stderr).toBe(0);
+				const slice = dirname(`/sys/fs/cgroup${command.stdout.trim().slice(3)}`);
+				await first.close();
+				expect((await run(second.group, "printf active")).stdout).toBe("active");
+				expect(readFileSync(join(slice, "pids.max"), "utf8").trim()).toBe("64");
+				await second.close();
+				expect(existsSync(slice)).toBe(false);
+			} finally {
+				await second.close();
+			}
+		} finally {
+			await first.close();
+		}
+	});
 	it("requires sandboxed Cargo for SDK groups", () => {
 		const shared = group({ tasksMax: 64 });
 		expect(() => new RustCellProvisioner({ cwd: "/unused", processGroup: shared })).toThrow("cargoSandbox");
