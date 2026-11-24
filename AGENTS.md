@@ -39,7 +39,7 @@ original rules remain in git history and apply when contributing upstream.
 
 ## Commands
 
-- Run `cargo run --locked -p xtask -- check` for branding, report links, formatting and all-target compilation. The private `npm run check` shortcut calls that same Cargo command.
+- Run `cargo run --locked -p xtask -- check` for native source checks, branding, report links, formatting and all-target compilation.
 - Build with `cargo build --release --locked --bin wasmedge-agent`.
 - Run `cargo test --release --locked --workspace --lib` and relevant integration tests. Use the scripted provider for CLI tests. With WasmEdge and the prepared WASI template installed, run `cargo test --release --locked -p pa-cli --test native_cells -- --ignored`.
 - Build guest crates and fixtures with `cargo build --release`; keep `[profile.dev.package."*"] debug = false` in workspace manifests.

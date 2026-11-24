@@ -151,14 +151,7 @@ Startup code is the composition root and may know about concrete adapters, daemo
 
 ## Testing
 
-Focused tests enforce the boundary and recovery behavior:
-
-- `test/interactive-mode-boundary.test.ts`
-- `test/agent-connection-daemon.test.ts`
-- `test/agent-connection-in-process.test.ts`
-- `test/daemon-client.test.ts`
-- `test/daemon-protocol.test.ts`
-- `test/main-interactive-routing.test.ts`
+Run the native connection and protocol tests from the workspace root with `cargo test --release --locked -p pa-tui -p pa-daemon -p pa-types --lib`.
 
 When changing the connection or wire surface, classify the change as backward-compatible, capability-gated, or incompatible. Update protocol/schema metadata and both old-client/new-daemon and new-client/old-daemon coverage for every wire change.
 

@@ -142,6 +142,7 @@ jobs:
           export PATH="$RUNNER_TEMP/native-tools"
           if command -v node || command -v npm; then exit 1; fi
           cargo test --release --locked -p pa-cli --test native_cells -- --ignored
+          cargo test --release --locked -p pa-cli --test export_share_e2e --test package_resources_e2e
 
       - name: Verify native release archives
         run: |

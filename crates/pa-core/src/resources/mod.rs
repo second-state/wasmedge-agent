@@ -444,11 +444,6 @@ mod tests {
         fs::create_dir_all(pkg.join("skills").join("pack-skill")).unwrap();
         fs::create_dir_all(pkg.join("prompts")).unwrap();
         fs::write(
-            pkg.join("package.json"),
-            r#"{"name":"fixture-pkg","version":"1.0.0"}"#,
-        )
-        .unwrap();
-        fs::write(
             pkg.join("skills").join("pack-skill").join("SKILL.md"),
             "---\nname: pack-skill\ndescription: From the package\n---\nBody",
         )

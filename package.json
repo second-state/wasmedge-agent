@@ -1,9 +1,0 @@
-{
-  "name": "wasmedge-agent-development",
-  "private": true,
-  "scripts": {
-    "check": "cargo run --locked -p xtask -- check",
-    "build": "cargo build --release --locked --bin wasmedge-agent",
-    "test": "cargo test --release --locked --workspace --lib"
-  }
-}

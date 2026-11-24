@@ -1,11 +1,7 @@
-//! Package manager subsystem: install/remove/list/update of `npm:`, git,
-//! and local-dir package sources against the settings store, plus the
-//! configured-npm/git child-process flows and session resource resolution.
-//! Non-goals: loading/executing session-resource code and self-updates.
+//! Git and local resource packages and their settings.
 
 mod git;
 mod manager;
-mod npm;
 mod process;
 pub(crate) mod resolve;
 pub mod resource_config;
@@ -23,7 +19,7 @@ pub use resolve::{
     DisabledBy, MetadataSource, MissingSourceAction, PathMetadata, ResolvedPaths, ResolvedResource,
     ResourceOrigin, ResourceType,
 };
-pub use source::{parse_git_url, GitSource, LocalSource, NpmSource, ParsedSource, SourceScope};
+pub use source::{parse_git_url, GitSource, LocalSource, ParsedSource, SourceScope};
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -31,8 +27,8 @@ use std::path::PathBuf;
 /// The TS `CONFIG_DIR_NAME` (project-local settings/packages root).
 pub use crate::settings::CONFIG_DIR_NAME;
 
-/// Network probe timeout for npm/git operations (10s).
-pub(crate) use npm::NETWORK_TIMEOUT_MS;
+pub(super) const LEGACY_SOURCE_MESSAGE: &str =
+    "npm: package sources are no longer supported. Use a Git URL or a local resource directory.";
 
 /// True when `PI_OFFLINE` disables all package network operations.
 pub(crate) fn is_offline_mode_enabled() -> bool {
@@ -54,7 +50,6 @@ pub(crate) fn package_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe_dir_of(&exe))
-        .map(pa_types::platform::dirs::package_root)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 

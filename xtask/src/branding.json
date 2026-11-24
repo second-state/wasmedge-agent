@@ -316,16 +316,6 @@
       "reason": "install.sh's own one-release compatibility window (rule R3): each PRIME_AGENT_<NAME> is a legacy fallback wasmedge_agent_warn_if_legacy_env checks for and each real reader falls back to, mirroring readLegacyEnv on the TypeScript side; only these seven literal names (plus the doc comment's generic placeholder) are exempt, so a bare PRIME_AGENT_ added anywhere else in this file still fails"
     },
     {
-      "glob": "poc/**",
-      "patterns": [
-        "prime-agent",
-        "PRIME_AGENT_",
-        "~/\\.prime/agent",
-        "\"\\.prime\""
-      ],
-      "reason": "poc/ is the Phase 0 proof of concept that runs against stock upstream prime-agent -- a different program, with its own command name, its own PRIME_AGENT_* env vars and its own config dir, which the bench harness builds as split path segments. Naming it is naming upstream, not naming us (rule R1). Only those four upstream literals are exempt: 'Prime Agent' as a display name still fails here, as do this fork's own group-F paths"
-    },
-    {
       "glob": "README.md",
       "patterns": [
         "https://github\\.com/PrimeIntellect-ai/prime-agent/commit/[0-9a-f]{40}",

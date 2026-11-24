@@ -13,7 +13,7 @@
 //! Kernel-packaging e2e: the packaged (exe-adjacent) release layout boots
 //! a session with NO `PI_PACKAGE_DIR`, and the packaging script produces
 //! the release artifact (the TS native packaging contract: binary,
-//! `package.json`, `wasmedge-agent-runtime/` sidecar, and `skills/`).
+//! `version.json`, `wasmedge-agent-runtime/` sidecar, and `skills/`).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -72,9 +72,9 @@ fn stage_packaged_layout(dir: &Path, with_runtime: bool) {
     std::fs::copy(env!("CARGO_BIN_EXE_wasmedge-agent"), &binary).expect("copy binary");
     set_executable(&binary);
     std::fs::write(
-        dir.join("package.json"),
+        dir.join("version.json"),
         format!(
-            r#"{{"name":"wasmedge-agent","version":"{}","piConfig":{{"name":"wasmedge-agent","configDir":".wasmedge-agent"}}}}"#,
+            r#"{{"name":"wasmedge-agent","version":"{}"}}"#,
             env!("CARGO_PKG_VERSION")
         ),
     )
@@ -301,7 +301,7 @@ fn packaged_session_boots_kernel_without_pi_package_dir() {
 }
 
 /// The staged manifest reports the pinned version (TS `--version` reads the
-/// packaged package.json at runtime).
+/// packaged version.json at runtime).
 #[test]
 fn packaged_binary_reports_manifest_version() {
     let _guard = serial_lock();
@@ -309,7 +309,7 @@ fn packaged_binary_reports_manifest_version() {
     let staged = dir.path();
     stage_packaged_layout(staged, false);
     std::fs::write(
-        staged.join("package.json"),
+        staged.join("version.json"),
         r#"{"name":"wasmedge-agent","version":"9.8.7-test"}"#,
     )
     .expect("version manifest");
@@ -454,7 +454,7 @@ fn packaged_layout_stays_hermetic_under_hostile_host_env() {
     let staged = dir.path();
     stage_packaged_layout(staged, false);
     std::fs::write(
-        staged.join("package.json"),
+        staged.join("version.json"),
         format!(r#"{{"name":"wasmedge-agent","version":"{HOSTILE_STAGED_VERSION}"}}"#),
     )
     .expect("version manifest");
@@ -464,7 +464,7 @@ fn packaged_layout_stays_hermetic_under_hostile_host_env() {
     let package_decoy = decoys.path().join("package");
     std::fs::create_dir_all(&package_decoy).expect("package decoy dir");
     std::fs::write(
-        package_decoy.join("package.json"),
+        package_decoy.join("version.json"),
         r#"{"name":"wasmedge-agent","version":"0.0.0-decoy"}"#,
     )
     .expect("decoy manifest");
@@ -713,11 +713,10 @@ fn packaging_dry_run_produces_artifact() {
         "staged binary missing"
     );
     let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(stage.join("package.json")).expect("version manifest"),
+        &std::fs::read_to_string(stage.join("version.json")).expect("version manifest"),
     )
     .expect("manifest json");
     assert_eq!(manifest["version"], version, "version pin: {manifest}");
-    assert_eq!(manifest["piConfig"]["name"], "wasmedge-agent");
     assert!(
         stage
             .join("wasmedge-agent-runtime")

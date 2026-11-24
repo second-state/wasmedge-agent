@@ -481,7 +481,7 @@ mod tests {
             resource(
                 "/installed/pkg/skills/pack-skill/SKILL.md",
                 metadata(
-                    MetadataSource::Package("npm:foo/bar".to_string()),
+                    MetadataSource::Package("git:github.com/foo/bar".to_string()),
                     SourceScope::User,
                     ResourceOrigin::Package,
                     Some(PathBuf::from("/installed/pkg")),
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "npm:foo/bar (user)",
+                "git:github.com/foo/bar (user)",
                 "User (~/.wasmedge-agent/)",
                 "Built-in",
                 "Project settings"
@@ -626,12 +626,12 @@ mod tests {
         let (root, mut settings) = settings_fixture();
         let cwd = root.path().join("work");
         let agent_dir = root.path().join("agent");
-        settings.set_packages(vec![serde_json::json!("npm:foo/bar")]);
+        settings.set_packages(vec![serde_json::json!("git:github.com/foo/bar")]);
         let item = ResourceItem {
             path: PathBuf::from("/installed/pkg/skills/pack-skill/SKILL.md"),
             enabled: true,
             metadata: metadata(
-                MetadataSource::Package("npm:foo/bar".to_string()),
+                MetadataSource::Package("git:github.com/foo/bar".to_string()),
                 SourceScope::User,
                 ResourceOrigin::Package,
                 Some(PathBuf::from("/installed/pkg")),
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(
             settings.global_settings().packages,
             Some(vec![serde_json::json!({
-                "source": "npm:foo/bar",
+                "source": "git:github.com/foo/bar",
                 "skills": ["-skills/pack-skill/SKILL.md"],
             })])
         );

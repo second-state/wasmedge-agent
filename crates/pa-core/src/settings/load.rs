@@ -39,7 +39,6 @@ const KNOWN_FIELDS: &[&str] = &[
     "shellPath",
     "quietStartup",
     "shellCommandPrefix",
-    "npmCommand",
     "mcpServers",
     "mcpCatalogSources",
     "packages",

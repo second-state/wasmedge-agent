@@ -1,16 +1,12 @@
-//! `PackageManager`: install/remove/list/update of package sources against
-//! the settings store. `user` installs into the agent directory and global
-//! npm root; `project` into `.wasmedge-agent` and the project npm prefix;
-//! local sources bind by path, persisted relative to their settings base.
+//! Install, list, update and remove Git and local resource packages.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
 use super::git;
-use super::npm;
 pub use super::source::UserOrProject;
-use super::source::{parse_source, GitSource, NpmSource, ParsedSource, SourceScope};
+use super::source::{parse_source, GitSource, ParsedSource, SourceScope};
 use crate::settings::SettingsManager;
 
 /// Progress actions reported to the callback.
@@ -55,7 +51,7 @@ pub struct ConfiguredPackage {
 pub struct PackageUpdate {
     pub source: String,
     pub display_name: String,
-    /// "npm" | "git"
+    /// Package transport ("git").
     pub kind: &'static str,
     pub scope: UserOrProject,
 }
@@ -92,7 +88,6 @@ pub struct PackageManager {
     agent_dir: PathBuf,
     settings: SettingsManager,
     progress: Option<ProgressCallback>,
-    global_npm_root: Option<PathBuf>,
     /// `None` disables built-in skills entirely.
     bundled_skills_dir: Option<PathBuf>,
     extra_builtin_skill_overrides: Vec<String>,
@@ -125,7 +120,6 @@ impl PackageManager {
             agent_dir: options.agent_dir,
             settings: options.settings,
             progress: None,
-            global_npm_root: None,
             bundled_skills_dir,
             extra_builtin_skill_overrides: options.extra_builtin_skill_overrides,
         }
@@ -153,11 +147,6 @@ impl PackageManager {
         &self.agent_dir
     }
 
-    pub(super) fn settings_npm_command(&self) -> Option<Vec<String>> {
-        self.settings.settings().npm_command.clone()
-    }
-
-    /// Built-in skills directory; `None` when disabled.
     pub(super) fn bundled_skills_dir(&self) -> Option<&PathBuf> {
         self.bundled_skills_dir.as_ref()
     }
@@ -278,7 +267,7 @@ impl PackageManager {
     ///
     /// # Errors
     ///
-    /// Error when the npm or git install fails, or a local source path does not exist.
+    /// Error when a Git install fails, or a local source path does not exist.
     pub fn install(&mut self, source: &str, scope: UserOrProject) -> Result<()> {
         let parsed = parse_source(source);
         self.with_progress(
@@ -286,9 +275,7 @@ impl PackageManager {
             source,
             &format!("Installing {source}..."),
             |manager| match &parsed {
-                ParsedSource::Npm(npm_source) => {
-                    manager.install_npm(npm_source, SourceScope::from(scope), false)
-                }
+                ParsedSource::LegacyRegistry => bail!("{}", super::LEGACY_SOURCE_MESSAGE),
                 ParsedSource::Git(git_source) => {
                     manager.install_git_source(git_source, SourceScope::from(scope))
                 }
@@ -307,7 +294,7 @@ impl PackageManager {
     ///
     /// # Errors
     ///
-    /// Error when the npm uninstall or git removal fails; local sources always succeed.
+    /// Error when Git removal fails; local sources always succeed.
     pub fn remove(&mut self, source: &str, scope: UserOrProject) -> Result<()> {
         let parsed = parse_source(source);
         self.with_progress(
@@ -315,16 +302,13 @@ impl PackageManager {
             source,
             &format!("Removing {source}..."),
             |manager| match &parsed {
-                ParsedSource::Npm(npm_source) => {
-                    manager.uninstall_npm(npm_source, SourceScope::from(scope))
-                }
                 ParsedSource::Git(git_source) => git::remove_git(
                     git_source,
                     SourceScope::from(scope),
                     &manager.cwd,
                     &manager.agent_dir,
                 ),
-                ParsedSource::Local(_) => Ok(()),
+                ParsedSource::LegacyRegistry | ParsedSource::Local(_) => Ok(()),
             },
         )
     }
@@ -396,12 +380,7 @@ impl PackageManager {
     #[must_use]
     pub fn get_installed_path(&self, source: &str, scope: UserOrProject) -> Option<PathBuf> {
         match parse_source(source) {
-            ParsedSource::Npm(npm_source) => {
-                let global_root = self.global_npm_root().ok()?;
-                let path =
-                    npm::npm_install_path(&npm_source, scope.into(), &self.cwd, &global_root);
-                path.exists().then_some(path)
-            }
+            ParsedSource::LegacyRegistry => None,
             ParsedSource::Git(git_source) => {
                 let path =
                     git::git_install_path(&git_source, scope.into(), &self.cwd, &self.agent_dir);
@@ -440,7 +419,7 @@ impl PackageManager {
         }
     }
 
-    /// Local sources persist relative to their settings base; git/npm verbatim.
+    /// Local sources persist relative to their settings base; Git URLs verbatim.
     fn normalize_package_source_for_settings(&self, source: &str, scope: UserOrProject) -> String {
         if !matches!(parse_source(source), ParsedSource::Local(_)) {
             return source.to_string();
@@ -456,7 +435,7 @@ impl PackageManager {
     }
 
     /// Identity-based source comparison: an input matches a configured entry
-    /// when they resolve to the same package (npm name, git host/path, or
+    /// when they resolve to the same package (git host/path, or
     /// absolute local path).
     fn package_sources_match(
         &self,
@@ -471,7 +450,7 @@ impl PackageManager {
 
     pub(super) fn get_source_match_key_for_input(&self, source: &str) -> String {
         match parse_source(source) {
-            ParsedSource::Npm(npm_source) => format!("npm:{}", npm_source.name),
+            ParsedSource::LegacyRegistry => source.trim().to_owned(),
             ParsedSource::Git(git_source) => {
                 format!("git:{}/{}", git_source.host, git_source.path)
             }
@@ -487,7 +466,7 @@ impl PackageManager {
         scope: UserOrProject,
     ) -> String {
         match parse_source(source) {
-            ParsedSource::Npm(npm_source) => format!("npm:{}", npm_source.name),
+            ParsedSource::LegacyRegistry => source.trim().to_owned(),
             ParsedSource::Git(git_source) => {
                 format!("git:{}/{}", git_source.host, git_source.path)
             }
@@ -517,120 +496,12 @@ impl PackageManager {
         super::source::lexical_resolve(base, trimmed)
     }
 
-    pub(super) fn global_npm_root(&self) -> Result<PathBuf> {
-        if let Some(root) = &self.global_npm_root {
-            return Ok(root.clone());
-        }
-        let (program, args) = npm::npm_command(self.settings.settings().npm_command.as_ref());
-        let root = npm::discover_global_npm_root(&program, &args)?;
-        Ok(root)
-    }
-
-    pub(super) fn install_npm(
-        &mut self,
-        source: &NpmSource,
-        scope: SourceScope,
-        temporary: bool,
-    ) -> Result<()> {
-        if scope == SourceScope::User && !temporary {
-            self.run_npm_command(&["install", "-g", &source.spec], None)?;
-            return Ok(());
-        }
-        let install_root = npm::npm_install_root(scope, &self.cwd, &self.global_npm_root()?);
-        npm::ensure_npm_project(&install_root)?;
-        let install_root_str = install_root.display().to_string();
-        self.run_npm_command(
-            &["install", &source.spec, "--prefix", &install_root_str],
-            None,
-        )?;
-        Ok(())
-    }
-
-    fn uninstall_npm(&mut self, source: &NpmSource, scope: SourceScope) -> Result<()> {
-        if scope == SourceScope::User {
-            self.run_npm_command(&["uninstall", "-g", &source.name], None)?;
-            return Ok(());
-        }
-        let install_root = npm::project_npm_root(&self.cwd);
-        if !install_root.exists() {
-            return Ok(());
-        }
-        let install_root_str = install_root.display().to_string();
-        self.run_npm_command(
-            &["uninstall", &source.name, "--prefix", &install_root_str],
-            None,
-        )?;
-        Ok(())
-    }
-
-    /// Install location for an npm package in a scope (no existence check).
-    pub(super) fn npm_install_path(&self, source: &NpmSource, scope: UserOrProject) -> PathBuf {
-        let global_root = self.global_npm_root().unwrap_or_default();
-        npm::npm_install_path(source, scope.into(), &self.cwd, &global_root)
-    }
-
-    /// `npm view <name> version --json`.
-    pub(super) fn latest_npm_version(&self, name: &str) -> Result<String> {
-        let (program, args) = npm::npm_command(self.settings_npm_command().as_ref());
-        npm::latest_npm_version(&program, &args, name)
-    }
-
-    /// Batched npm install (`install -g specs` / project `--prefix` install).
-    pub(super) fn install_npm_batch(
-        &mut self,
-        specs: &[String],
-        scope: UserOrProject,
-    ) -> Result<()> {
-        if scope == UserOrProject::User {
-            let specs: Vec<String> = specs.to_vec();
-            self.run_npm_command(
-                &{
-                    let mut args = vec!["install".to_string(), "-g".to_string()];
-                    args.extend(specs);
-                    args
-                }
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-                None,
-            )?;
-            return Ok(());
-        }
-        let install_root = npm::project_npm_root(&self.cwd);
-        npm::ensure_npm_project(&install_root)?;
-        let install_root_str = install_root.display().to_string();
-        let mut args = vec!["install".to_string()];
-        args.extend(specs.iter().cloned());
-        args.push("--prefix".to_string());
-        args.push(install_root_str);
-        self.run_npm_command(&args.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
-        Ok(())
-    }
-
-    fn run_npm_command(&mut self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-        let (program, configured) = npm::npm_command(self.settings.settings().npm_command.as_ref());
-        let mut full_args: Vec<String> = configured;
-        full_args.extend(args.iter().map(std::string::ToString::to_string));
-        super::process::run_command(
-            &program,
-            &full_args.iter().map(String::as_str).collect::<Vec<_>>(),
-            cwd,
-        )
-    }
-
     pub(super) fn install_git_source(
         &mut self,
         source: &GitSource,
         scope: SourceScope,
     ) -> Result<()> {
-        let npm_command = self.settings.settings().npm_command.clone();
-        git::install_git(
-            source,
-            scope,
-            &self.cwd,
-            &self.agent_dir,
-            npm_command.as_ref(),
-        )
+        git::install_git(source, scope, &self.cwd, &self.agent_dir)
     }
 }
 
@@ -686,11 +557,6 @@ mod tests {
     fn make_pkg(dir: &tempfile::TempDir, relative: &str) -> std::path::PathBuf {
         let pkg = dir.path().join("cwd").join(relative);
         std::fs::create_dir_all(pkg.join("skills")).unwrap();
-        std::fs::write(
-            pkg.join("package.json"),
-            r#"{"name":"pkg","version":"1.0.0"}"#,
-        )
-        .unwrap();
         pkg
     }
 

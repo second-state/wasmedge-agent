@@ -730,7 +730,7 @@ ranges, examples and reload behavior.
 
 ## Focused Validation
 
-From `packages/coding-agent`, the implementation is covered by focused unit tests (`rust-cell-runtime`, `rust-cell-bridge-server`, `settings-manager`) and toolchain-gated integration tests (`rust-cell-bridge-integration`, `rust-cell-skills`, `rust-cell-harness`) that need `cargo`, the `wasm32-wasip1` target, and a `wasmedge` binary (`WASMEDGE_AGENT_WASMEDGE`). When changing child creation or accounting, include `agent-session-recursion.test.ts`; when changing the bridge, include the bridge server and native `rlm` tests (`cargo test --release --target <host>` in `wasmedge-agent-runtime/template/rlm`).
+Run `cargo test --release --locked -p pa-core --lib` for the session and tool logic. With Cargo, the wasm32-wasip1 target, WasmEdge and the prepared guest template installed, run `cargo test --release --locked -p pa-cli --test native_cells -- --ignored` for the native worker and bridge.
 
 ### Cell timing
 

@@ -320,6 +320,7 @@ fn pack(root: &Path, args: &[String]) -> Result<()> {
 }
 fn check(root: &Path) -> Result<()> {
     let files = checks::tracked(root)?;
+    checks::native_sources(root, &files)?;
     checks::branding(root, &files)?;
     checks::reports(root, &files)?;
     catalog::refresh(root, &[])?;

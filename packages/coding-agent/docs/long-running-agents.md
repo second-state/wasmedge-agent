@@ -195,7 +195,7 @@ stopping at the default three continuations:
 
 ```text
 /autonomous on --max-continuations 10 --max-turns 40 --max-tokens 500000
-/autonomous on --gate "npm run check" --gate-retries 2
+/autonomous on --gate "cargo check --locked" --gate-retries 2
 /autonomous status
 /autonomous off
 ```
@@ -205,7 +205,7 @@ Or configure a run from the CLI:
 ```bash
 wasmedge-agent \
   --autonomous \
-  --autonomous-gate "npm run check" \
+  --autonomous-gate "cargo check --locked" \
   --autonomous-max-turns 20 \
   "Implement and verify the requested change"
 ```

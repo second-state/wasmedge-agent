@@ -16,7 +16,7 @@ was measured.
   files, hashes the selected template separately, and checks both at the end.
 - Template vendoring/warming happened before the campaign. Each repetition
   started a fresh persisted workspace; all successful cells attempted Git
-  snapshots. The fixed scenario order is in the [driver](../../poc/bench/runtime.ts).
+  snapshots. The fixed scenario order is in the [driver](https://github.com/second-state/wasmedge-agent/blob/630cb342f419831ac18d74435ba12b4c14b0a81f/poc/bench/runtime.ts).
 - Gas/page limits and rustdoc queries were disabled; only the final scenario
   enabled the library test gate. Builds were offline. No other repository
   tests/builds were run concurrently with this campaign; host background load

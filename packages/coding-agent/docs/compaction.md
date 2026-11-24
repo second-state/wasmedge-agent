@@ -2,14 +2,7 @@
 
 LLMs have limited context windows. When conversations grow too long, WasmEdge Agent uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
 
-**Source files:**
-- [`compaction.ts`](../src/core/compaction/compaction.ts) - Auto-compaction logic
-- [`branch-summarization.ts`](../src/core/compaction/branch-summarization.ts) - Branch summarization
-- [`utils.ts`](../src/core/compaction/utils.ts) - Shared utilities (file tracking, serialization)
-- [`session-manager.ts`](../src/core/session-manager.ts) - Entry types (`CompactionEntry`, `BranchSummaryEntry`)
-- [`extensions/types.ts`](../src/core/extensions/types.ts) - Extension event types
-
-For TypeScript definitions in your project, inspect `node_modules/@earendil-works/pi-coding-agent/dist/`.
+See the [native compaction implementation](../../../crates/pa-core/src/session_engine/compaction.rs) and [persisted entry types](../../../crates/pa-types/src/session.rs).
 
 ## Overview
 
@@ -118,32 +111,7 @@ Never cut at tool results (they must stay with their tool call).
 
 ### CompactionEntry Structure
 
-Defined in [`session-manager.ts`](../src/core/session-manager.ts):
-
-```typescript
-interface CompactionEntry<T = unknown> {
-  type: "compaction";
-  id: string;
-  parentId: string;
-  timestamp: number;
-  summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
-  fromHook?: boolean;  // true if provided by extension (legacy field name)
-  details?: T;         // implementation-specific data
-  customInstructions?: string;  // user instructions from /compact <instructions>
-}
-
-// Default compaction uses this for details (from compaction.ts):
-interface CompactionDetails {
-  readFiles: string[];
-  modifiedFiles: string[];
-}
-```
-
-Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure.
-
-See [`prepareCompaction()` and `compact()`](../src/core/compaction/compaction.ts) for the implementation.
+A `compaction` entry records `summary`, `firstKeptEntryId` and `tokensBefore`. Optional `customInstructions` record instructions from `/compact`. The default `details` include the read and modified files. See the [JSONL examples](session-format.md#compactionentry).
 
 ## Branch Summarization
 
@@ -186,30 +154,7 @@ This means file tracking accumulates across multiple compactions or nested branc
 
 ### BranchSummaryEntry Structure
 
-Defined in [`session-manager.ts`](../src/core/session-manager.ts):
-
-```typescript
-interface BranchSummaryEntry<T = unknown> {
-  type: "branch_summary";
-  id: string;
-  parentId: string;
-  timestamp: number;
-  summary: string;
-  fromId: string;      // Entry we navigated from
-  fromHook?: boolean;  // true if provided by extension (legacy field name)
-  details?: T;         // implementation-specific data
-}
-
-// Default branch summarization uses this for details (from branch-summarization.ts):
-interface BranchSummaryDetails {
-  readFiles: string[];
-  modifiedFiles: string[];
-}
-```
-
-Same as compaction, extensions can store custom data in `details`.
-
-See [`collectEntriesForBranchSummary()`, `prepareBranchEntries()`, and `generateBranchSummary()`](../src/core/compaction/branch-summarization.ts) for the implementation.
+A `branch_summary` entry records the source branch in `fromId`, the summary text and any additional `details`. See the [JSONL examples](session-format.md#branchsummaryentry).
 
 ## Summary Format
 
@@ -259,7 +204,7 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 [User]: What they said
 [Assistant thinking]: Internal reasoning
 [Assistant]: Response text
-[Assistant tool calls]: #1 rust(code="..."); #2 bash(command="npm test")
+[Assistant tool calls]: #1 rust(code="..."); #2 bash(command="cargo test")
 [Tool result (rust) #1]: Output from tool
 [Tool result (bash, error) #2]: Output from a failed tool call
 ```
@@ -269,111 +214,6 @@ This prevents the model from treating it as a conversation to continue.
 Each tool call carries a sequential `#N` prefix and its result repeats the matching index, so repeated calls of the same tool in one turn pair unambiguously. Branch summaries drop tool-result entries before serialization (their context remains attached to the assistant tool call), so they show the `#N` call prefixes without any result lines. When the serialized input lacks the matching call — possible for extension callers passing partial message lists, since `serializeConversation` is exported — the result falls back to the name-only label.
 
 Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results, especially from `rust` and `bash`, are typically the largest contributors to context size.
-
-## Custom Summarization via Extensions
-
-Extensions can intercept and customize both compaction and branch summarization. See [`extensions/types.ts`](../src/core/extensions/types.ts) for event type definitions.
-
-### session_before_compact
-
-Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
-
-```typescript
-pi.on("session_before_compact", async (event, ctx) => {
-  const { preparation, branchEntries, customInstructions, signal } = event;
-
-  // preparation.messagesToSummarize - messages to summarize
-  // preparation.turnPrefixMessages - split turn prefix (if isSplitTurn)
-  // preparation.previousSummary - previous compaction summary
-  // preparation.fileOps - extracted file operations
-  // preparation.tokensBefore - context tokens before compaction
-  // preparation.firstKeptEntryId - where kept messages start
-  // preparation.settings - compaction settings
-
-  // branchEntries - all entries on current branch (for custom state)
-  // signal - AbortSignal (pass to LLM calls)
-
-  // Cancel:
-  return { cancel: true };
-
-  // Custom summary:
-  return {
-    compaction: {
-      summary: "Your summary...",
-      firstKeptEntryId: preparation.firstKeptEntryId,
-      tokensBefore: preparation.tokensBefore,
-      details: { /* custom data */ },
-    }
-  };
-});
-```
-
-#### Converting Messages to Text
-
-To generate a summary with your own model, convert messages to text using `serializeConversation`:
-
-```typescript
-import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
-
-pi.on("session_before_compact", async (event, ctx) => {
-  const { preparation } = event;
-  
-  // Convert AgentMessage[] to Message[], then serialize to text
-  const conversationText = serializeConversation(
-    convertToLlm(preparation.messagesToSummarize)
-  );
-  // Returns:
-  // [User]: message text
-  // [Assistant thinking]: thinking content
-  // [Assistant]: response text
-  // [Assistant tool calls]: #1 rust(code="..."); #2 bash(command="...")
-  // [Tool result (rust) #1]: output text
-
-  // Now send to your model for summarization
-  const summary = await myModel.summarize(conversationText);
-  
-  return {
-    compaction: {
-      summary,
-      firstKeptEntryId: preparation.firstKeptEntryId,
-      tokensBefore: preparation.tokensBefore,
-    }
-  };
-});
-```
-
-See [custom-compaction.ts](../examples/extensions/custom-compaction.ts) for a complete example using a different model.
-
-### session_before_tree
-
-Fired before `/tree` navigation. Always fires regardless of whether user chose to summarize. Can cancel navigation or provide custom summary.
-
-```typescript
-pi.on("session_before_tree", async (event, ctx) => {
-  const { preparation, signal } = event;
-
-  // preparation.targetId - where we're navigating to
-  // preparation.oldLeafId - current position (being abandoned)
-  // preparation.commonAncestorId - shared ancestor
-  // preparation.entriesToSummarize - entries that would be summarized
-  // preparation.userWantsSummary - whether user chose to summarize
-
-  // Cancel navigation entirely:
-  return { cancel: true };
-
-  // Provide custom summary (only used if userWantsSummary is true):
-  if (preparation.userWantsSummary) {
-    return {
-      summary: {
-        summary: "Your summary...",
-        details: { /* custom data */ },
-      }
-    };
-  }
-});
-```
-
-See `SessionBeforeTreeEvent` and `TreePreparation` in the types file.
 
 ## Settings
 

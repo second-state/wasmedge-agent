@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::super::PackageManager;
-use super::discovery::{collect_resource_files, read_pi_manifest};
+use super::discovery::{collect_resource_files, read_manifest};
 use super::manager::collect_files_from_paths;
 use super::patterns::{apply_patterns, has_glob_pattern, is_override_pattern};
 use super::{
@@ -42,7 +42,7 @@ impl PackageManager {
             return true;
         }
 
-        let manifest = read_pi_manifest(package_root);
+        let manifest = read_manifest(package_root);
         if let Some(manifest) = manifest {
             for resource_type in RESOURCE_TYPES {
                 let entries = manifest.entries(resource_type);
@@ -107,7 +107,7 @@ impl PackageManager {
     /// All files a package offers for one kind: manifest entries (filtered by
     /// the manifest's own override patterns) or the convention directory.
     fn collect_manifest_files(package_root: &Path, resource_type: ResourceType) -> Vec<PathBuf> {
-        let manifest = read_pi_manifest(package_root);
+        let manifest = read_manifest(package_root);
         let entries = manifest
             .as_ref()
             .and_then(|manifest| manifest.entries(resource_type))
@@ -189,7 +189,7 @@ impl PackageManager {
         accumulator: &mut ResourceAccumulator,
         metadata: &PathMetadata,
     ) {
-        let manifest = read_pi_manifest(package_root);
+        let manifest = read_manifest(package_root);
         let entries = manifest
             .as_ref()
             .and_then(|manifest| manifest.entries(resource_type));

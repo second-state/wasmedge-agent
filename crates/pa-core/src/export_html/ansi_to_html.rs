@@ -33,7 +33,7 @@ fn color256_to_hex(index: u64) -> String {
     }
 }
 
-fn escape_html(text: &str) -> String {
+pub(super) fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

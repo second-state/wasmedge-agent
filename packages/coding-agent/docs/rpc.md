@@ -2,7 +2,7 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
+The [Rust SDK](sdk.md) exposes the session engine to in-process clients. Other clients can use this language-independent subprocess protocol.
 
 ## Starting RPC Mode
 
@@ -1395,62 +1395,4 @@ for event in read_events():
     if event.get("type") == "agent_end":
         print()
         break
-```
-
-## Example: Interactive Client (Node.js)
-
-See [`test/rpc-example.ts`](../test/rpc-example.ts) for a complete interactive example, or [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts) for a typed client implementation.
-
-For a complete example of handling the extension UI protocol, see [`examples/rpc-extension-ui.ts`](../examples/rpc-extension-ui.ts) which pairs with the [`examples/extensions/rpc-demo.ts`](../examples/extensions/rpc-demo.ts) extension.
-
-```javascript
-const { spawn } = require("child_process");
-const { StringDecoder } = require("string_decoder");
-
-const agent = spawn("wasmedge-agent", ["--mode", "rpc", "--no-session"]);
-
-function attachJsonlReader(stream, onLine) {
-    const decoder = new StringDecoder("utf8");
-    let buffer = "";
-
-    stream.on("data", (chunk) => {
-        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-
-        while (true) {
-            const newlineIndex = buffer.indexOf("\n");
-            if (newlineIndex === -1) break;
-
-            let line = buffer.slice(0, newlineIndex);
-            buffer = buffer.slice(newlineIndex + 1);
-            if (line.endsWith("\r")) line = line.slice(0, -1);
-            onLine(line);
-        }
-    });
-
-    stream.on("end", () => {
-        buffer += decoder.end();
-        if (buffer.length > 0) {
-            onLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
-        }
-    });
-}
-
-attachJsonlReader(agent.stdout, (line) => {
-    const event = JSON.parse(line);
-
-    if (event.type === "message_update") {
-        const { assistantMessageEvent } = event;
-        if (assistantMessageEvent.type === "text_delta") {
-            process.stdout.write(assistantMessageEvent.delta);
-        }
-    }
-});
-
-// Send prompt
-agent.stdin.write(JSON.stringify({ type: "prompt", message: "Hello" }) + "\n");
-
-// Abort on Ctrl+C
-process.on("SIGINT", () => {
-    agent.stdin.write(JSON.stringify({ type: "abort" }) + "\n");
-});
 ```

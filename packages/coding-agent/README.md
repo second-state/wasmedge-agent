@@ -354,37 +354,7 @@ See [docs/mcp-integrations.md](docs/mcp-integrations.md) for the full authoring 
 
 ### Extensions
 
-<p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>
-
-TypeScript modules that extend WasmEdge Agent with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
-
-```typescript
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "deploy", ... });
-  pi.registerCommand("stats", { ... });
-  pi.on("tool_call", async (event, ctx) => { ... });
-}
-```
-
-The default export can also be `async`. WasmEdge Agent waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
-
-Schedule timers via `ctx.setTimeout`/`ctx.setInterval` (error-isolated, auto-cancelled on unload); raw global timers are unsupported for scheduling extension work.
-
-**What's possible:**
-- Custom tools (or replace built-in tools entirely)
-- Additional orchestration workflows and plan modes
-- Custom compaction and summarization
-- Permission gates and path protection
-- Custom editors and UI components
-- Status lines, headers, footers
-- Git checkpointing and auto-commit
-- SSH and sandbox execution
-- MCP server integration
-- Make WasmEdge Agent look like Claude Code
-- Games while waiting (yes, Doom runs)
-- ...anything you can dream up
-
-Place in `~/.wasmedge-agent/extensions/`, `.wasmedge-agent/extensions/`, or a [WasmEdge Agent package](#wasmedge-agent-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
+Use the Rust SDK to supply tool definitions and callbacks to an embedded session. Skills, prompt templates and themes can be shared as data files. See the [extension guide](docs/extensions.md).
 
 ### Themes
 
@@ -394,47 +364,16 @@ Place in `~/.wasmedge-agent/themes/`, `.wasmedge-agent/themes/`, or a [WasmEdge 
 
 ### WasmEdge Agent Packages
 
-Bundle and share extensions, skills, prompts, and themes via npm or git.
+Install resource packages from Git or a local directory:
 
-> **Security:** WasmEdge Agent packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
-
-```bash
-wasmedge-agent package install npm:@foo/wasmedge-agent-tools
-wasmedge-agent package install npm:@foo/wasmedge-agent-tools@1.2.3  # pinned version
-wasmedge-agent package install git:github.com/user/repo
-wasmedge-agent package install git:github.com/user/repo@v1       # tag or commit
-wasmedge-agent package install git:git@github.com:user/repo
-wasmedge-agent package install https://github.com/user/repo
-wasmedge-agent package install ssh://git@github.com/user/repo
-wasmedge-agent package remove npm:@foo/wasmedge-agent-tools
+```sh
+wasmedge-agent package install git:github.com/user/repo@v1
+wasmedge-agent package install ./team-resources
 wasmedge-agent package list
-wasmedge-agent package update                                  # update packages, except pinned versions
-wasmedge-agent package update npm:@foo/wasmedge-agent-tools       # update one package
-wasmedge-agent update                                          # update WasmEdge Agent
-wasmedge-agent update --force                                  # reinstall WasmEdge Agent even if current
-wasmedge-agent config                                          # enable/disable package resources
+wasmedge-agent package remove ./team-resources
 ```
 
-Packages install to `~/.wasmedge-agent/git/` (git) or global npm. Use `--local` for project-local installs (`.wasmedge-agent/git/`, `.wasmedge-agent/npm/`). Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
-
-Create a package by adding the inherited `pi` manifest key to `package.json`:
-
-```json
-{
-  "name": "my-wasmedge-agent-package",
-  "keywords": ["wasmedge-agent-package"],
-  "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"],
-    "themes": ["./themes"]
-  }
-}
-```
-
-Without a `pi` manifest, WasmEdge Agent auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
-
-See [docs/packages.md](docs/packages.md).
+The [package guide](docs/packages.md) covers the optional `wasmedge-agent.json` manifest, filtering and updating.
 
 ## Programmatic Usage
 
@@ -510,7 +449,7 @@ Schedules run prompts later or repeatedly. A schedule can be a supported one-tim
 
 ### Package and Update Commands
 
-Packages bundle capabilities such as extensions, skills, prompts, and themes.
+Packages bundle skills, prompts, and themes.
 
 ```bash
 wasmedge-agent package install <source> [--local]
@@ -574,8 +513,6 @@ Available built-in tools: `rust`, `bash`
 
 | Option | Description |
 |--------|-------------|
-| `-e`, `--extension <source>` | Load extension from path, npm, or git (repeatable) |
-| `--no-extensions` | Disable extension discovery |
 | `--skill <path>` | Load skill (repeatable) |
 | `--no-skills` | Disable skill discovery |
 | `--prompt-template <path>` | Load prompt template (repeatable) |
@@ -584,7 +521,7 @@ Available built-in tools: `rust`, `bash`
 | `--no-themes` | Disable theme discovery |
 | `--no-context-files`, `-nc` | Disable AGENTS.md and CLAUDE.md context file discovery |
 
-Combine `--no-*` with explicit flags to load exactly what you need, ignoring settings.json (e.g., `--no-extensions -e ./my-ext.ts`).
+Combine `--no-*` with explicit flags to load exactly what you need, ignoring settings.json (e.g., `--no-skills --skill ./my-skill`).
 
 ### Autonomous Options
 

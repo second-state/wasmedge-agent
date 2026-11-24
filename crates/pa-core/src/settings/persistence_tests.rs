@@ -20,14 +20,13 @@ fn document(storage: &dyn SettingsStorage) -> Value {
 #[test]
 fn project_settings_cannot_select_executable_configuration() {
     let (storage, mut manager) = fixture(
-        r#"{"theme":"global","sessionDir":"/trusted/sessions","shellPath":"/trusted/shell","shellCommandPrefix":"trusted", "npmCommand":["trusted-npm"],"packages":["trusted-package"],"mcpServers":{"trusted":{"command":"trusted"}},"mcpCatalogSources":["trusted.json"]}"#,
+        r#"{"theme":"global","sessionDir":"/trusted/sessions","shellPath":"/trusted/shell","shellCommandPrefix":"trusted", "packages":["trusted-package"],"mcpServers":{"trusted":{"command":"trusted"}},"mcpCatalogSources":["trusted.json"]}"#,
     );
     let project = json!({
         "theme": "project",
         "sessionDir": "/attacker/session-artifacts",
         "shellPath": "/attacker/shell",
         "shellCommandPrefix": "attacker",
-        "npmCommand": ["attacker-npm"],
         "packages": ["npm:attacker"],
         "mcpServers": {"attacker": {"command": "attacker"}},
         "mcpCatalogSources": ["attacker.json"]
@@ -42,7 +41,6 @@ fn project_settings_cannot_select_executable_configuration() {
         assert_eq!(effective.session_dir.as_deref(), Some("/trusted/sessions"));
         assert_eq!(effective.shell_path.as_deref(), Some("/trusted/shell"));
         assert_eq!(effective.shell_command_prefix.as_deref(), Some("trusted"));
-        assert_eq!(effective.npm_command, Some(vec!["trusted-npm".into()]));
         assert_eq!(effective.packages, Some(vec![json!("trusted-package")]));
         assert!(effective
             .mcp_servers
@@ -63,7 +61,6 @@ fn project_settings_cannot_select_executable_configuration() {
     assert_eq!(project_settings.shell_path, None);
     assert_eq!(project_settings.session_dir, None);
     assert_eq!(project_settings.shell_command_prefix, None);
-    assert_eq!(project_settings.npm_command, None);
     assert_eq!(project_settings.packages, None);
     assert_eq!(project_settings.mcp_servers, None);
     assert_eq!(project_settings.mcp_catalog_sources, None);

@@ -244,7 +244,6 @@ Built-in tools: `rust`, `bash`.
 
 | Option | Description |
 |--------|-------------|
-| `-e`, `--extension <source>` | Load an extension from path, npm, or git; repeatable |
 | `--no-extensions`, `-ne` | Disable extension discovery |
 | `--skill <path>` | Load a skill; repeatable |
 | `--no-skills`, `-ns` | Disable skill discovery |
@@ -264,7 +263,7 @@ wasmedge-agent --no-extensions -e ./my-extension.ts
 
 Autonomous mode is a host policy for unattended work. It starts disabled. `--autonomous` enables it, and supplying any `--autonomous-*` sub-option also enables it. The host starts each enabled run with fresh continuation, turn, token, and elapsed-time counters.
 
-Interactive sessions set the same budget from the `/autonomous` slash command: `/autonomous on` accepts every budget option above using the flag name without the `--autonomous-` prefix (`--max-continuations`, `--max-turns`, `--max-tokens`, `--timeout-ms`, `--gate`, `--gate-retries`, `--gate-timeout-ms`), plus the full CLI spellings as aliases. For example, `/autonomous on --max-continuations 10 --gate "npm run check"` enables a ten-continuation run instead of the default three. Values follow the same positive-integer rules, may use `--flag=<value>` or `--flag <value>`, and accept `,` or `_` as digit separators, so `--max-tokens 100,000,000,000` and `--max-tokens 100_000_000_000` both work. The four budget limits also accept `unlimited` to remove that cap. Named budget flags define the whole budget: any limit you do not name becomes unlimited, so only the flags you pass (plus gates) decide when the run stops — for example, `/autonomous on --max-tokens 100,000` runs until that token budget is spent. With no budget flags at all, the configured or default limits still apply. A run with every budget limit unlimited and no gates has no automatic stopping point, so pair it with a gate or an explicit large budget.
+Interactive sessions set the same budget from the `/autonomous` slash command: `/autonomous on` accepts every budget option above using the flag name without the `--autonomous-` prefix (`--max-continuations`, `--max-turns`, `--max-tokens`, `--timeout-ms`, `--gate`, `--gate-retries`, `--gate-timeout-ms`), plus the full CLI spellings as aliases. For example, `/autonomous on --max-continuations 10 --gate "cargo check --locked"` enables a ten-continuation run instead of the default three. Values follow the same positive-integer rules, may use `--flag=<value>` or `--flag <value>`, and accept `,` or `_` as digit separators, so `--max-tokens 100,000,000,000` and `--max-tokens 100_000_000_000` both work. The four budget limits also accept `unlimited` to remove that cap. Named budget flags define the whole budget: any limit you do not name becomes unlimited, so only the flags you pass (plus gates) decide when the run stops — for example, `/autonomous on --max-tokens 100,000` runs until that token budget is spent. With no budget flags at all, the configured or default limits still apply. A run with every budget limit unlimited and no gates has no automatic stopping point, so pair it with a gate or an explicit large budget.
 
 | Option | Behavior, units, and default |
 |--------|------------------------------|
@@ -286,7 +285,7 @@ For example, this noninteractive run uses a locally available model configuratio
 ```bash
 wasmedge-agent -p \
   --autonomous \
-  --autonomous-gate "npm run check" \
+  --autonomous-gate "cargo check --locked" \
   --autonomous-gate-retries 2 \
   --autonomous-gate-timeout-ms 300000 \
   --autonomous-max-continuations 3 \

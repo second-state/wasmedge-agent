@@ -33,12 +33,12 @@ Install a native platform archive from GitHub Releases or build the CLI with Car
 
 ## Customization
 
-- [Extensions](extensions.md) - TypeScript modules for tools, commands, events, and custom UI.
+- [Extensions](extensions.md) - resource packages and tool registration with the Rust SDK.
 - [Skills](skills.md) - markdown and Python-backed skills, including how to ask WasmEdge Agent to create them.
 - [MCP integrations](mcp-integrations.md) - use MCP servers through Python skills without expanding the model's tool surface.
 - [Prompt templates](prompt-templates.md) - reusable prompts that expand from slash commands.
 - [Themes](themes.md) - built-in and custom terminal themes.
-- [WasmEdge Agent packages](packages.md) - bundle and share extensions, skills, prompts, and themes.
+- [WasmEdge Agent packages](packages.md) - bundle and share skills, prompts, and themes.
 - [Custom models](models.md) - add model entries for supported provider APIs.
 - [Custom providers](custom-provider.md) - implement custom APIs and OAuth flows.
 
@@ -48,7 +48,7 @@ Install a native platform archive from GitHub Releases or build the CLI with Car
 - [ACP mode](acp.md) - drive WasmEdge Agent from any Agent Client Protocol client.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.
-- [TUI components](tui.md) - build custom terminal UI for extensions.
+- [TUI components](tui.md) - the native terminal UI and its client interfaces.
 
 ## Reference
 

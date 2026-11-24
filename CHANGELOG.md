@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Resource packages install from Git or a local directory. Replace existing `npm:` sources with their repository URL or path. Git checkout and update do not run dependency installers. See the [package guide](packages/coding-agent/docs/packages.md).
+- Rust renders session exports with Markdown, highlighted code, branch navigation and expandable tool results. Exports and the published benchmark readers work with browser scripting disabled.
+
 - The Rust session worker now owns Rust/WASI cells, host bash and their lifecycle. The public SDK is a Cargo library. Releases ship native executables, the offline guest template and a separate SDK source archive. Existing JavaScript embedders can use the CLI RPC protocol or move to the Rust SDK. See the [SDK migration guide](packages/coding-agent/docs/sdk.md).
 
 - Synced with upstream v0.9.8, the last upstream TypeScript release. Upstream changes from v0.7.1 through v0.9.8 are included, except changes to the removed Python kernel runtime. See the upstream changelog for details.
