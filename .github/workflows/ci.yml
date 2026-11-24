@@ -95,11 +95,20 @@ jobs:
       - name: Install the rustdoc JSON test toolchain
         run: rustup toolchain install nightly-2026-09-25 --profile minimal --target wasm32-wasip1
 
-      - name: Cache cargo and the template build
+      - name: Cache host Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # The virtual workspace manifest defines the profiles for every crate.
+          key: ${{ hashFiles('Cargo.toml') }}
+          env-vars: ImageOS
+          cache-bin: "false"
+          # PRs restore main's cache without filling the repository quota per branch.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cache the WASI template
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/registry
             wasmedge-agent-runtime/template/vendor
             wasmedge-agent-runtime/template/target
           key: cell-template-${{ runner.os }}-${{ hashFiles('wasmedge-agent-runtime/template/Cargo.lock') }}
@@ -147,10 +156,13 @@ jobs:
         run: |
           platform=linux-x64
           if [ "$RUNNER_OS" = macOS ]; then platform=darwin-arm64; fi
-          mkdir -p "target/release-hosts/$platform"
-          cp target/release/wasmedge-agent "target/release-hosts/$platform/"
-          cargo run --release --locked -p xtask -- pack --base-url https://github.com/second-state/wasmedge-agent/releases --platform "$platform"
-          cd target/dist/artifacts
+          hosts="$RUNNER_TEMP/release-hosts"
+          dist="$RUNNER_TEMP/release-dist"
+          mkdir -p "$hosts/$platform"
+          cp target/release/wasmedge-agent "$hosts/$platform/"
+          cargo run --release --locked -p xtask -- pack --base-url https://github.com/second-state/wasmedge-agent/releases \
+            --platform "$platform" --hosts "$hosts" --out-dir "$dist"
+          cd "$dist/artifacts"
           shasum -a 256 -c SHA256SUMS
           set -- "$PWD"/*-"$platform".tar.gz
           WASMEDGE_AGENT_RUST_PREFIX="$RUNNER_TEMP/native-install" WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL=0 sh install.sh --archive "$1"
