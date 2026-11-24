@@ -28,7 +28,7 @@ fancy-regex = "0.20"
 # `encoding` feature carries the SPKI PEM wire form).
 rsa = "0.10"
 libc = "0.2"
-nix = { version = "0.29", features = ["signal", "process", "user", "fs", "dir"] }
+nix = { version = "0.32", features = ["signal", "process", "user", "fs", "dir"] }
 tokio-util.workspace = true
 uuid = { version = "1", features = ["v4", "v7"] }
 sha2 = "0.11"
