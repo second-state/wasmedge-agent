@@ -45,7 +45,7 @@ serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 ignore = "0.4"
 
 tempfile = "3"
-wasmparser = { version = "0.245.1", default-features = false, features = ["std", "validate", "features", "prefer-btree-collections"] }
+wasmparser = { version = "0.263.0", default-features = false, features = ["std", "validate", "features", "prefer-btree-collections"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 ammonia = "4"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
