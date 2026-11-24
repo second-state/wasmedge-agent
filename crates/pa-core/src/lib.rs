@@ -30,7 +30,7 @@ pub use tools::tool_definition::{
 // Path-resolution helper for the CLI's `@file` expansion (cwd-relative
 // resolve with the macOS filename variants).
 pub use tools::path_utils::resolve_read_path;
-pub use tools::rust_cell::{prepare_child_workspace, worker_path as tool_worker_path};
+pub use tools::rust_cell::{maintenance as cell_maintenance, prepare_child_workspace};
 
 // Result-rendering helpers: the image metadata pair the daemon's snapshot
 // elision consumes alongside the tool renderers (narrow re-export).

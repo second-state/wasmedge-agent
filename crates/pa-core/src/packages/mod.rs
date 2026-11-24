@@ -120,7 +120,7 @@ pub fn get_bundled_skills_dir() -> PathBuf {
         return packaged;
     }
     if let Some(root) = source_checkout_root() {
-        let source_checkout = root.join("packages/coding-agent/skills");
+        let source_checkout = root.join("skills");
         if source_checkout.is_dir() {
             return source_checkout;
         }

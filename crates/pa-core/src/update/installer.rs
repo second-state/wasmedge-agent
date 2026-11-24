@@ -34,16 +34,22 @@ pub const ENV_DOWNLOAD_BASE_URL: &str = "WASMEDGE_AGENT_DOWNLOAD_BASE_URL";
 /// `install-rust.sh`'s `DOWNLOAD_BASE_URL_DEFAULT`: where the channel
 /// manifests (`latest.json`, `beta.json`) are published.
 pub const DEFAULT_DOWNLOAD_BASE_URL: &str =
-    "https://github.com/second-state/wasmedge-agent/releases/latest/download";
+    "https://github.com/second-state/wasmedge-agent/releases";
 
-/// The official domain's install endpoint — the stable channel's installer
-/// source; never a GitHub raw or workflow URL (the override env var stays
-/// for tests and pinned installs).
+/// The stable installer published by the fork.
 pub const OFFICIAL_INSTALLER_URL: &str =
     "https://github.com/second-state/wasmedge-agent/releases/latest/download/install.sh";
-/// The nightly installer's file under the download base (the domain only
-/// forwards `install.sh`, so nightly updates fetch it from the base).
-pub const BETA_INSTALLER_FILE: &str = "install-beta.sh";
+
+/// Resolve channel assets using the same layout as the published installer.
+#[must_use]
+pub fn channel_asset_url(base: &str, beta: bool, file: &str) -> String {
+    let route = if beta {
+        "download/beta"
+    } else {
+        "latest/download"
+    };
+    format!("{}/{route}/{file}", base.trim_end_matches('/'))
+}
 
 /// `install-rust.sh` as this build shipped it. The local operations
 /// (`wasmedge-agent update --rollback` and `--archive`) run this copy: they
@@ -65,11 +71,7 @@ const SCRIPT_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// probe uses; a hung launcher must not hang the report).
 const LAUNCHER_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The installer script URL for an installer channel (`stable` | `beta`):
-/// `<download base>/install-beta.sh` for beta, the official domain's
-/// install endpoint otherwise. `WASMEDGE_AGENT_RUST_INSTALLER_URL` overrides
-/// both — tests serve their own script, a pinned install can point
-/// elsewhere.
+/// An explicitly pinned installer takes precedence over the channel release.
 #[must_use]
 pub fn installer_script_url(channel: Option<&str>) -> String {
     if let Ok(url) = std::env::var(ENV_INSTALLER_URL) {
@@ -77,13 +79,7 @@ pub fn installer_script_url(channel: Option<&str>) -> String {
             return url;
         }
     }
-    match channel {
-        Some("beta") => format!(
-            "{}/{BETA_INSTALLER_FILE}",
-            download_base_url().trim_end_matches('/')
-        ),
-        _ => OFFICIAL_INSTALLER_URL.to_string(),
-    }
+    channel_asset_url(&download_base_url(), channel == Some("beta"), "install.sh")
 }
 
 /// The download base `--check` reads the channel manifest from: the
@@ -231,7 +227,9 @@ pub async fn run_installer_from(
     let result = execute_script(&handle, &[], prefix, channel, output).await;
     let _ = std::fs::remove_file(&script);
     result?;
-    let version = launcher_version(prefix).await;
+    let version = launcher_version(prefix)
+        .await
+        .or_else(|| installed_version(prefix));
     Ok(Installed { version })
 }
 
@@ -774,7 +772,7 @@ async fn launcher_version(prefix: &Path) -> Option<String> {
         };
         let first = String::from_utf8_lossy(&output.stdout);
         let version = first.lines().next().map(str::trim).unwrap_or_default();
-        if running_commit(version).is_some() {
+        if output.status.success() && running_commit(version).is_some() {
             return Some(version.to_string());
         }
     }
@@ -1117,14 +1115,17 @@ echo "installed: 9.9.8-continuous.fedcba9876543210"
         assert_eq!(installer_script_url(None), OFFICIAL_INSTALLER_URL);
         assert_eq!(
             installer_script_url(Some("beta")),
-            "https://github.com/second-state/wasmedge-agent/releases/latest/download/install-beta.sh"
+            "https://github.com/second-state/wasmedge-agent/releases/download/beta/install.sh"
         );
         std::env::set_var(ENV_DOWNLOAD_BASE_URL, "https://mirror.example/");
         assert_eq!(
             installer_script_url(Some("beta")),
-            "https://mirror.example/install-beta.sh"
+            "https://mirror.example/download/beta/install.sh"
         );
-        assert_eq!(installer_script_url(Some("stable")), OFFICIAL_INSTALLER_URL);
+        assert_eq!(
+            installer_script_url(Some("stable")),
+            "https://mirror.example/latest/download/install.sh"
+        );
         std::env::set_var(ENV_INSTALLER_URL, "http://127.0.0.1:9/pinned.sh");
         assert_eq!(
             installer_script_url(Some("beta")),

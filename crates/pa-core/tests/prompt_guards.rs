@@ -30,7 +30,7 @@ fn bundled_skills_dir() -> std::path::PathBuf {
         .ancestors()
         .nth(2)
         .expect("workspace root")
-        .join("packages/coding-agent/skills")
+        .join("skills")
 }
 
 fn sorted_bundled_skills() -> Vec<Skill> {

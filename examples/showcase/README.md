@@ -9,39 +9,18 @@ demonstrates one thing the runtime swap changes. Plan for 30–45 minutes.
 
 ## 1. Prerequisites
 
-- Node.js ≥ 22.8 and npm
 - Rust via [rustup](https://rustup.rs), plus the wasm target:
   `rustup target add wasm32-wasip1`
 - [WasmEdge](https://wasmedge.org): `curl -fsSL https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash`
   (this is what our own `install.sh` runs; the older `utils/install.sh`
   needs git and Python)
-- Clone this repo, then from its root: `npm install && npm run build`
+- Build the native CLI and prepare the workspace template once from the repository root.
 
-Verify everything:
-
-```bash
-./wasmedge-agent.sh doctor        # six checks; `doctor --fix` repairs most issues
-```
-
-On a fresh clone, `doctor` will report the workspace template as
-not-vendored and cold — that is expected. Run `./wasmedge-agent.sh doctor
---fix` once (it takes a minute) to vendor and warm it, or let the first
-launch do it lazily.
-
-`npm run build` copies a second template into `dist/` with the vendored
-dependencies and build cache stripped out, and that is the one `--dist`
-uses. If you plan to launch with `--dist` in section 3, warm it too —
-otherwise its first `rust` cell pays the one-time vendor and build itself:
-
-```bash
+```sh
+cargo build --release --locked --bin wasmedge-agent
 ./wasmedge-agent.sh --dist doctor --fix
+./wasmedge-agent.sh --dist doctor --json
 ```
-
-Unlike the source template, this one is not warmed once and left alone:
-every `npm run build` re-copies it and strips `vendor/` and `target/` out
-again. Re-run the command above after each rebuild, or the next `--dist`
-session pays the vendor and build again on its first `rust` cell — and
-fails outright if you happen to be offline.
 
 ## 2. Model access
 
@@ -100,9 +79,7 @@ re-running this snippet on a later visit keeps your earlier work. To start
 over from the pristine fixture instead, delete it first with `rm -rf
 /tmp/showcase`.
 
-The TUI takes a few seconds to appear when running from source
-(`./wasmedge-agent.sh --dist` is ~3× faster after `npm run build`, once its
-own template is warm — see section 1). Skim
+Skim
 `notes.md` in the fixture for the backstory: ops handed you a flaky
 morning of API traffic and an inventory snapshot.
 

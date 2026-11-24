@@ -1,5 +1,14 @@
 # Three-version benchmark
 
+These experiments use the October TypeScript SDK and host. To reproduce the published runs, create a separate checkout with their original build inputs, then follow the instructions below in that checkout.
+
+```sh
+git worktree add --detach ../wasmedge-agent-benchmark 630cb342f419831ac18d74435ba12b4c14b0a81f
+cd ../wasmedge-agent-benchmark
+npm ci
+npm run build
+```
+
 報告選擇、建議閱讀順序與耗時定義請從 [English documentation guide](../../../docs/README.md) 開始；本檔案說明 runner 的操作與分析。
 
 N01／N03／N04 的真模型驗證另用 `--suite workloads-e2e`，或 `E-N01-graph,E-N03-events,E-N04-simulation`。模型自行產生 cells，沒有嵌入 reference source；完整輸出及輸入完整性由獨立 checker 驗證，不使用數值套件。只支援 cold workspace，未定義模型暖機策略時會拒絕 warm。操作及結果見 [Opus e2e 紀錄](../../../docs/benchmark-rust-cell-e2e-2026-10-10.md)。分析新增 `workloads-e2e.html/json`，原有無模型資料保留且不混池。

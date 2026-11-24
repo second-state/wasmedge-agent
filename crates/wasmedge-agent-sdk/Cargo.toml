@@ -1,0 +1,20 @@
+[package]
+name = "wasmedge-agent-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Embed the WasmEdge Agent session engine in a Rust application"
+repository = "https://github.com/second-state/wasmedge-agent"
+
+[dependencies]
+pa-core = { path = "../pa-core" }
+pa-agent.workspace = true
+pa-ai.workspace = true
+pa-types.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

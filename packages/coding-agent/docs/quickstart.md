@@ -7,18 +7,20 @@ This page gets you from install to a useful first WasmEdge Agent session.
 > Installation arrives with the first WasmEdge Agent release. Until then,
 > build from source: see [development.md](development.md).
 
-To run a source checkout, use Node.js 22.8.0 or newer:
+To run a source checkout, install Rust and WasmEdge.
 
 ```bash
 git clone https://github.com/hydai/wasmedge-agent
 cd wasmedge-agent
-npm ci
+rustup target add wasm32-wasip1
+cargo build --release --locked --bin wasmedge-agent
+./wasmedge-agent.sh --dist doctor --fix
 ./wasmedge-agent.sh
 ```
 
 The source runner preserves the directory from which it is invoked, so you can also call `/path/to/wasmedge-agent/wasmedge-agent.sh` from another project.
 
-The release will install the `wasmedge-agent` command; the inherited npm workspace identifiers in the source tree are not the public install path. Once it is installed, start WasmEdge Agent in the project directory you want it to work on:
+The native release installs the `wasmedge-agent` command. Once it is installed, start WasmEdge Agent in the project directory you want it to work on:
 
 ```bash
 cd /path/to/project
@@ -66,7 +68,7 @@ WasmEdge Agent runs in your current working directory and can modify files there
 
 ## Recursive Subagents
 
-Recursive subagents are a built-in WasmEdge Agent capability. The model spawns independent work from a rust cell with `rlm::spawn("subtask")?`; each call returns at admission with a child handle and never returns the answer. Children send requested results as explicit agent-message replies to the parent (`rlm::msg::send_to_parent`) or write them to files. Child agents use the same TypeScript agent runtime, providers, tools, skills, and session machinery as the parent.
+Recursive subagents are a built-in WasmEdge Agent capability. The model spawns independent work from a rust cell with `rlm::spawn("subtask")?`; each call returns at admission with a child handle and never returns the answer. Children send requested results as explicit agent-message replies to the parent (`rlm::msg::send_to_parent`) or write them to files. Child agents use the same Rust session engine, providers, tools, skills, and session machinery as the parent.
 
 You can prompt the model to use that capability directly:
 
@@ -83,7 +85,7 @@ WasmEdge Agent loads context files at startup. Add an `AGENTS.md` file to tell i
 ```markdown
 # Project Instructions
 
-- Run `npm run check` after code changes.
+- Run `cargo run --locked -p xtask -- check` after code changes.
 - Do not run production migrations locally.
 - Keep responses concise.
 ```

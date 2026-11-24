@@ -19,6 +19,9 @@ pa-models = { path = "../pa-models" }
 pa-agent.workspace = true
 pa-telemetry.workspace = true
 base64 = "0.23"
+shlex = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+regex = "1"
 fancy-regex = "0.20"
 # The traces browser login's auth challenge (RSA-2048 keypair, OAEP-SHA256
 # result decrypt; sha2 matches the workspace's version, the default
@@ -42,6 +45,7 @@ serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 ignore = "0.4"
 
 tempfile = "3"
+wasmparser = { version = "0.245.1", default-features = false, features = ["std", "validate", "features", "prefer-btree-collections"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

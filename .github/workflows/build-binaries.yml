@@ -76,7 +76,7 @@ jobs:
               echo "Manual releases must run from the default branch (${DEFAULT_BRANCH}), not ${REF_NAME}." >&2
               exit 1
             fi
-            # Beta names itself from package.json plus this run, the way the
+            # Beta names itself from the workspace manifest plus this run, the way the
             # inherited push trigger did. Nothing about it is a choice the
             # dispatcher makes, so release_tag is not read here.
             #
@@ -85,7 +85,7 @@ jobs:
             # the attempt left the original destination -- immutable objects, a
             # tag and a GitHub release -- permanently half-published, with the
             # retry announcing a different release beside it.
-            production_version=$(node -p "require('./package.json').version")
+            production_version=$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version = /{gsub(/"/,"",$3);print $3;exit}' Cargo.toml)
             build_ref="$GITHUB_SHA_VALUE"
             beta_version="${production_version}-beta.${RUN_NUMBER}.${GITHUB_SHA_VALUE::7}"
             publish_beta=true
@@ -131,15 +131,15 @@ jobs:
             build_ref="$REF_NAME"
             publish_production=true
           else
-            production_version=$(node -p "require('./package.json').version")
+            production_version=$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version = /{gsub(/"/,"",$3);print $3;exit}' Cargo.toml)
             build_ref="$GITHUB_SHA_VALUE"
             beta_version="${production_version}-beta.${RUN_NUMBER}.${GITHUB_SHA_VALUE::7}"
             publish_beta=true
 
             previous_version=
-            if [ -n "$BEFORE_SHA" ] && ! printf '%s\n' "$BEFORE_SHA" | grep -Eq '^0+$' && git cat-file -e "${BEFORE_SHA}:package.json"; then
-              git show "${BEFORE_SHA}:package.json" > /tmp/previous-package.json
-              previous_version=$(node -p "require('/tmp/previous-package.json').version")
+            if [ -n "$BEFORE_SHA" ] && ! printf '%s\n' "$BEFORE_SHA" | grep -Eq '^0+$' && git cat-file -e "${BEFORE_SHA}:Cargo.toml"; then
+              git show "${BEFORE_SHA}:Cargo.toml" > "$RUNNER_TEMP/previous-cargo.toml"
+              previous_version=$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version = /{gsub(/"/,"",$3);print $3;exit}' "$RUNNER_TEMP/previous-cargo.toml")
             fi
 
             if [ -z "$previous_version" ] || [ "$production_version" != "$previous_version" ]; then
@@ -185,7 +185,7 @@ jobs:
         run: |
           echo "release_base_url=$RELEASE_BASE_URL" >> "$GITHUB_OUTPUT"
 
-      # `npm run build` and `npm run check` are what the build job runs, and
+      # The build job packages the Rust artifacts, and
       # check runs no tests -- it is biome, tsgo, and the render and audit
       # scripts. Everything a release is actually about is covered by tests and
       # by nothing else: the config-directory move, the compatibility alias and
@@ -270,23 +270,9 @@ jobs:
           ref: ${{ env.BUILD_REF }}
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Check
-        run: npm run check
+      - name: Vendor locked guest dependencies
+        working-directory: wasmedge-agent-runtime/template
+        run: cargo vendor --locked vendor
 
       - uses: actions/download-artifact@v8.0.1
         with:
@@ -306,11 +292,11 @@ jobs:
           WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
         run: |
           test -n "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL"
-          npm run release:pack -- \
+          cargo run --release --locked -p xtask -- pack \
             --channel stable \
             --version "$PRODUCTION_VERSION" \
             --base-url "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL" \
-            --out-dir packages/coding-agent/release/production
+            --out-dir target/dist/production
 
       - name: Pack beta release
         if: env.PUBLISH_BETA == 'true'
@@ -318,18 +304,18 @@ jobs:
           WASMEDGE_AGENT_DOWNLOAD_BASE_URL: ${{ needs.release-context.outputs.release_base_url }}
         run: |
           test -n "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL"
-          npm run release:pack -- \
+          cargo run --release --locked -p xtask -- pack \
             --channel beta \
             --version "$BETA_VERSION" \
             --base-url "$WASMEDGE_AGENT_DOWNLOAD_BASE_URL" \
-            --out-dir packages/coding-agent/release/beta
+            --out-dir target/dist/beta
 
       - name: Upload production artifacts
         if: env.PUBLISH_PRODUCTION == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wasmedge-agent-production
-          path: packages/coding-agent/release/production/artifacts/*
+          path: target/dist/production/artifacts/*
           if-no-files-found: error
 
       - name: Upload beta artifacts
@@ -337,7 +323,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wasmedge-agent-beta
-          path: packages/coding-agent/release/beta/artifacts/*
+          path: target/dist/beta/artifacts/*
           if-no-files-found: error
 
   publish:
@@ -377,41 +363,16 @@ jobs:
         run: |
           test -n "$RELEASE_BASE_URL"
 
-          node - <<'NODE'
-          const fs = require("node:fs");
-          const baseUrl = process.env.RELEASE_BASE_URL;
-          if (!baseUrl) throw new Error("RELEASE_BASE_URL is required");
-          const installer = fs.readFileSync("install.sh", "utf8");
-          // The rendered release is provenance: it records which release a
-          // copy of the installer came from. An empty one leaves the
-          // placeholder, which is correct, because this run is not publishing
-          // that channel.
-          const renderInstaller = (channel, version) => installer
-            .replaceAll("__WASMEDGE_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
-            .replaceAll("__WASMEDGE_AGENT_DEFAULT_RELEASE_CHANNEL__", channel)
-            .replaceAll("__WASMEDGE_AGENT_RENDERED_RELEASE__", version ? `v${version}` : "__WASMEDGE_AGENT_RENDERED_RELEASE__");
-
-          // Stable needs no second release: the alias points at the version
-          // release itself, so its channel objects ride along with it.
-          if (fs.existsSync("release-artifacts/production")) {
-            fs.writeFileSync("release-artifacts/production/install.sh", renderInstaller("stable", process.env.PRODUCTION_VERSION));
-            fs.copyFileSync("release-artifacts/production/release.json", "release-artifacts/production/latest.json");
-          }
-
-          // Beta's channel objects go on a release of their own, because its
-          // version releases are one tag per build and immutable.
-          if (fs.existsSync("release-artifacts/beta")) {
-            fs.mkdirSync("release-artifacts/beta-channel", { recursive: true });
-            fs.writeFileSync("release-artifacts/beta-channel/install.sh", renderInstaller("beta", process.env.BETA_VERSION));
-            fs.copyFileSync("release-artifacts/beta/release.json", "release-artifacts/beta-channel/beta.json");
-            fs.copyFileSync("release-artifacts/beta/beta", "release-artifacts/beta-channel/beta");
-          }
-          NODE
+          if [ -d release-artifacts/beta ]; then
+            mkdir -p release-artifacts/beta-channel
+            cp release-artifacts/beta/{beta,install.sh} release-artifacts/beta-channel/
+            cp release-artifacts/beta/release.json release-artifacts/beta-channel/beta.json
+          fi
 
       - name: Extract production release notes
         if: env.PUBLISH_PRODUCTION == 'true'
         run: |
-          awk "/^## \[${PRODUCTION_VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" packages/coding-agent/CHANGELOG.md > /tmp/release-notes.md
+          awk "/^## \[${PRODUCTION_VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md > /tmp/release-notes.md
           if [ ! -s /tmp/release-notes.md ]; then
             echo "Release v${PRODUCTION_VERSION}" > /tmp/release-notes.md
           fi
@@ -433,7 +394,7 @@ jobs:
         run: |
           PRODUCTION_DIR=release-artifacts/production
 
-          test -f "$PRODUCTION_DIR/wasmedge-agent-${PRODUCTION_VERSION}.tgz"
+          test -f "$PRODUCTION_DIR/wasmedge-agent-sdk-${PRODUCTION_VERSION}.tar.gz"
           test -f "$PRODUCTION_DIR/SHA256SUMS"
           test -f "$PRODUCTION_DIR/stable"
           test -f "$PRODUCTION_DIR/release.json"
@@ -548,7 +509,7 @@ jobs:
         run: |
           BETA_DIR=release-artifacts/beta
 
-          test -f "$BETA_DIR/wasmedge-agent-${BETA_VERSION}.tgz"
+          test -f "$BETA_DIR/wasmedge-agent-sdk-${BETA_VERSION}.tar.gz"
           test -f "$BETA_DIR/SHA256SUMS"
           test -f "$BETA_DIR/beta"
           test -f "$BETA_DIR/release.json"

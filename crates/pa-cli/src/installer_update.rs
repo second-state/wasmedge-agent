@@ -263,6 +263,11 @@ async fn run_check(flag: Option<UpdateChannel>) -> i32 {
     let running = crate::config::version();
     let channel = update_channel(flag);
     let base = installer::download_base_url();
+    let url = installer::channel_asset_url(
+        &base,
+        channel == UpdateChannel::Nightly,
+        channel.manifest_path(),
+    );
     println!("Platform: {target}");
     println!("Running:  {running}");
     println!("Channel:  {}", channel.wire_name());
@@ -275,17 +280,12 @@ async fn run_check(flag: Option<UpdateChannel>) -> i32 {
     .await;
     let Ok(Some(latest)) = latest else {
         eprintln!(
-            "Error: could not read the {} release manifest at {base}/{}",
-            channel.wire_name(),
-            channel.manifest_path()
+            "Error: could not read the {} release manifest at {url}",
+            channel.wire_name()
         );
         return 1;
     };
-    println!(
-        "Latest:   {} ({base}/{})",
-        latest.version,
-        channel.manifest_path()
-    );
+    println!("Latest:   {} ({url})", latest.version);
     println!("{}", check_verdict(&latest, running, channel, flag));
     0
 }

@@ -4,6 +4,7 @@ fn main() {
     // per-thread arenas otherwise keep each burst's high-water pages
     // resident for the process lifetime.
     pa_types::memory_release::cap_thread_arenas();
+    pa_cli::migrate_legacy_launch();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // A fresh top-level invocation sheds an inherited worker identity before
     // any thread exists (edition 2021 makes `remove_var` safe, but it must

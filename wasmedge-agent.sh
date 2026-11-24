@@ -22,7 +22,7 @@ for arg in "$@"; do
 done
 
 if [[ "$NO_ENV" == "true" ]]; then
-  # Unset API keys (see packages/ai/src/env-api-keys.ts)
+  # Unset API keys (used by the native provider adapters)
   unset ANTHROPIC_API_KEY
   unset ANTHROPIC_OAUTH_TOKEN
   unset OPENAI_API_KEY
@@ -62,10 +62,7 @@ if [[ "$NO_ENV" == "true" ]]; then
   echo "Running WasmEdge Agent without API keys..."
 fi
 
-if [[ ! -f "$SCRIPT_DIR/packages/coding-agent/dist/native-tool-worker.js" ]]; then
-  npm --prefix "$SCRIPT_DIR" run build:tools
-fi
 if [[ "$USE_DIST" == true ]]; then
-  exec node "$SCRIPT_DIR/packages/coding-agent/dist/native-launch.js" ${ARGS[@]+"${ARGS[@]}"}
+  exec "$SCRIPT_DIR/target/release/wasmedge-agent" ${ARGS[@]+"${ARGS[@]}"}
 fi
 exec cargo run --quiet --locked --release --manifest-path "$SCRIPT_DIR/Cargo.toml" --bin wasmedge-agent -- ${ARGS[@]+"${ARGS[@]}"}

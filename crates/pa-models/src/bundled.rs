@@ -49,8 +49,7 @@ impl BundledAssets {
                 if package.is_dir() || std::env::var_os("PI_PACKAGE_DIR").is_some() {
                     package
                 } else {
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../packages/coding-agent/catalog")
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog")
                 }
             },
         }

@@ -13,7 +13,7 @@ For security vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of posti
 1. Keep each change focused on one concern.
 2. Follow [AGENTS.md](AGENTS.md) and the existing conventions. Design decisions live in [DESIGN.md](DESIGN.md).
 3. Add or update tests for behavioral changes.
-4. Run `npm run check` and the relevant tests, and describe the validation in the pull request.
+4. Run `cargo run --locked -p xtask -- check` and the relevant tests, and describe the validation in the pull request.
 5. Add a line to the `[Unreleased]` section of each touched package's `CHANGELOG.md`.
 
 You are responsible for the code you submit, including agent-generated code, and must understand how it interacts with the rest of the project.

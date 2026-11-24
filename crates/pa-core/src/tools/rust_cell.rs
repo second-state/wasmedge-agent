@@ -1,28 +1,34 @@
-//! Bind the fork's WasmEdge executor and host shell to the native agent loop.
-//! The helper owns the guest's private pipes and Cargo workspace lease. Only
-//! handlers registered for this session can cross from the helper into Rust.
+//! WasmEdge cell execution inside the native session worker.
+mod bridge;
+mod config;
+mod dependencies;
+mod guest;
+mod harness;
+mod host;
+mod introspection;
+pub mod maintenance;
+mod process;
+mod rustdoc;
+mod sandbox;
+mod shell;
+mod skills;
+mod upgrade;
+mod wasm;
+mod workspace;
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
-use futures::stream::{FuturesUnordered, StreamExt};
-use serde::{Deserialize, Serialize};
+use super::tool_definition::{
+    AbortSignal, ExecutionMode, OnUpdate, ToolDefinition, ToolExecutionResult,
+};
+use crate::kernel::shared::HostRequestHandlers;
+use crate::session_engine::rlm_host::{resolve_rlm_max_depth, RlmSubagentHost};
+use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command};
 use tokio_util::sync::CancellationToken;
 
-use super::tool_definition::{
-    AbortSignal, ExecutionMode, OnUpdate, ToolContentBlock, ToolDefinition, ToolExecutionResult,
-    ToolUpdate,
-};
-use crate::kernel::shared::{HostRequestHandlers, HostRequestPayload};
-use crate::session_engine::rlm_host::{resolve_rlm_max_depth, RlmSubagentHost};
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
 struct Session {
     cwd: PathBuf,
     agent_dir: PathBuf,
@@ -32,7 +38,6 @@ struct Session {
     session_dir: PathBuf,
     tree_id: String,
     skills: Vec<PathBuf>,
-    handlers: Vec<String>,
 }
 
 pub(crate) struct CellRuntime {
@@ -43,6 +48,7 @@ pub(crate) struct CellRuntime {
     ready: Option<crate::kernel::WorkspaceReadyGate>,
     lifetime: CancellationToken,
     admission: tokio::sync::Mutex<()>,
+    versions: tokio::sync::OnceCell<(String, String)>,
     _temporary: Option<tempfile::TempDir>,
 }
 
@@ -89,13 +95,13 @@ impl CellRuntime {
                 session_dir,
                 tree_id: tree_id.to_string(),
                 skills: skills.iter().map(|skill| skill.file_path.clone()).collect(),
-                handlers: registry.names().cloned().collect(),
             },
             registry,
             subagent_host,
             session_file,
             ready,
             _temporary: temporary,
+            versions: Default::default(),
             lifetime: CancellationToken::new(),
             admission: tokio::sync::Mutex::new(()),
         })
@@ -166,132 +172,72 @@ impl CellRuntime {
         signal: AbortSignal,
         updates: Option<OnUpdate>,
     ) -> Result<ToolExecutionResult> {
+        let entered = std::time::Instant::now();
         let cancelled = async {
             tokio::select! { () = signal.cancelled() => (), () = self.lifetime.cancelled() => () }
         };
         tokio::pin!(cancelled);
         let _permit = tokio::select! { biased; () = &mut cancelled => bail!("tool call cancelled"), lock = self.admission.lock() => lock };
+        let queue = entered.elapsed();
         if let Some(ready) = &self.ready {
             tokio::select! { biased; () = &mut cancelled => bail!("tool call cancelled"), () = ready() => () }
         }
-        let worker = worker_path()?;
-        let mut child = Command::new("node")
-            .arg(&worker)
-            .current_dir(&self.session.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .with_context(|| format!("starting Node tool worker {}", worker.display()))?;
-        let mut input = child.stdin.take().context("missing tool worker stdin")?;
-        let output = child.stdout.take().context("missing tool worker stdout")?;
-        // Dropping stdin also cancels the helper if the entire Rust future is dropped.
-        let conversation = async {
-            let max_depth = self
-                .subagent_host
-                .as_ref()
-                .and_then(|host| host.max_depth())
-                .map_or_else(
-                    || {
-                        resolve_rlm_max_depth(
-                            self.session_file.as_deref(),
-                            None,
-                            &self.session.cwd,
-                            &self.session.agent_dir,
-                        )
-                        .0
-                    },
-                    u64::from,
-                );
-            write_frame(
-                &mut input,
-                &json!({"tool":name,"id":id,"args":args,"session":self.session,"maxDepth":max_depth}),
-            )
-            .await?;
-            let mut lines = BufReader::new(output).lines();
-            let mut pending = FuturesUnordered::new();
-            let mut active = std::collections::HashMap::new();
-            loop {
-                tokio::select! {
-                    line = lines.next_line() => {
-                        let line = line?.context("tool worker exited before returning a result")?;
-                        match serde_json::from_str::<Event>(&line).context("invalid tool worker event")? {
-                            Event::Result { result } => return Ok(result),
-                            Event::Error { message } => bail!("{message}"),
-                            Event::Update { update } => if let Some(notify) = &updates {
-                                notify(ToolUpdate { content: update.content, details: update.details });
-                            },
-                            Event::Request { id, method, mut payload } => {
-                                let (handle, registration) = futures::future::AbortHandle::new_pair();
-                                active.insert(id, handle);
-                                let handler = self.registry.get(&method).cloned();
-                                let dispatch = async move {
-                                    let handler = handler.with_context(|| format!("unknown host request {method}"))?;
-                                    let fields = payload.as_object_mut().context("expected a host request object")?;
-                                    fields.insert("type".into(), Value::String(method));
-                                    PARENT_CELL.scope(self.session.clone(), handler(HostRequestPayload { data: payload })).await
-                                };
-                                pending.push(async move { (id, futures::future::Abortable::new(dispatch, registration).await) });
-                            },
-                            Event::CancelRequest { id } => if let Some(handle) = active.remove(&id) { handle.abort(); },
-                        }
-                    },
-                    Some((id, response)) = pending.next(), if !pending.is_empty() => {
-                        active.remove(&id);
-                        if let Ok(response) = response {
-                            let reply = match response {
-                                Ok(value) => json!({"id":id,"value":value}),
-                                Err(error) => json!({"id":id,"error":error.to_string()}),
-                            };
-                            write_frame(&mut input, &reply).await?;
-                        }
-                    }
-                }
+        let run = async {
+            if name == "bash" {
+                return shell::execute(&self.session, &args, updates.as_ref()).await;
             }
+            let config = config::Config::load(&self.session)?;
+            let work = async {
+                let ws = self.session.artifact_dir.join("workspace");
+                let _lease = workspace::acquire(&ws).await?;
+                upgrade::recover(&ws)?;
+                let template = config::template()?;
+                maintenance::prepare_template(&template, false).await?;
+                let resources = sandbox::Resources::new(&self.session, &config)?;
+                let max_depth = self
+                    .subagent_host
+                    .as_ref()
+                    .and_then(|h| h.max_depth())
+                    .map_or_else(
+                        || {
+                            resolve_rlm_max_depth(
+                                self.session_file.as_deref(),
+                                None,
+                                &self.session.cwd,
+                                &self.session.agent_dir,
+                            )
+                            .0
+                        },
+                        u64::from,
+                    );
+                let guest = guest::Guest {
+                    runtime: self,
+                    ws: &ws,
+                    config: &config,
+                    resources: &resources,
+                    max_depth,
+                };
+                upgrade::prepare(&guest, &template).await?;
+                skills::sync(&self.session, &ws)?;
+                host::configure(&guest).await?;
+                if name == "testSkill" {
+                    skills::test_reference(&guest, &args["reference"]).await?;
+                    return Ok(ToolExecutionResult::text("Skill tests passed"));
+                }
+                let provision = entered.elapsed().saturating_sub(queue);
+                let mut output = guest.execute(id, &args, updates.as_ref()).await?;
+                if let Some(d) = output.details.as_mut() {
+                    d["toolTiming"] = json!({"provisionMs":provision.as_secs_f64()*1000.0,"totalMs":entered.elapsed().as_secs_f64()*1000.0});
+                    d["timings"]["queueMs"] = json!(queue.as_secs_f64() * 1000.0);
+                }
+                Ok(output)
+            };
+            tokio::time::timeout(config.timeout(), work)
+                .await
+                .context("Rust cell timed out")?
         };
-        let result = tokio::select! { biased; () = &mut cancelled => Err(anyhow!("tool call cancelled")), result = conversation => result };
-        drop(input);
-        let status = child.wait().await?;
-        let result = result?;
-        anyhow::ensure!(status.success(), "tool worker exited with {status}");
-        Ok(result)
+        tokio::select! { biased; () = &mut cancelled => bail!("tool call cancelled"), result = run => result }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "event", rename_all = "camelCase")]
-enum Event {
-    Update {
-        update: Update,
-    },
-    Result {
-        result: ToolExecutionResult,
-    },
-    Error {
-        message: String,
-    },
-    Request {
-        id: u64,
-        #[serde(rename = "type")]
-        method: String,
-        payload: Value,
-    },
-    CancelRequest {
-        id: u64,
-    },
-}
-
-#[derive(Deserialize)]
-struct Update {
-    content: Vec<ToolContentBlock>,
-    details: Option<Value>,
-}
-
-async fn write_frame(input: &mut ChildStdin, frame: &Value) -> Result<()> {
-    let mut bytes = serde_json::to_vec(frame)?;
-    bytes.push(b'\n');
-    input.write_all(&bytes).await?;
-    Ok(())
 }
 
 tokio::task_local! { static PARENT_CELL: Session; }
@@ -303,35 +249,14 @@ pub async fn prepare_child_workspace(child_dir: &Path) -> Result<()> {
         return Ok(());
     };
     tokio::fs::create_dir_all(child_dir).await?;
-    let mut child = Command::new("node")
-        .arg(worker_path()?)
-        .arg("--snapshot")
-        .arg(&parent.artifact_dir)
-        .arg(&parent.session_dir)
-        .arg(child_dir)
-        .stdin(Stdio::piped())
-        .spawn()?;
-    // An abandoned spawn closes this pipe and cancels the staged copy.
-    let control = child.stdin.take();
-    let status = child.wait().await?;
-    drop(control);
-    anyhow::ensure!(
-        status.success(),
-        "child workspace snapshot failed ({status})"
-    );
-    tokio::fs::write(child_dir.join(".cell-tree-id"), parent.tree_id.to_string()).await?;
-    Ok(())
-}
-
-pub fn worker_path() -> Result<PathBuf> {
-    let packaged = crate::packages::package_dir().join("dist/native-tool-worker.js");
-    if packaged.is_file() {
-        return Ok(packaged);
+    if let Some(source) = [
+        parent.artifact_dir.join("workspace"),
+        parent.session_dir.join(workspace::SEED),
+    ]
+    .into_iter()
+    .find(|path| path.join("Cargo.toml").is_file())
+    {
+        workspace::snapshot(&source, &child_dir.join(workspace::SEED))?;
     }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/coding-agent/dist/native-tool-worker.js");
-    if std::env::var_os("PI_PACKAGE_DIR").is_none() && source.is_file() {
-        return Ok(source);
-    }
-    bail!("WasmEdge tool worker is missing at {}. Build it with npm run build:tools or reinstall the package.", packaged.display())
+    workspace::atomic(&child_dir.join(".cell-tree-id"), parent.tree_id.as_bytes())
 }

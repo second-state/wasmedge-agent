@@ -1,15 +1,15 @@
 # RLM Runtime Architecture
 
-WasmEdge Agent gives each agent session a sandboxed Rust cell engine and a native recursive sub-agent interface. The guest `rlm` crate is a model-facing shim; the TypeScript host owns child execution, persistence, usage accounting, and lifecycle.
+WasmEdge Agent gives each agent session a sandboxed Rust cell engine and a native recursive sub-agent interface. The guest `rlm` crate is a model-facing shim; the Rust session worker owns child execution, persistence, usage accounting, and lifecycle.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    session["AgentSession · TypeScript<br/>rust tool + host request handlers"]
-    provisioner["RustCellProvisioner · TypeScript<br/>toolchain checks · template clone · skill mounts"]
-    runner["CellRunner · TypeScript<br/>cargo build → wasmedge run"]
-    bridge["BridgeServer · TypeScript<br/>private stdio + bearer token"]
+    session["Rust session engine<br/>rust tool + host request handlers"]
+    provisioner["Workspace provisioning<br/>toolchain checks · template clone · skill mounts"]
+    runner["Rust cell executor<br/>cargo build → wasmedge run"]
+    bridge["Rust host bridge<br/>private stdio + bearer token"]
     cell["cell.wasm · WasmEdge<br/>agent_lib + rlm crates"]
 
     session -->|"owns"| provisioner --> runner
@@ -26,9 +26,9 @@ let handle = rlm::spawn_named("inspect the API", "api-reviewer")?;
 println!("{} {} {} {}", handle.rlm_child_id, handle.name, handle.session_dir, handle.model);
 ```
 
-the call travels as a typed request over the cell's bridge connection. The host dispatches request type `rlm.run` to the parent `AgentSession`, which starts a child through the same TypeScript agent machinery as the parent. The call returns immediately after task admission with a child handle; it never waits for or returns the child's answer. Results arrive only through explicit agent-message replies or files.
+the call travels as a typed request over the cell's bridge connection. The host dispatches request type `rlm.run` to the parent `AgentSession`, which starts a child through the same Rust session engine as the parent. The call returns immediately after task admission with a child handle; it never waits for or returns the child's answer. Results arrive only through explicit agent-message replies or files.
 
-The same bridge supports the other typed host requests: `rlm::goal`, `rlm::msg`, `rlm::compact`, `rlm::heartbeat`, `rlm::mcp`, `rlm::display`, and the generic `rlm::host_request(type, payload)` gate. State and policy remain in the TypeScript host.
+The same bridge supports the other typed host requests: `rlm::goal`, `rlm::msg`, `rlm::compact`, `rlm::heartbeat`, `rlm::mcp`, `rlm::display`, and the generic `rlm::host_request(type, payload)` gate. State and policy remain in the Rust session worker.
 
 ## Cell Execution Pipeline
 
@@ -71,7 +71,7 @@ The guest workspace is cloned per session from a prebuilt template (`wasmedge-ag
 
 Users can extend this dependency set with [`rustCell.preludeExtra`](settings.md#rust-cells). The host adds exact-version crates.io dependencies to the session workspace and re-exports them as `agent_lib::prelude::extra::<crate>`. Preparation vendors and release-builds in the scaffold upgrade's staging tree; dependency or compilation errors retain the original workspace. Settings contribute to workspace identity, so unchanged sessions and child snapshots reuse their prepared dependencies without fetching. This does not change the shared template. The generated `agent_lib/src/prelude_extra.rs` module is host-managed and regenerated on scaffold upgrades.
 
-Cells can also call `rlm::deps::add("itoa")?` to enable a curated dependency for **subsequent cells**, then use `extra::itoa::Buffer::new()` after importing the prelude. The [curated catalog](../src/core/rust-cell/dependency-catalog.ts) pins 30 crates with default features, including CSV parsing, encoding, Unicode text, collections, hashing and version matching. Each crate has a representative API tested with the WasmEdge runner. Rust paths replace hyphens with underscores. Additions accept no version, feature, Git, or path arguments. Other crates require user configuration. Explicit `preludeExtra` settings take precedence for matching names.
+Cells can also call `rlm::deps::add("itoa")?` to enable a curated dependency for **subsequent cells**, then use `extra::itoa::Buffer::new()` after importing the prelude. The [curated catalog](../../../crates/pa-core/src/tools/rust_cell/dependencies.json) pins 30 crates with default features, including CSV parsing, encoding, Unicode text, collections, hashing and version matching. Each crate has a representative API tested with the WasmEdge runner. Rust paths replace hyphens with underscores. Additions accept no version, feature, Git, or path arguments. Other crates require user configuration. Explicit `preludeExtra` settings take precedence for matching names.
 
 The host first resolves against the workspace's existing vendor directory offline. Missing sources trigger host-side `cargo vendor` from crates.io in the staging workspace, before mounting skills; sources needed only by skills are retained. The current cell, library and mounted skills then release-build offline without execution. Resolution, fetching and building share the requesting cell's timeout and cancellation. Only dependency manifests, the generated prelude exports, dependency metadata and vendor sources are published; state directories and open guest files stay in place. Failed or cancelled fetches and builds retain the previous dependencies. New crates require registry access or a populated Cargo cache; already-vendored additions and unchanged resume/child snapshots work with an empty Cargo cache offline. Publication has a recovery journal for interrupted updates. Successful additions persist in `.cell-dependencies.json`, survive resume and child snapshots, and create a `chore(deps)` Git snapshot in persistent workspaces. Repeated additions are no-ops. A Git failure is reported as an already-applied addition with a failed snapshot. Additions are not rolled back if the requesting cell later fails, and there is currently no guest removal API.
 
@@ -214,7 +214,7 @@ fails and the original workspace stays in place. Unmounting removes symlinks
 and generated Cargo/re-export entries but preserves inherited skill source
 directories, so they can be repaired and remounted on reload.
 
-The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. Skill manifest, source, test, and fixture changes use the separate `.skills-hash` synchronization mechanism to repeat mount probes on reload. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
+The marker travels with a child's spawn-time seed and is included in subsequent Git snapshots. A seed from an older installation goes through the same migration before its first cell. The worker refreshes skill mounts and fingerprints their sources for sandboxed tests. This is a scaffold compatibility check, not a mandatory `cargo test` gate for cells.
 
 ### Workspace storage
 
@@ -282,7 +282,7 @@ Another provisioner waits within its startup budget; prune commands refuse a
 busy workspace. Leases live outside the workspace in its parent's
 `.rust-cell-locks/` directory, so scaffold replacement keeps ownership. Stop
 the runtime before pruning. This coordinates participating processes on one
-host; it does not cover older versions, direct `CellRunner` users, manual Cargo
+host; it does not cover older versions, direct the cell executor users, manual Cargo
 or filesystem edits. Dead host leases can be reclaimed, so after a host crash
 also stop orphaned build processes before maintenance. This is not protection
 against hostile concurrent filesystem changes or a distributed lock.
@@ -323,17 +323,13 @@ sequenceDiagram
 
 | Component | Responsibility |
 |---|---|
-| `src/core/rust-cell/cell-runner.ts` | Compile pipeline, WasmEdge invocation, preopens, result composition, timeouts. |
-| `src/core/rust-cell/index.ts` | Lazy provisioning: toolchain checks, template readiness, workspace clone, skill sync. |
-| `src/core/rust-cell/workspace-history.ts` | Local Git snapshots after successful persisted cells. |
-| `src/core/rust-cell/workspace-snapshot.ts` | Spawn-time library and cache copies with independent skill sources. |
-| `src/core/rust-cell/bridge-server.ts` | Bearer-token auth, framing, attachment thumbnailing, request dispatch. |
-| `src/core/rust-cell/stdio-bridge.ts` | Separate protocol frames from ordinary stdout and deliver private replies on stdin. |
-| `src/core/rust-cell/wasm-imports.ts` | Validate and enforce non-network imports for cells and skill tests. |
-| `src/core/refinement/harness-api.ts` | Host-owned harness CRUD, skill validation/test gate, and persistence. |
-| `src/core/tools/rust.ts` | Agent tool wrapper and output shaping. |
-| `src/core/agent-session.ts` | RLM policy, child creation, registry, usage attribution, cancellation, and goal handlers. |
-| `src/core/rlm-runtime.ts` | Typed request/spawn-handle validation for `rlm.run`, model discovery, list, and delete. |
+| `crates/pa-core/src/tools/rust_cell.rs` | Session admission, cancellation and tool lifetime. |
+| `rust_cell/guest.rs`, `rust_cell/wasm.rs` | Cargo compilation, Wasm import verification, preopens and WasmEdge execution. |
+| `rust_cell/workspace.rs`, `rust_cell/upgrade.rs` | Source transactions, Git history, workspace upgrades and child snapshots. |
+| `rust_cell/bridge.rs`, `rust_cell/host.rs` | Private stdio framing, host requests and attachments. |
+| `rust_cell/sandbox.rs` | Optional Linux compiler isolation and process limits. |
+| `rust_cell/harness.rs`, `rust_cell/skills.rs` | Harness state and WASI skill test gate. |
+| `crates/pa-core/src/session_engine/` | Session policy, host tools and child lifecycle. |
 | `wasmedge-agent-runtime/template/rlm/` | Guest shim: typed bridge clients, state, harness, spawn handles. |
 | `wasmedge-agent-runtime/template/agent_lib/` | Model-extendable prelude (file helpers, `skills` re-exports). |
 
@@ -341,7 +337,7 @@ The guest side does not call providers or implement an agent loop.
 
 ## Bridge Transport
 
-The bridge uses private process pipes; ordinary cells open no TCP listener or socket. `CellRunner` passes `RLM_BRIDGE_STDIO=1`, `RLM_BRIDGE_TOKEN`, and `RLM_CELL_ID` into the cell's WASI environment. The guest authenticates with the session token and active cell ID, then exchanges protocol-v1 newline-delimited JSON frames. Guest frames on stdout carry the prefix `\x1eRLM:<token>:`; the host removes those frames from visible output and writes replies only to stdin. stdin is reserved for the bridge. Ordinary stdout/stderr remain streamed, including output without a trailing newline and UTF-8 split across chunks. Frames are capped at 32 MiB.
+The bridge uses private process pipes; ordinary cells open no TCP listener or socket. The session worker passes `RLM_BRIDGE_STDIO=1`, `RLM_BRIDGE_TOKEN`, and `RLM_CELL_ID` into the cell's WASI environment. The guest authenticates with the session token and active cell ID, then exchanges protocol-v1 newline-delimited JSON frames. Guest frames on stdout carry the prefix `\x1eRLM:<token>:`; the host removes those frames from visible output and writes replies only to stdin. stdin is reserved for the bridge. Ordinary stdout/stderr remain streamed, including output without a trailing newline and UTF-8 split across chunks. Frames are capped at 32 MiB.
 
 Guest calls are synchronous: `rlm::spawn` blocks the cell until the admission response arrives. Ordinary requests have a 30-second guest deadline; skill registration tests use the cell budget. WASI polling keeps an absent reply from blocking past the guest deadline. After a transport timeout, the next call renews the handshake: the host aborts prior cooperative work and suppresses its late replies. Requests are never replayed automatically. Cell exit or cancellation also aborts cooperative host work; completed side effects are not rolled back. Display frames (`rlm::display::diff`, `attach_image`) are acknowledged per frame, and invalid attachments return frame errors without dropping the connection.
 
@@ -421,7 +417,7 @@ End the turn instead of waiting for completion. Children send requested answers 
 
 ## Parent-Scoped Sub-Agent Registry
 
-The TypeScript parent maintains the authoritative direct-child registry. `rlm::list_subagents()?` returns stable child IDs, active-session IDs when daemon-backed, session IDs, names, directories, and running/completed status.
+The Rust parent session maintains the authoritative direct-child registry. `rlm::list_subagents()?` returns stable child IDs, active-session IDs when daemon-backed, session IDs, names, directories, and running/completed status.
 
 This registry survives compaction and parent restore. Successfully completed daemon-backed children are rehydrated from the parent artifact registry. Inline children remain inspectable in the current process but have no active-session ID.
 
@@ -509,7 +505,7 @@ Exact artifact files are created only when their features are used. Non-persiste
 
 Cells run as WebAssembly inside WasmEdge with only the preopened directories above. The runner denies direct guest networking through import validation and either forced interpreter execution or fresh host AOT compilation from inspected code, including for cells with a bridge; network capabilities are available only through registered host handlers. This is a policy of the agent's runner, not a network restriction added to standalone WasmEdge. `/workspace` remains writable by default. The `bash` tool and host handlers execute with the worker's OS permissions. Cargo and its build scripts/proc macros do too by default; the optional Cargo sandbox below changes their process boundary. Installed skills and extensions are trusted code; the guest policy does not sandbox compilation or the whole agent.
 
-Provider credentials are resolved by the TypeScript host. The bounded model catalog crosses into the guest as metadata; the full auth store does not.
+Provider credentials are resolved by the Rust session worker. The bounded model catalog crosses into the guest as metadata; the full auth store does not.
 
 Runtime-managed Cargo processes receive an environment allowlist, including template preparation, workspace upgrades, cell builds, skill probes/tests, and dependency resolution/vendoring. Rust compiler and rustup probes/repairs use the same policy. Inherited variables are limited to `PATH`, `HOME`, `USERPROFILE`, `SystemRoot`, `WINDIR`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`, `TMPDIR`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`, `CARGO_HOME`, `CARGO_NET_OFFLINE`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN`, `RUSTUP_AUTO_INSTALL`, and `RUSTC` (case-insensitive on Windows). Skill test builds additionally receive host-selected target/build directories. Provider variables, registry tokens, proxy settings, compiler flags/wrappers, and other ambient variables are not inherited; setups that relied on those variables must account for this change. The host's own environment is unchanged.
 
@@ -687,7 +683,7 @@ limits throttle total bandwidth; shared task limits can reject launches.
 
 Coverage includes template warmup/vendoring, scaffold and skill probe builds,
 cell compilation/execution, skill/library test builds and each Wasm test module,
-dependency updates, rustdoc and the inert readonly-mount probe. The Node host, source copying, toolchain/version
+dependency updates, rustdoc and the inert readonly-mount probe. The Rust worker, source copying, toolchain/version
 probes, `doctor --fix`, installation and host bash/handlers remain outside these
 limits. Disk quotas are not implemented.
 

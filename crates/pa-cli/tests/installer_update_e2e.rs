@@ -186,7 +186,7 @@ fn update_runs_the_downloaded_installer_and_preserves_the_session_store() {
     sandbox.assert_session_preserved();
 }
 
-/// A nightly install's `wasmedge-agent update` fetches `install-beta.sh` from
+/// A nightly install's `wasmedge-agent update` fetches `download/beta/install.sh` from
 /// the download base (no installer override): the domain only forwards
 /// the stable `install.sh`, so nightly updates go to the bucket directly.
 #[test]
@@ -199,7 +199,7 @@ fn a_nightly_update_fetches_install_beta_from_the_download_base() {
         "install-rust.sh channel beta\nversion 0.9.9-beta.11\n",
     )
     .expect("install marker");
-    let base = serve_at("/install-beta.sh", MOCK_INSTALLER);
+    let base = serve_at("/download/beta/install.sh", MOCK_INSTALLER);
     let output = prime_agent(&["update"], &sandbox)
         .env("WASMEDGE_AGENT_DOWNLOAD_BASE_URL", &base)
         .output()
@@ -212,7 +212,7 @@ fn a_nightly_update_fetches_install_beta_from_the_download_base() {
     );
     assert!(
         stdout.contains(&format!(
-            "fetching the installer from {base}/install-beta.sh"
+            "fetching the installer from {base}/download/beta/install.sh"
         )),
         "the banner names the nightly installer:\n{stdout}"
     );
@@ -258,69 +258,23 @@ fn a_failing_installer_keeps_the_previous_install() {
     sandbox.assert_session_preserved();
 }
 
-/// A hermetic world for the real `install-rust.sh`: `HOME` and `TMPDIR`
-/// (the daemon sockets the installer probes) live in the sandbox, and
-/// `PATH` puts shims first — `uv` answers only `python find` (the
-/// installer's own Python), `npm` reports an empty global root — so the run
-/// never touches the network, the machine's daemons, or a global npm
-/// package.
+/// Isolate local installs from user configuration and skip the optional toolchain download.
 fn installer_env(command: &mut Command, sandbox: &Sandbox) {
-    let shims = sandbox.root.join("shims");
-    std::fs::create_dir_all(&shims).expect("shims dir");
-    let python = [
-        "/usr/bin/python3",
-        "/usr/local/bin/python3",
-        "/opt/homebrew/bin/python3",
-    ]
-    .into_iter()
-    .find(|path| Path::new(path).is_file())
-    .expect("a python3 for the installer's scripting steps");
-    let uv = shims.join("uv");
-    std::fs::write(
-        &uv,
-        format!("#!/bin/sh\n[ \"$1 $2\" = \"python find\" ] && echo {python} && exit 0\nexit 1\n"),
-    )
-    .expect("uv shim");
-    make_executable(&uv);
-    let npm = shims.join("npm");
-    std::fs::write(
-        &npm,
-        "#!/bin/sh\n[ \"$1\" = root ] && echo /nonexistent\nexit 0\n",
-    )
-    .expect("npm shim");
-    make_executable(&npm);
     let tmp = sandbox.root.join("tmp");
     std::fs::create_dir_all(&tmp).expect("tmp dir");
     command
         .env_clear()
-        .env("PATH", format!("{}:/usr/bin:/bin", shims.display()))
+        .env("PATH", "/usr/bin:/bin")
+        .env("WASMEDGE_AGENT_BOOTSTRAP_ON_INSTALL", "0")
         .env("HOME", sandbox.root.join("home"))
         .env("TMPDIR", tmp)
         .env(ENV_PREFIX, &sandbox.prefix)
         .current_dir(&sandbox.root);
 }
 
-/// A release archive whose payload is a script answering `version`.
+/// A complete native archive with a harmless stand-in for the executable.
 fn fake_release(sandbox: &Sandbox, version: &str) -> PathBuf {
-    let payload = sandbox.root.join(format!("payload-{version}"));
-    std::fs::create_dir_all(&payload).expect("payload dir");
-    let binary = payload.join("wasmedge-agent");
-    std::fs::write(&binary, format!("#!/bin/sh\necho {version}\n")).expect("payload binary");
-    make_executable(&binary);
-    let platform = pa_core::update::install::current_platform_alias();
-    let archive = sandbox
-        .root
-        .join(format!("wasmedge-agent-{version}-{platform}.tar.gz"));
-    let status = Command::new("tar")
-        .arg("-czf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&payload)
-        .arg("wasmedge-agent")
-        .status()
-        .expect("run tar");
-    assert!(status.success(), "tar the fake release");
-    archive
+    fake_release_payload(sandbox, version, version)
 }
 
 fn assert_ran(output: &std::process::Output, what: &str) -> String {
@@ -384,7 +338,7 @@ fn update_archive_and_rollback_swap_installer_payloads() {
 
     // The archive's payload cannot run `update`: roll back with the script
     // itself (the bundled copy is this file).
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-rust.sh");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install.sh");
     let mut command = Command::new("/bin/sh");
     command.arg(&script).arg("--rollback");
     installer_env(&mut command, &sandbox);
@@ -426,7 +380,7 @@ fn rollback_check_answers_synchronously_without_touching_the_payload() {
         "install-rust.sh channel beta\nversion 9.9.9\n",
     )
     .expect("install marker");
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-rust.sh");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install.sh");
     let run_check = || {
         let mut command = Command::new("/bin/sh");
         command.arg(&script).arg("--rollback");
@@ -462,7 +416,7 @@ fn rollback_check_answers_synchronously_without_touching_the_payload() {
     let source = stdout.lines().last().unwrap_or_default().to_string();
     let kept = source.strip_prefix(sandbox.prefix.display().to_string().as_str());
     assert!(
-        kept.is_some_and(|rest| rest.starts_with("/share/wasmedge-agent.old.")),
+        kept.is_some_and(|rest| rest == "/share/wasmedge-agent.old"),
         "the source names the kept generation: {source}"
     );
     assert_eq!(live_version(&sandbox), "1.0.0", "the check touched nothing");
@@ -495,24 +449,7 @@ fn update_archive_refuses_a_misnamed_payload_version() {
         "install-rust.sh channel beta\nversion 9.9.9\n",
     )
     .expect("install marker");
-    let platform = pa_core::update::install::current_platform_alias();
-    let payload_dir = sandbox.root.join("payload-misnamed");
-    std::fs::create_dir_all(&payload_dir).expect("payload dir");
-    let payload = payload_dir.join("wasmedge-agent");
-    std::fs::write(&payload, "#!/bin/sh\necho 0.9.7\n").expect("payload binary");
-    make_executable(&payload);
-    let archive = sandbox
-        .root
-        .join(format!("wasmedge-agent-9.9.9-{platform}.tar.gz"));
-    let status = Command::new("tar")
-        .arg("-czf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&payload_dir)
-        .arg("wasmedge-agent")
-        .status()
-        .expect("run tar");
-    assert!(status.success(), "tar the misnamed release");
+    let archive = fake_release_payload(&sandbox, "9.9.9", "0.9.7");
 
     let mut command = Command::new(&binary);
     command
@@ -571,14 +508,9 @@ fn update_rollback_reads_the_unsuffixed_installer_slot() {
         "1.0.0",
         "the slot's payload is live"
     );
-    // The displaced live tree becomes a recorded generation: the machine
-    // converts to the sh bookkeeping, so the toggle keeps working.
-    let record = sandbox
-        .prefix
-        .join("share/.wasmedge-agent-install-generations");
     assert!(
-        record.exists(),
-        "the publish recorded the displaced payload"
+        slot.join(".wasmedge-agent-install").is_file(),
+        "the displaced payload is retained for another rollback"
     );
     sandbox.assert_session_preserved();
 }
@@ -648,7 +580,7 @@ fn archive_check_answers_synchronously_without_publishing() {
         "install-rust.sh channel beta\nversion 9.9.9\n",
     )
     .expect("install marker");
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-rust.sh");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install.sh");
     let run_check = |archive: &std::path::Path| {
         let mut command = Command::new("/bin/sh");
         command.arg(&script).arg("--archive").arg(archive);
@@ -695,11 +627,28 @@ fn archive_check_answers_synchronously_without_publishing() {
 /// A release archive whose payload answers `reported` under the archive
 /// name `named` (the mis-naming fixture for the check-mode test).
 fn fake_release_payload(sandbox: &Sandbox, named: &str, reported: &str) -> PathBuf {
-    let payload = sandbox.root.join(format!("payload-mismatch-{named}"));
+    let payload = sandbox.root.join(format!("payload-{named}-{reported}"));
     std::fs::create_dir_all(&payload).expect("payload dir");
     let binary = payload.join("wasmedge-agent");
     std::fs::write(&binary, format!("#!/bin/sh\necho {reported}\n")).expect("payload binary");
     make_executable(&binary);
+    for path in [
+        "LICENSE",
+        "README.md",
+        "catalog/models.bundled.json",
+        "skills/websearch/SKILL.md",
+        "wasmedge-agent-runtime/template/Cargo.lock",
+    ] {
+        let file = payload.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "fixture").unwrap();
+    }
+    std::fs::create_dir_all(payload.join("wasmedge-agent-runtime/template/vendor")).unwrap();
+    std::fs::write(
+        payload.join("version.json"),
+        serde_json::json!({"version":reported}).to_string(),
+    )
+    .unwrap();
     let platform = pa_core::update::install::current_platform_alias();
     let archive = sandbox
         .root
@@ -709,7 +658,7 @@ fn fake_release_payload(sandbox: &Sandbox, named: &str, reported: &str) -> PathB
         .arg(&archive)
         .arg("-C")
         .arg(&payload)
-        .arg("wasmedge-agent")
+        .arg(".")
         .status()
         .expect("run tar");
     assert!(status.success(), "tar the mismatched release");
