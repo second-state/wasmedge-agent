@@ -72,9 +72,7 @@ cargo test --release --locked -p pa-cli --test native_cells -- --ignored
 ```
 
 Browser-side JavaScript remains in the standalone HTML session exporter.
-The TypeScript benchmark runners and fixtures in `poc/` reproduce the
-published experiments using the [pinned host](poc/README.md).
-Third-party packages installed explicitly from npm require their own npm toolchain.
+Resource packages install from Git or local directories. Session HTML is rendered by Rust and opens offline with scripting disabled. The [benchmark archive](poc/README.md) preserves the original runner and fixtures at their measured revision.
 
 ## Try it
 

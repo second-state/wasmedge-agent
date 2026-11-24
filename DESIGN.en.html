@@ -26,13 +26,15 @@ details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 
 .overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
 @media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
 @media(max-width:560px){.overview thead{display:none}.overview tr{display:block;border-bottom:1px solid var(--line)}.overview tr:last-child{border:0}.overview td{display:block;border:0;padding:6px 0}.overview td:first-child{font-weight:700;padding-top:12px}.overview td:last-child{padding-bottom:14px;color:var(--muted)}}
-</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">Print</button></div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#architecture">Architecture</a><a href="#decisions-d1-d26">Decisions D1–D26</a><a href="#work-packages-and-roadmap">Work packages and roadmap</a></nav><main><h1 id="rust-cell-design-english-reading-guide">Rust Cell Design: English Reading Guide</h1>
+
+.panel summary { cursor: pointer; padding: .4rem; font-weight: 600; }
+</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08</div><div class="layout"><nav aria-label="Contents"><strong>Contents</strong><a href="#architecture">Architecture</a><a href="#decisions-d1-d28">Decisions D1–D28</a><a href="#work-packages-and-roadmap">Work packages and roadmap</a></nav><main><h1 id="rust-cell-design-english-reading-guide">Rust Cell Design: English Reading Guide</h1>
 <p>This is an English guide to the architecture and decision log. It is <strong>not a full translation</strong> of every historical design note or code appendix. The authoritative <a href="DESIGN.md">design document</a> is in Chinese. The full <a href="packages/coding-agent/docs/rlm-runtime.md">runtime reference</a> is already in English and documents the implemented settings, APIs, and limits. The <a href="docs/rust-cell-report-2026-10-08.en.html">consolidated report</a> describes current evidence.</p>
 <h2 id="architecture">Architecture</h2>
 <p>The TypeScript host owns provider credentials, sessions, handlers, goals, compaction, and child agents. Rust cells compile to <code>wasm32-wasip1</code> and run in a new WasmEdge process. The guest uses non-network WASI imports, explicit directory mounts, and a private stdio bridge. Direct network access is rejected. Host handlers and bash keep host permissions.</p>
 <p>Each cell is a complete program. It does not preserve arbitrary objects across cells. <code>agent_lib</code> stores reusable source; state/blob files store data; project files remain on disk. Build rejection restores staged source. Successful cells attempt Git snapshots. External effects are not atomically rolled back. Snapshots do not provide complete deterministic replay.</p>
 <p>Interpreter is the default. Optional AOT inspects imports, removes guest custom sections, compiles on the host, verifies the output, and records provenance. AOT has no cache. Gas, memory-page, read-only-project, compiler-sandbox, and process-tree settings have distinct scopes. See the runtime reference for exact defaults and platform support.</p>
-<h2 id="decisions-d1-d26">Decisions D1–D26</h2>
+<h2 id="decisions-d1-d28">Decisions D1–D28</h2>
 <p>Decisions describe intent. Historical plans are not proof of implementation. Later notes and the runtime reference determine what has shipped.</p>
 <div class="table-scroll"><table>
 <thead>
@@ -145,6 +147,14 @@ details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 
 <tr>
 <td>D26</td>
 <td>Make the repository public during M2 to use public GitHub Actions. This supersedes private incubation.</td>
+</tr>
+<tr>
+<td>D27</td>
+<td>Synchronize the CLI, daemon and session engine with the upstream Rust workspace at <code>798d9703</code>.</td>
+</tr>
+<tr>
+<td>D28</td>
+<td>Run Cargo, WasmEdge and the host shell in the Rust session worker. Ship the embedding SDK and platform releases through Cargo, preserve the on-disk session format and pin the historical benchmark host.</td>
 </tr>
 </tbody>
 </table></div>

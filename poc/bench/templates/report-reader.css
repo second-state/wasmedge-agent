@@ -25,3 +25,5 @@ details{border:1px solid var(--line);border-radius:6px;padding:14px;margin:20px 
 .overview h2{margin:0 0 20px;padding:0;border:0}.mobile-nav{display:none}
 @media(max-width:1100px){.layout>nav{display:none}.mobile-nav{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;margin-bottom:22px}}
 @media(max-width:560px){.overview thead{display:none}.overview tr{display:block;border-bottom:1px solid var(--line)}.overview tr:last-child{border:0}.overview td{display:block;border:0;padding:6px 0}.overview td:first-child{font-weight:700;padding-top:12px}.overview td:last-child{padding-bottom:14px;color:var(--muted)}}
+
+.panel summary { cursor: pointer; padding: .4rem; font-weight: 600; }

@@ -2,6 +2,7 @@
 
 import hashlib
 import html
+import itertools
 import json
 from pathlib import Path
 import re
@@ -84,16 +85,29 @@ def cell_chart(data, english):
     return f'<figure class="panel">{content}</div><figcaption>{caption}</figcaption></figure>'
 
 
+def inline_svg(path):
+    source = path.read_text()
+    source = source[source.index("<svg"):]
+    # Every embedded chart has its own fragment namespace (ticks, glyphs, clipping).
+    prefix = path.stem + "-"
+    return re.sub(r'(?P<start>\bid="|\bhref="#|url\(#)(?P<id>[\w.:-]+)',
+                  lambda match: match["start"] + prefix + match["id"], source)
+
+
 def render_reader(document, english=False, data=None):
-    svgs = {p.stem: p.read_text() for p in sorted(ASSETS.glob("*.svg"))}
+    svgs = {p.stem: inline_svg(p) for p in sorted(ASSETS.glob("*.svg"))}
     rendered = markdown.markdown(document, extensions=["tables", "fenced_code", "toc"], extension_configs={"toc": {"slugify": lambda value, _: re.sub(r"[^\w]+", "-", value).strip("-").lower()}})
     rendered = re.sub(r"(<table>.*?</table>)", r'<div class="table-scroll">\1</div>', rendered, flags=re.S)
     title = re.search(r'^# (.+)$', document, re.M)[1]
-    lang, print_label = ("en", "Print") if english else ("zh-Hant", "列印")
+    lang = "en" if english else "zh-Hant"
     def panel(kind, options, initial, caption):
-        controls = "".join(f'<label>{label}<select data-chart="{kind}" data-option="{key}">' + "".join(f'<option value="{value}">{text}</option>' for value, text in items) + '</select></label>' for key, label, items in options)
-        return f'<figure class="panel"><div class="controls">{controls}</div><div class="chart" id="chart-{kind}">{svgs[initial]}</div><figcaption>{caption}</figcaption></figure>'
-    chart_script = ""
+        charts = []
+        for selected in itertools.product(*(items for _, _, items in options)):
+            name = "-".join([kind, *(value for value, _ in selected)])
+            label = " · ".join(text for _, text in selected)
+            opened = " open" if name == initial else ""
+            charts.append(f'<details name="{kind}"{opened}><summary>{html.escape(label)}</summary><div class="chart">{svgs[name]}</div></details>')
+        return f'<figure class="panel">{"".join(charts)}<figcaption>{caption}</figcaption></figure>'
     if data is not None:
         words = lambda en, zh: en if english else zh
         panels = {
@@ -107,13 +121,6 @@ def render_reader(document, english=False, data=None):
             assert count == 1, (name, count)
         assert rendered.count('<!-- paid-cell-chart -->') == 1
         rendered = rendered.replace('<!-- paid-cell-chart -->', cell_chart(data, english))
-        # Put each switchable chart in the script only once; static charts stay inline.
-        switches = {k: v for k, v in svgs.items() if k.startswith(("runtime-", "paid-"))}
-        payload = json.dumps(switches, ensure_ascii=False).replace("<", "\\u003c")
-        chart_script = '''<script>const chartSvgs=PAYLOAD;
-function updateChart(kind){const controls=Object.fromEntries([...document.querySelectorAll('select[data-chart="'+kind+'"]')].map(s=>[s.dataset.option,s.value]));const key=kind==='runtime'?'runtime-'+controls.scale:'paid-'+controls.period+'-'+controls.scope;document.getElementById('chart-'+kind).innerHTML=chartSvgs[key];}
-document.querySelectorAll('select[data-chart]').forEach(s=>s.addEventListener('change',()=>updateChart(s.dataset.chart)));
-</script>'''.replace("PAYLOAD", payload)
         rendered = re.sub(r'(<h2 id="[^"]+">(?:先看結論|Conclusions first)</h2>)(.*?)(?=<p><a id="runtime")', r'<div class="overview">\1\2</div>', rendered, flags=re.S)
     else:
         def static_figure(match):
@@ -128,7 +135,7 @@ document.querySelectorAll('select[data-chart]').forEach(s=>s.addEventListener('c
     if data is not None:
         labels = ["Conclusions", "Runtime", "Tasks", "Safety"] if english else ["結論", "Runtime", "任務", "安全性"]
         jump = '<div class="mobile-nav">' + ''.join(f'<a href="#{anchor}">{label}</a>' for anchor, label in zip(["conclusions", "runtime", "tasks", "safety"], labels)) + '</div>'
-    return f'<!doctype html>\n<html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>{css}</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08<button type="button" class="print" onclick="window.print()">{print_label}</button></div><div class="layout"><nav aria-label="Contents"><strong>{"Contents" if english else "報告目錄"}</strong>{toc}</nav><main>{jump}{rendered}</main></div><footer>{footer}</footer>{chart_script}</body></html>\n'
+    return f'<!doctype html>\n<html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>{css}</style></head><body><div class="topbar">WasmEdge Agent · 2026-10-08</div><div class="layout"><nav aria-label="Contents"><strong>{"Contents" if english else "報告目錄"}</strong>{toc}</nav><main>{jump}{rendered}</main></div><footer>{footer}</footer></body></html>\n'
 
 
 def build_reports():

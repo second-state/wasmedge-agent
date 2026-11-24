@@ -7,13 +7,11 @@ wasmedge-agent-runtime/template/vendor.tmp/
 wasmedge-agent-runtime/template/vendor.tmp-*/
 wasmedge-agent-runtime/template.prepare-owner*
 *.log
-!poc/bench/tasks/*/fixture/*.log
 !examples/showcase/project/logs/*.log
 .DS_Store
 poc/bench/results/
 docs/assets/rust-cell-report-2026-10-08/*.zip
 *.tsbuildinfo
-# packages/*/node_modules/
 packages/*/dist/
 packages/*/dist-chrome/
 packages/*/dist-firefox/

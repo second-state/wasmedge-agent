@@ -50,6 +50,53 @@ pub(crate) fn tracked(root: &Path) -> Result<Vec<String>> {
         .map(str::to_owned)
         .collect())
 }
+/// Keep project and release inputs usable without a JavaScript runtime.
+pub(crate) fn native_sources(root: &Path, files: &[String]) -> Result<()> {
+    let executable_html = regex::Regex::new(
+        r#"(?is)<script[\s/>]|<[a-z][^>]*\s(?:on[a-z]+\s*=|(?:href|src)\s*=\s*["']\s*javascript:)"#,
+    )?;
+    for file in files {
+        let path = Path::new(file);
+        let extension = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        ensure!(
+            !matches!(
+                extension.as_str(),
+                "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts"
+            ) && !matches!(
+                name.as_str(),
+                "package.json"
+                    | "package-lock.json"
+                    | "npm-shrinkwrap.json"
+                    | "yarn.lock"
+                    | "pnpm-lock.yaml"
+                    | "bun.lock"
+                    | "bun.lockb"
+                    | "deno.json"
+                    | "deno.jsonc"
+                    | "deno.lock"
+            ) && !path.components().any(|c| c.as_os_str() == "node_modules"),
+            "JavaScript or package-manager input in Git: {file}"
+        );
+        if matches!(extension.as_str(), "html" | "htm" | "svg") {
+            let contents = fs::read_to_string(root.join(path))?;
+            ensure!(
+                !executable_html.is_match(&contents),
+                "executable JavaScript in {file}"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn branding(root: &Path, files: &[String]) -> Result<()> {
     let rules: Rules = serde_json::from_str(include_str!("branding.json"))?;
     let forbidden = rules
