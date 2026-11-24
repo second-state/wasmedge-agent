@@ -231,8 +231,7 @@ pub(crate) struct PtyReader {
 
 impl PtyReader {
     pub(crate) fn new(master: OwnedFd) -> PtyReader {
-        let fd = master.as_raw_fd();
-        fcntl(fd, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
+        fcntl(&master, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
         PtyReader {
             file: master.into(),
             output: Vec::new(),

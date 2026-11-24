@@ -41,8 +41,7 @@ pub fn sync_directory(_path: &Path) -> io::Result<()> {
 /// Returns the OS error when the sync fails.
 #[cfg(unix)]
 pub fn fsync(file: &File) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    nix::unistd::fsync(file.as_raw_fd()).map_err(io::Error::from)
+    nix::unistd::fsync(file).map_err(io::Error::from)
 }
 
 /// # Errors
