@@ -355,24 +355,27 @@ fn collect_top_level_files(dir: &Path, kind: FileKind) -> Vec<PathBuf> {
     entries
 }
 
-/// The `pi` manifest in a package's `package.json` (parse failures are no
-/// manifest, per the TS product).
-pub(crate) fn read_pi_manifest(package_root: &Path) -> Option<super::PiManifest> {
-    let package_json = package_root.join("package.json");
-    if !package_json.exists() {
-        return None;
-    }
-    read_pi_manifest_file(&package_json)
-}
-
-fn read_pi_manifest_file(package_json: &Path) -> Option<super::PiManifest> {
-    let content = std::fs::read_to_string(package_json).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let pi = value.get("pi")?.as_object()?;
-    Some(super::PiManifest {
-        skills: string_array(pi.get("skills")),
-        prompts: string_array(pi.get("prompts")),
-        themes: string_array(pi.get("themes")),
+/// Optional resource patterns published alongside the package.
+pub(crate) fn read_manifest(package_root: &Path) -> Option<super::ResourceManifest> {
+    let value: serde_json::Value =
+        match std::fs::read_to_string(package_root.join("wasmedge-agent.json")) {
+            Ok(native) => serde_json::from_str(&native).ok()?,
+            // Preserve explicit inclusions and exclusions in existing Git/local packages.
+            // Only read the resource object; no package scripts or dependencies are processed.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let legacy = std::fs::read_to_string(package_root.join("package.json")).ok()?;
+                serde_json::from_str::<serde_json::Value>(&legacy)
+                    .ok()?
+                    .get_mut("pi")?
+                    .take()
+            }
+            Err(_) => return None,
+        };
+    let resources = value.as_object()?;
+    Some(super::ResourceManifest {
+        skills: string_array(resources.get("skills")),
+        prompts: string_array(resources.get("prompts")),
+        themes: string_array(resources.get("themes")),
     })
 }
 

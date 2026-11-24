@@ -1092,7 +1092,6 @@ fn load_scope(
         settings.session_dir = None;
         settings.shell_path = None;
         settings.shell_command_prefix = None;
-        settings.npm_command = None;
         settings.packages = None;
         settings.mcp_servers = None;
         settings.mcp_catalog_sources = None;

@@ -1,8 +1,5 @@
-//! npm/git package flows against local fixtures: a bash "npm" shim (no
-//! network) and a bare git repo cloned over the filesystem.
+//! Package lifecycle against local resource directories and a filesystem Git remote.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -11,65 +8,6 @@ use crate::packages::exe_dir_of;
 use crate::packages::source::{GitSource, SourceScope, UserOrProject};
 use crate::packages::PackageManager;
 use crate::settings::SettingsManager;
-
-/// Minimal npm replacement: bash script with the fixture paths embedded, so
-/// parallel tests never share state. Logs every call to `<root>/npm.log`.
-fn write_npm_shim(dir: &Path) -> PathBuf {
-    let global_root = dir.join("global-root").display().to_string();
-    let fixtures = dir.join("fixtures").display().to_string();
-    let log = dir.join("npm.log").display().to_string();
-    std::fs::create_dir_all(&global_root).unwrap();
-    std::fs::create_dir_all(Path::new(&fixtures).join("fake-pkg")).unwrap();
-
-    std::fs::write(
-        Path::new(&fixtures).join("fake-pkg").join("package.json"),
-        r#"{"name":"fake-pkg","version":"1.0.0"}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        Path::new(&fixtures).join("fake-pkg").join("version.txt"),
-        "\"1.0.0\"",
-    )
-    .unwrap();
-
-    let script = format!(
-        r#"#!/usr/bin/env bash
-echo "npm $*" >> {log}
-CMD="$1"; shift
-VIEW_NAME="$1"
-SPECS=()
-PREFIX=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -g) ;;
-    --prefix) PREFIX="$2"; shift ;;
-    *) SPECS+=("$1") ;;
-  esac
-  shift
-done
-case "$CMD" in
-  root) echo "{global_root}" ;;
-  install)
-    if [ -n "$PREFIX" ]; then ROOT="$PREFIX/node_modules"; else ROOT="{global_root}"; fi
-    for SPEC in "${{SPECS[@]}}"; do
-      NAME="${{SPEC%%@*}}"
-      mkdir -p "$ROOT/$NAME"
-      cp -r "{fixtures}/$NAME/." "$ROOT/$NAME/"
-    done ;;
-  uninstall)
-    if [ -n "$PREFIX" ]; then ROOT="$PREFIX/node_modules"; else ROOT="{global_root}"; fi
-    for NAME in "${{SPECS[@]}}"; do rm -rf "$ROOT/$NAME"; done ;;
-  view) cat "{fixtures}/$VIEW_NAME/version.txt" ;;
-  *) echo "unsupported $CMD" >&2; exit 1 ;;
-esac
-"#
-    );
-    let shim = dir.join("npm-shim.sh");
-    std::fs::write(&shim, script).unwrap();
-    #[cfg(unix)]
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-    shim
-}
 
 /// A bare repo with one commit on `main`, plus a work clone for follow-up
 /// commits.
@@ -84,7 +22,11 @@ fn make_bare_repo(dir: &Path) -> (PathBuf, PathBuf) {
     run_git(&work, &["init", "-q"]);
     run_git(&work, &["config", "user.email", "test@example.com"]);
     run_git(&work, &["config", "user.name", "test"]);
-    std::fs::write(work.join("package.json"), r#"{"name":"repo"}"#).unwrap();
+    std::fs::write(
+        work.join("package.json"),
+        "intentionally invalid foreign manifest",
+    )
+    .unwrap();
     run_git(&work, &["add", "."]);
     run_git(&work, &["commit", "-qm", "init"]);
     run_git(&work, &["branch", "-M", "main"]);
@@ -108,7 +50,6 @@ struct Sandbox {
     root: PathBuf,
     cwd: PathBuf,
     agent_dir: PathBuf,
-    npm_shim: PathBuf,
 }
 
 impl Sandbox {
@@ -119,21 +60,11 @@ impl Sandbox {
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&agent_dir).unwrap();
         let root = dir.path().to_path_buf();
-        let npm_shim = write_npm_shim(&root);
-        std::fs::write(
-            agent_dir.join("settings.json"),
-            serde_json::to_string_pretty(&serde_json::json!({
-                "npmCommand": [npm_shim.display().to_string()]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
         Self {
             _dir: dir,
             root,
             cwd,
             agent_dir,
-            npm_shim,
         }
     }
 
@@ -141,94 +72,39 @@ impl Sandbox {
         let settings = SettingsManager::create(&self.cwd, &self.agent_dir);
         PackageManager::new(&self.cwd, &self.agent_dir, settings)
     }
-
-    fn log(&self) -> String {
-        std::fs::read_to_string(self.npm_shim.with_file_name("npm.log")).unwrap_or_default()
-    }
 }
 
 #[test]
-fn npm_install_list_remove_flow() {
-    let _guard = super::test_support::ENV_MUTEX.lock().unwrap();
-    let sandbox = Sandbox::new("npm-flow");
+fn legacy_registry_entries_can_be_listed_and_removed_without_installing() {
+    let sandbox = Sandbox::new("legacy");
+    let source = "npm:@scope/example@1.0";
+    let local = sandbox.root.join("resources");
+    std::fs::create_dir_all(local.join("prompts")).unwrap();
+    std::fs::write(local.join("prompts/hello.md"), "Hello").unwrap();
+    std::fs::write(sandbox.agent_dir.join("settings.json"),
+        serde_json::json!({"packages":[{"source":source}, local], "npmCommand":["missing-command"]}).to_string()).unwrap();
     let mut manager = sandbox.manager();
-
-    manager
-        .install_and_persist("npm:fake-pkg", UserOrProject::User)
-        .unwrap();
-    let configured = manager.list_configured_packages();
-    assert_eq!(configured.len(), 1);
-    assert_eq!(configured[0].source, "npm:fake-pkg");
-    let installed = configured[0]
-        .installed_path
-        .as_ref()
-        .expect("shim installs into its global root");
-    assert!(installed.join("package.json").exists());
-
-    assert!(!manager.add_source_to_settings("npm:fake-pkg@2.0.0", UserOrProject::User));
-    assert_eq!(manager.list_configured_packages().len(), 1);
-
     assert!(manager
-        .remove_and_persist("npm:fake-pkg", UserOrProject::User)
-        .unwrap());
-    assert!(manager.list_configured_packages().is_empty());
-    let log = sandbox.log();
-    assert!(log.contains("npm install -g fake-pkg\n"), "{log}");
-    assert!(log.contains("npm uninstall -g fake-pkg\n"), "{log}");
-}
-
-#[test]
-fn npm_update_skips_matching_versions() {
-    let _guard = super::test_support::ENV_MUTEX.lock().unwrap();
-    let sandbox = Sandbox::new("npm-update-match");
-    let mut manager = sandbox.manager();
-    manager
-        .install_and_persist("npm:fake-pkg", UserOrProject::User)
-        .unwrap();
-    let log_before = sandbox.log();
+        .install_and_persist(source, UserOrProject::User)
+        .unwrap_err()
+        .to_string()
+        .contains("Use a Git URL"));
+    assert!(manager.update(Some(source)).is_err());
     manager.update(None).unwrap();
-    // Version matches (1.0.0 == 1.0.0): view ran, reinstall did not.
-    let log = sandbox.log();
-    assert!(log.len() > log_before.len());
-    assert!(log.contains("npm view fake-pkg version --json\n"), "{log}");
-    assert!(!log.contains("npm install -g fake-pkg@latest"), "{log}");
-}
-
-#[test]
-fn npm_update_reinstalls_moved_versions() {
-    let _guard = super::test_support::ENV_MUTEX.lock().unwrap();
-    let sandbox = Sandbox::new("npm-update-moved");
-    let mut manager = sandbox.manager();
-    manager
-        .install_and_persist("npm:fake-pkg", UserOrProject::User)
+    assert!(manager.list_configured_packages()[0]
+        .installed_path
+        .is_none());
+    let resolved = manager
+        .resolve_with_on_missing(Some(&mut |_| panic!("unexpected install")))
         .unwrap();
-    let version_file = sandbox
-        .npm_shim
-        .with_file_name("fixtures")
-        .join("fake-pkg")
-        .join("version.txt");
-    std::fs::write(&version_file, "\"2.0.0\"").unwrap();
-    manager.update(Some("npm:fake-pkg")).unwrap();
-    assert!(
-        sandbox.log().contains("npm install -g fake-pkg@latest\n"),
-        "{}",
-        sandbox.log()
-    );
-}
-
-#[test]
-fn update_unknown_source_is_an_error_with_suggestion() {
-    let _guard = super::test_support::ENV_MUTEX.lock().unwrap();
-    let sandbox = Sandbox::new("npm-update-unknown");
-    let mut manager = sandbox.manager();
-    manager
-        .install_and_persist("npm:fake-pkg", UserOrProject::User)
-        .unwrap();
-    let error = manager.update(Some("fake-pkg")).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "No matching package found for fake-pkg. Did you mean npm:fake-pkg?"
-    );
+    assert!(resolved
+        .prompts
+        .iter()
+        .any(|prompt| prompt.path.ends_with("hello.md")));
+    assert!(manager
+        .remove_and_persist(source, UserOrProject::User)
+        .unwrap());
+    assert_eq!(manager.list_configured_packages().len(), 1);
 }
 
 #[test]
@@ -244,14 +120,7 @@ fn git_clone_update_remove_flow() {
         r#ref: None,
         pinned: false,
     };
-    super::git::install_git(
-        &source,
-        SourceScope::User,
-        &sandbox.cwd,
-        &sandbox.agent_dir,
-        None,
-    )
-    .unwrap();
+    super::git::install_git(&source, SourceScope::User, &sandbox.cwd, &sandbox.agent_dir).unwrap();
 
     let installed = sandbox
         .agent_dir
@@ -267,24 +136,10 @@ fn git_clone_update_remove_flow() {
     run_git(&work, &["add", "."]);
     run_git(&work, &["commit", "-qm", "v2"]);
     run_git(&work, &["push", "-q", "origin", "main"]);
-    super::git::update_git(
-        &source,
-        SourceScope::User,
-        &sandbox.cwd,
-        &sandbox.agent_dir,
-        None,
-    )
-    .unwrap();
+    super::git::update_git(&source, SourceScope::User, &sandbox.cwd, &sandbox.agent_dir).unwrap();
     assert!(installed.join("skills.md").exists());
 
-    super::git::update_git(
-        &source,
-        SourceScope::User,
-        &sandbox.cwd,
-        &sandbox.agent_dir,
-        None,
-    )
-    .unwrap();
+    super::git::update_git(&source, SourceScope::User, &sandbox.cwd, &sandbox.agent_dir).unwrap();
 
     super::git::remove_git(&source, SourceScope::User, &sandbox.cwd, &sandbox.agent_dir).unwrap();
     assert!(!installed.exists());
@@ -312,14 +167,7 @@ fn git_ref_checkout_installs_the_pinned_revision() {
         r#ref: Some("v1".to_string()),
         pinned: true,
     };
-    super::git::install_git(
-        &source,
-        SourceScope::User,
-        &sandbox.cwd,
-        &sandbox.agent_dir,
-        None,
-    )
-    .unwrap();
+    super::git::install_git(&source, SourceScope::User, &sandbox.cwd, &sandbox.agent_dir).unwrap();
     let installed = sandbox
         .agent_dir
         .join("git")

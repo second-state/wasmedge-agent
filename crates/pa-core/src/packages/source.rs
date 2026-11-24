@@ -1,4 +1,4 @@
-//! Package source parsing: `npm:` specs, git URLs, and local paths, plus
+//! Package source parsing: git URLs, and local paths, plus
 //! the path-resolution helpers that bind sources to install locations and
 //! settings entries. `git://` URLs are *not* git sources: the `git:` prefix strips
 //! first, so `git://host/path` parses as a local path (product behavior, not a bug).
@@ -40,16 +40,6 @@ impl From<UserOrProject> for SourceScope {
     }
 }
 
-/// A parsed `npm:` source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NpmSource {
-    /// The spec with the `npm:` prefix removed (`@scope/pkg@1.2.3`).
-    pub spec: String,
-    pub name: String,
-    /// True when the spec pins a version; pinned packages never auto-update.
-    pub pinned: bool,
-}
-
 /// A parsed git source (subset of the hosted-git-info forms; the generic
 /// fallback covers every host containing a dot or `localhost`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +64,8 @@ pub struct LocalSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedSource {
-    Npm(NpmSource),
+    /// Retired registry entry kept identifiable for settings cleanup.
+    LegacyRegistry,
     Git(GitSource),
     Local(LocalSource),
 }
@@ -333,35 +324,9 @@ pub fn is_local_path(value: &str) -> bool {
         || trimmed.starts_with("ssh:"))
 }
 
-/// Parse an npm spec into name and optional pinned version.
-pub fn parse_npm_spec(spec: &str) -> (String, Option<String>) {
-    // `^(@?[^@]+(?:\/?[^@]+)?)(?:@(.+))?$`: a scope marker may lead, and the
-    // version is everything after the first `@` that follows any other char.
-    let version_at = spec
-        .char_indices()
-        .skip(1)
-        .find(|(_, c)| *c == '@')
-        .map(|(index, _)| index);
-    let Some(version_at) = version_at else {
-        return (spec.to_string(), None);
-    };
-    let name = &spec[..version_at];
-    let version = &spec[version_at + 1..];
-    if name.is_empty() || version.is_empty() {
-        return (spec.to_string(), None);
-    }
-    (name.to_string(), Some(version.to_string()))
-}
-
 pub fn parse_source(source: &str) -> ParsedSource {
-    if let Some(spec) = source.strip_prefix("npm:") {
-        let spec = spec.trim();
-        let (name, version) = parse_npm_spec(spec);
-        return ParsedSource::Npm(NpmSource {
-            spec: spec.to_string(),
-            name,
-            pinned: version.is_some(),
-        });
+    if source.trim().starts_with("npm:") {
+        return ParsedSource::LegacyRegistry;
     }
     if is_local_path(source) {
         return ParsedSource::Local(LocalSource {
@@ -422,7 +387,7 @@ mod tests {
 
     fn kind(source: &str) -> &'static str {
         match parse_source(source) {
-            ParsedSource::Npm(_) => "npm",
+            ParsedSource::LegacyRegistry => "retired",
             ParsedSource::Git(_) => "git",
             ParsedSource::Local(_) => "local",
         }
@@ -430,8 +395,8 @@ mod tests {
 
     #[test]
     fn parses_documented_source_forms() {
-        assert_eq!(kind("npm:@scope/pkg@1.2.3"), "npm");
-        assert_eq!(kind("npm:pkg"), "npm");
+        assert_eq!(kind("npm:@scope/pkg@1.2.3"), "retired");
+        assert_eq!(kind("npm:pkg"), "retired");
         assert_eq!(kind("git:github.com/user/repo@v1"), "git");
         assert_eq!(kind("https://github.com/user/repo@v1"), "git");
         assert_eq!(kind("git:git@github.com:user/repo@v1"), "git");
@@ -548,19 +513,6 @@ mod tests {
         // The `git:` prefix is stripped before parsing, so `git://host/path`
         // never reaches the protocol branch - product behavior.
         assert_eq!(kind("git://localhost/fixtures/repo.git"), "local");
-    }
-
-    #[test]
-    fn parses_npm_specs() {
-        let (name, version) = parse_npm_spec("@scope/pkg@1.2.3");
-        assert_eq!(name, "@scope/pkg");
-        assert_eq!(version.as_deref(), Some("1.2.3"));
-        let (name, version) = parse_npm_spec("pkg");
-        assert_eq!(name, "pkg");
-        assert_eq!(version, None);
-        let (name, version) = parse_npm_spec("@scope/pkg");
-        assert_eq!(name, "@scope/pkg");
-        assert_eq!(version, None);
     }
 
     #[test]

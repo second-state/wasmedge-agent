@@ -48,21 +48,6 @@ pub fn agent_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join(CONFIG_DIR_NAME))
 }
 
-/// Find resources beside the public npm package when invoked directly from its native path.
-pub fn package_root(binary_dir: PathBuf) -> PathBuf {
-    if let Some(dist) = binary_dir
-        .parent()
-        .filter(|p| p.ends_with("native"))
-        .and_then(std::path::Path::parent)
-        .filter(|p| p.ends_with("dist"))
-    {
-        if let Some(root) = dist.parent().filter(|p| p.join("package.json").is_file()) {
-            return root.to_owned();
-        }
-    }
-    binary_dir
-}
-
 /// Locate project-local settings during the one-release directory transition.
 pub fn project_config_dir(cwd: &std::path::Path) -> PathBuf {
     let current = cwd.join(CONFIG_DIR_NAME);

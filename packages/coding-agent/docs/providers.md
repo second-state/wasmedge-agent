@@ -88,7 +88,7 @@ wasmedge-agent
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
 
-Reference for environment variables and `auth.json` keys: [`env-api-keys.ts`](../../ai/src/env-api-keys.ts).
+Reference for environment variables and `auth.json` keys: [provider environment variables](../../../crates/pa-ai/src/env_api_keys.rs).
 
 #### Auth File
 

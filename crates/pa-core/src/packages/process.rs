@@ -1,6 +1,6 @@
 //! Child-process helpers for the package manager: an inherit-stdio runner for
-//! user-facing installs (`npm install`, `git clone`) and a capturing runner
-//! with a timeout for network probes (`npm view`, `git ls-remote`). Error
+//! user-facing installs (`git clone`) and a capturing runner
+//! with a timeout for network probes (`git ls-remote`). Error
 //! strings are part of the CLI parity surface.
 
 use std::io::Read;
@@ -106,7 +106,7 @@ pub fn run_command_capture(
     }
 }
 
-/// Node-style spawn failure text (`spawn npm ENOENT`).
+/// Node-style spawn failure text (`spawn git ENOENT`).
 fn spawn_error(program: &str, error: &std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::NotFound {
         return format!("spawn {program} ENOENT");

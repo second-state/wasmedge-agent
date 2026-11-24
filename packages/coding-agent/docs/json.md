@@ -8,39 +8,32 @@ Outputs all session events as JSON lines to stdout. Useful for integrating WasmE
 
 ## Event Types
 
-Events are defined in [`AgentSessionEvent`](../src/core/agent-session.ts):
+Session events report scheduling, compaction and retries.
 
-```typescript
-type AgentSessionEvent =
-  | AgentEvent
-  | { type: "session_action_update"; actions: SessionActionSnapshot }
-  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
-  | { type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; result: CompactionResult | undefined; aborted: boolean; willRetry: boolean; errorMessage?: string }
-  | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
-```
+| Event | Fields |
+|---|---|
+| `session_action_update` | `actions` |
+| `compaction_start` | `reason` |
+| `compaction_end` | `reason`, `result`, `aborted`, `willRetry`, `errorMessage` |
+| `auto_retry_start` | `attempt`, `maxAttempts`, `delayMs`, `errorMessage` |
+| `auto_retry_end` | `success`, `attempt`, `finalError` |
 
 `session_action_update` emits literal queued actions separately from active scheduler work whenever either projection changes. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 
-Base events from [`AgentEvent`](../../agent/src/types.ts):
+The [Rust event enum](../../../crates/pa-agent/src/types.rs) defines the base events.
 
-```typescript
-type AgentEvent =
-  // Agent lifecycle
-  | { type: "agent_start" }
-  | { type: "agent_end"; messages: AgentMessage[] }
-  // Turn lifecycle
-  | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
-  // Message lifecycle
-  | { type: "message_start"; message: AgentMessage }
-  | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
-  | { type: "message_end"; message: AgentMessage }
-  // Tool execution
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
-```
+| Event | Fields |
+|---|---|
+| `agent_start` | — |
+| `agent_end` | `messages` |
+| `turn_start` | — |
+| `turn_end` | `message`, `toolResults` |
+| `message_start` | `message` |
+| `message_update` | `message`, `assistantMessageEvent` |
+| `message_end` | `message` |
+| `tool_execution_start` | `toolCallId`, `toolName`, `args` |
+| `tool_execution_update` | `toolCallId`, `toolName`, `args`, `partialResult` |
+| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError` |
 
 ## Message Types
 

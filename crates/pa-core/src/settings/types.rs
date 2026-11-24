@@ -367,7 +367,6 @@ pub struct Settings {
     pub shell_path: Option<String>,
     pub quiet_startup: Option<bool>,
     pub shell_command_prefix: Option<String>,
-    pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,
     /// Extra local MCP service-catalog files (~-relative allowed), merged after the

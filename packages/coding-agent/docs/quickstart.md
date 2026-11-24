@@ -115,7 +115,7 @@ Images can be pasted with Ctrl+V (Alt+V on Windows) or dragged into supported te
 In interactive mode:
 
 ```text
-!npm run lint
+!cargo clippy
 ```
 
 The command output is sent to the model. Use `!!command` to run a command without adding its output to model context. During agent work, the model runs project commands through its `bash` tool, while file work and data transformation happen in rust cells.

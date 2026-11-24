@@ -33,7 +33,6 @@ impl BundledAssets {
                     std::env::current_exe()
                         .ok()
                         .and_then(|exe| exe_dir_of(&exe))
-                        .map(pa_types::platform::dirs::package_root)
                         .unwrap_or_default()
                 },
                 PathBuf::from,

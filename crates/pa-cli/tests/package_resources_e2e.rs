@@ -32,10 +32,6 @@ fn write(path: &Path, content: &str) {
 fn fixture_package(cwd: &Path) -> PathBuf {
     let pkg = cwd.join("fixture-pkg");
     write(
-        &pkg.join("package.json"),
-        r#"{"name":"fixture-pkg","version":"1.0.0"}"#,
-    );
-    write(
         &pkg.join("skills").join("e-greeting").join("SKILL.md"),
         "---\nname: e-greeting\ndescription: Greets from a package\n---\nSay hi warmly.",
     );

@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::super::source::{parse_source, GitSource, NpmSource, ParsedSource, SourceScope};
+use super::super::git;
+use super::super::source::{parse_source, GitSource, ParsedSource, SourceScope};
 use super::super::PackageManager;
-use super::super::{git, npm};
 use std::collections::HashMap;
 
 use super::discovery::collect_resource_files;
@@ -42,7 +42,7 @@ fn parse_package_filter(entry: &serde_json::Value) -> Option<PackageFilter> {
     })
 }
 
-/// Dedupe configured sources by package identity (npm name, git host/path,
+/// Dedupe configured sources by package identity (git host/path,
 /// or scope-resolved local path); a project entry replaces an equal user
 /// entry (project wins).
 fn dedupe_configured_sources(
@@ -55,7 +55,7 @@ fn dedupe_configured_sources(
         let (source, is_object) = super::super::manager::split_entry(&entry);
         let filter = is_object.then(|| parse_package_filter(&entry)).flatten();
         let identity = match parse_source(&source) {
-            ParsedSource::Npm(npm_source) => format!("npm:{}", npm_source.name),
+            ParsedSource::LegacyRegistry => continue,
             ParsedSource::Git(git_source) => {
                 format!("git:{}/{}", git_source.host, git_source.path)
             }
@@ -106,17 +106,6 @@ pub(crate) fn collect_files_from_paths(
         }
     }
     files
-}
-
-fn installed_npm_matches_pinned_version(source: &NpmSource, installed_path: &Path) -> bool {
-    let Some(installed_version) = npm::installed_npm_version(installed_path) else {
-        return false;
-    };
-    let (_, pinned_version) = super::super::source::parse_npm_spec(&source.spec);
-    match pinned_version {
-        None => true,
-        Some(pinned) => installed_version == pinned,
-    }
 }
 
 impl PackageManager {
@@ -213,29 +202,7 @@ impl PackageManager {
                         &base_dir,
                     );
                 }
-                ParsedSource::Npm(npm_source) => {
-                    let installed_path =
-                        self.npm_install_path_for_scope(npm_source, configured.scope);
-                    let needs_install = !installed_path.exists()
-                        || (npm_source.pinned
-                            && !installed_npm_matches_pinned_version(npm_source, &installed_path));
-                    if needs_install
-                        && !self.install_missing(
-                            &configured.source,
-                            configured.scope,
-                            &mut on_missing,
-                        )?
-                    {
-                        continue;
-                    }
-                    metadata.base_dir = Some(installed_path.clone());
-                    PackageManager::collect_package_resources(
-                        &installed_path,
-                        accumulator,
-                        configured.filter.as_ref(),
-                        &metadata,
-                    );
-                }
+                ParsedSource::LegacyRegistry => {}
                 ParsedSource::Git(git_source) => {
                     let installed_path = git::git_install_path(
                         git_source,
@@ -288,16 +255,8 @@ impl PackageManager {
                 MissingSourceAction::Install => {}
             }
         }
-        let parsed = parse_source(source);
-        match &parsed {
-            ParsedSource::Npm(npm_source) => {
-                let temporary = scope == SourceScope::Temporary;
-                self.install_npm(npm_source, scope, temporary)?;
-            }
-            ParsedSource::Git(git_source) => {
-                self.install_git_source(git_source, scope)?;
-            }
-            ParsedSource::Local(_) => {}
+        if let ParsedSource::Git(git) = parse_source(source) {
+            self.install_git_source(&git, scope)?;
         }
         Ok(true)
     }
@@ -352,19 +311,9 @@ impl PackageManager {
         }
     }
 
-    pub(super) fn npm_install_path_for_scope(
-        &self,
-        source: &NpmSource,
-        scope: SourceScope,
-    ) -> PathBuf {
-        let global_root = self.global_npm_root().unwrap_or_default();
-        npm::npm_install_path(source, scope, self.cwd(), &global_root)
-    }
-
     /// Refresh an unpinned temporary git source (the cached checkout is kept
     /// when the refresh fails).
     fn refresh_temporary_git_source(&mut self, source: &GitSource, source_str: &str) {
-        let npm_command = self.settings_npm_command();
         let _ = self.with_progress(
             super::super::ProgressAction::Pull,
             source_str,
@@ -375,7 +324,6 @@ impl PackageManager {
                     SourceScope::Temporary,
                     manager.cwd(),
                     manager.agent_dir(),
-                    npm_command.as_ref(),
                 )
             },
         );

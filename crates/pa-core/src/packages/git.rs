@@ -1,15 +1,12 @@
-//! git package operations: clone with optional ref checkout, npm dependency
-//! install after clone, fetch/reset/clean updates against the upstream ref,
-//! and removal with empty-parent pruning.
+//! Clone, update and remove Git resource packages.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::npm;
 use super::process::{run_command, run_command_capture};
 use super::source::{GitSource, SourceScope};
-use super::NETWORK_TIMEOUT_MS;
+const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
 pub fn git_install_path(
     source: &GitSource,
@@ -38,20 +35,23 @@ pub fn git_install_root(scope: SourceScope, cwd: &Path, agent_dir: &Path) -> Opt
     }
 }
 
-/// Clone the package repo and install its npm dependencies when present.
+/// Clone resource files and check out the requested revision.
 pub fn install_git(
     source: &GitSource,
     scope: SourceScope,
     cwd: &Path,
     agent_dir: &Path,
-    npm_command: Option<&Vec<String>>,
 ) -> Result<()> {
     let target_dir = git_install_path(source, scope, cwd, agent_dir);
     if target_dir.exists() {
         return Ok(());
     }
     if let Some(git_root) = git_install_root(scope, cwd, agent_dir) {
-        npm::ensure_gitignore(&git_root)?;
+        std::fs::create_dir_all(&git_root)?;
+        let ignore = git_root.join(".gitignore");
+        if !ignore.exists() {
+            std::fs::write(ignore, "*\n!.gitignore\n")?;
+        }
     }
     if let Some(parent) = target_dir.parent() {
         std::fs::create_dir_all(parent)?;
@@ -64,17 +64,6 @@ pub fn install_git(
     )?;
     if let Some(git_ref) = source.r#ref.as_deref() {
         run_command("git", &["checkout", git_ref], Some(&target_dir))?;
-    }
-    let package_json = target_dir.join("package.json");
-    if package_json.exists() {
-        let (program, args) = npm::npm_command(npm_command);
-        let mut full_args = args;
-        full_args.extend(npm::git_dependency_install_args(npm_command));
-        run_command(
-            &program,
-            &full_args.iter().map(String::as_str).collect::<Vec<_>>(),
-            Some(&target_dir),
-        )?;
     }
     Ok(())
 }
@@ -152,17 +141,16 @@ fn get_local_git_update_target(installed_path: &Path) -> GitUpdateTarget {
 }
 
 /// Update an installed git package: fetch the upstream target, hard-reset to
-/// it when moved, prune untracked files, and reinstall dependencies.
+/// it when moved, and prune untracked files.
 pub fn update_git(
     source: &GitSource,
     scope: SourceScope,
     cwd: &Path,
     agent_dir: &Path,
-    npm_command: Option<&Vec<String>>,
 ) -> Result<()> {
     let target_dir = git_install_path(source, scope, cwd, agent_dir);
     if !target_dir.exists() {
-        return install_git(source, scope, cwd, agent_dir, npm_command);
+        return install_git(source, scope, cwd, agent_dir);
     }
 
     let target = get_local_git_update_target(&target_dir);
@@ -201,16 +189,6 @@ pub fn update_git(
     // Package checkouts must be pristine after an update.
     run_command("git", &["clean", "-fdx"], Some(&target_dir))?;
 
-    if target_dir.join("package.json").exists() {
-        let (program, args) = npm::npm_command(npm_command);
-        let mut full_args = args;
-        full_args.extend(npm::git_dependency_install_args(npm_command));
-        run_command(
-            &program,
-            &full_args.iter().map(String::as_str).collect::<Vec<_>>(),
-            Some(&target_dir),
-        )?;
-    }
     Ok(())
 }
 

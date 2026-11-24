@@ -21,7 +21,7 @@ WasmEdge Agent loads themes from:
 - Built-in: `wasmedge`, `dark`, `light`
 - Global: `~/.wasmedge-agent/themes/*.json`
 - Project: `.wasmedge-agent/themes/*.json`
-- Packages: `themes/` directories or `pi.themes` entries in `package.json`
+- Packages: `themes/` directories or `themes` entries in `wasmedge-agent.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
 

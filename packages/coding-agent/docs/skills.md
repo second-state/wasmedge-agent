@@ -32,7 +32,7 @@ WasmEdge Agent loads skills from:
 - Project:
   - `.wasmedge-agent/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Packages: `skills/` directories or `pi.skills` entries in `package.json`
+- Packages: `skills/` directories or `skills` entries in `wasmedge-agent.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 - Built-in: `skills/` shipped with the wasmedge-agent package (lowest precedence)
@@ -266,13 +266,6 @@ description: What this skill does and when to use it. Be specific.
 
 # My Skill
 
-## Setup
-
-Run once before first use:
-```bash
-cd /path/to/skill && npm install
-```
-
 ## Usage
 
 ```bash
@@ -345,8 +338,10 @@ Name collisions (same name from different locations) warn and keep the first ski
 ```
 brave-search/
 ├── SKILL.md
-├── search.js
-└── content.js
+├── Cargo.toml
+└── src/bin/
+    ├── search.rs
+    └── content.rs
 ```
 
 **SKILL.md:**
@@ -361,20 +356,20 @@ description: Web search and content extraction via Brave Search API. Use for sea
 ## Setup
 
 ```bash
-cd /path/to/brave-search && npm install
+cargo build --release --locked
 ```
 
 ## Search
 
 ```bash
-./search.js "query"              # Basic search
-./search.js "query" --content    # Include page content
+./target/release/search "query"              # Basic search
+./target/release/search "query" --content    # Include page content
 ```
 
 ## Extract Page Content
 
 ```bash
-./content.js https://example.com
+./target/release/content https://example.com
 ```
 ````
 

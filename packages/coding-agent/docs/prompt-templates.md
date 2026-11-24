@@ -10,7 +10,7 @@ WasmEdge Agent loads prompt templates from:
 
 - Global: `~/.wasmedge-agent/prompts/*.md`
 - Project: `.wasmedge-agent/prompts/*.md`
-- Packages: `prompts/` directories or `pi.prompts` entries in `package.json`
+- Packages: `prompts/` directories or `prompts` entries in `wasmedge-agent.json`
 - Settings: `prompts` array with files or directories
 - CLI: `--prompt-template <path>` (repeatable)
 

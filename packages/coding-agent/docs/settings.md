@@ -479,17 +479,6 @@ entries. Explicit settings take precedence for matching crate names.
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows) |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
-| `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
-
-```json
-{
-  "npmCommand": ["mise", "exec", "node@20", "--", "npm"]
-}
-```
-
-`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
-
-Normally the package manager's global modules location is queried using `root -g`. As a special case, if the first element of `npmCommand` is `"bun"`, the modules location will instead be queried with `pm bin -g`.
 
 ### Daemon
 
@@ -531,14 +520,13 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 ### Resources
 
-These settings define where to load extensions, skills, prompts, and themes from.
+These settings define where to load skills, prompts and themes.
 
 Paths in `~/.wasmedge-agent/settings.json` resolve relative to `~/.wasmedge-agent`. Paths in `.wasmedge-agent/settings.json` resolve relative to `.wasmedge-agent`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `packages` | array | `[]` | npm/git packages to load resources from |
-| `extensions` | string[] | `[]` | Local extension file paths or directories |
+| `packages` | array | `[]` | Git or local resource packages in user settings |
 | `skills` | string[] | `[]` | Local skill file paths or directories |
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |

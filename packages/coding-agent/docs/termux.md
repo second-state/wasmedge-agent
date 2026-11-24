@@ -1,29 +1,6 @@
 # Termux (Android) Setup
 
-WasmEdge Agent runs on Android via [Termux](https://termux.dev/), a terminal emulator and Linux environment for Android.
-
-## Prerequisites
-
-1. Install [Termux](https://github.com/termux/termux-app#installation) from GitHub or F-Droid (not Google Play, that version is deprecated)
-2. Install [Termux:API](https://github.com/termux/termux-api#installation) from GitHub or F-Droid for clipboard and other device integrations
-
-## Installation
-
-```bash
-# Update packages
-pkg update && pkg upgrade
-
-# Install dependencies
-pkg install nodejs termux-api git ripgrep
-
-# Clone and install WasmEdge Agent from source
-git clone https://github.com/hydai/wasmedge-agent.git
-cd wasmedge-agent
-npm ci
-
-# Run WasmEdge Agent
-./wasmedge-agent.sh
-```
+The release workflow publishes native Linux, macOS and Windows archives. Android has no published native archive. The [build guide](development.md) lists the toolchain needed by the Rust worker. The following Termux commands describe Android integrations for an environment where the native binary and WasmEdge are already available.
 
 ## Clipboard Support
 
@@ -95,7 +72,6 @@ termux-camera-photo out.jpg   # Take photo
 ## Limitations
 
 - **No image clipboard**: Termux clipboard API only supports text
-- **No native binaries**: Some optional native dependencies (like the clipboard module) are unavailable on Android ARM64 and are skipped during installation
 - **Storage access**: To access files in `/storage/emulated/0` (Downloads, etc.), run `termux-setup-storage` once to grant permissions
 
 ## Troubleshooting
@@ -116,11 +92,4 @@ pkg install termux-api
 Run once to grant storage permissions:
 ```bash
 termux-setup-storage
-```
-
-### Node.js installation issues
-
-If npm fails, try clearing the cache:
-```bash
-npm cache clean --force
 ```

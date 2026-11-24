@@ -26,159 +26,11 @@ Sessions have a version field in the header:
 
 Existing sessions are automatically migrated to the current version (v3) when loaded.
 
-## Source Files
+## Message and entry types
 
-- [`session-manager.ts`](../src/core/session-manager.ts) - Session entry types and `SessionManager`
-- [`messages.ts`](../src/core/messages.ts) - Extended message types (`BashExecutionMessage`, `CustomMessage`, and others)
-- [`packages/ai/src/types.ts`](../../ai/src/types.ts) - Base message types (`UserMessage`, `AssistantMessage`, `ToolResultMessage`)
-- [`packages/agent/src/types.ts`](../../agent/src/types.ts) - `AgentMessage` union type
+The Rust SDK exposes the persisted [session entry and message types](../../../crates/pa-types/src/session.rs) and the [session manager](../../../crates/pa-core/src/session/manager.rs). User messages contain text or an array of text and image blocks. Assistant blocks can also contain thinking and tool calls. A tool result carries the matching tool call ID and its content.
 
-For TypeScript definitions in your project, inspect `node_modules/@earendil-works/pi-coding-agent/dist/` and `node_modules/@earendil-works/pi-ai/dist/`.
-
-## Message Types
-
-Session entries contain `AgentMessage` objects. Understanding these types is essential for parsing sessions and writing extensions.
-
-### Content Blocks
-
-Messages contain arrays of typed content blocks:
-
-```typescript
-interface TextContent {
-  type: "text";
-  text: string;
-}
-
-interface ImageContent {
-  type: "image";
-  data: string;      // base64 encoded
-  mimeType: string;  // e.g., "image/jpeg", "image/png"
-}
-
-interface ThinkingContent {
-  type: "thinking";
-  thinking: string;
-}
-
-interface ToolCall {
-  type: "toolCall";
-  id: string;
-  name: string;
-  arguments: Record<string, any>;
-}
-```
-
-### Base Message Types (from WasmEdge Agent AI)
-
-```typescript
-interface UserMessage {
-  role: "user";
-  content: string | (TextContent | ImageContent)[];
-  timestamp: number;  // Unix ms
-}
-
-interface AssistantMessage {
-  role: "assistant";
-  content: (TextContent | ThinkingContent | ToolCall)[];
-  api: string;
-  provider: string;
-  model: string;
-  usage: Usage;
-  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
-  errorMessage?: string;
-  timestamp: number;
-}
-
-interface ToolResultMessage {
-  role: "toolResult";
-  toolCallId: string;
-  toolName: string;
-  content: (TextContent | ImageContent)[];
-  details?: any;      // Tool-specific metadata
-  isError: boolean;
-  timestamp: number;
-}
-
-interface Usage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
-}
-```
-
-### Extended Message Types (from WasmEdge Agent Coding Agent)
-
-```typescript
-interface BashExecutionMessage {
-  role: "bashExecution";
-  command: string;
-  output: string;
-  exitCode: number | undefined;
-  cancelled: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-  excludeFromContext?: boolean;  // true for !! prefix commands
-  timestamp: number;
-}
-
-interface CustomMessage {
-  role: "custom";
-  customType: string;            // Extension identifier
-  content: string | (TextContent | ImageContent)[];
-  display: boolean;              // Show in TUI
-  details?: any;                 // Extension-specific metadata
-  timestamp: number;
-}
-
-interface BranchSummaryMessage {
-  role: "branchSummary";
-  summary: string;
-  fromId: string;                // Entry we branched from
-  timestamp: number;
-}
-
-interface CompactionSummaryMessage {
-  role: "compactionSummary";
-  summary: string;
-  tokensBefore: number;
-  timestamp: number;
-}
-```
-
-### AgentMessage Union
-
-```typescript
-type AgentMessage =
-  | UserMessage
-  | AssistantMessage
-  | ToolResultMessage
-  | BashExecutionMessage
-  | CustomMessage
-  | BranchSummaryMessage
-  | CompactionSummaryMessage;
-```
-
-## Entry Base
-
-All entries (except `SessionHeader`) extend `SessionEntryBase`:
-
-```typescript
-interface SessionEntryBase {
-  type: string;
-  id: string;           // 8-char hex ID
-  parentId: string | null;  // Parent entry ID (null for first entry)
-  timestamp: string;    // ISO timestamp
-}
-```
+Every non-header entry has a `type`, an `id`, a nullable `parentId` and an ISO timestamp. Message timestamps inside the entries are Unix milliseconds.
 
 ## Entry Types
 
@@ -268,14 +120,7 @@ Use `customType` to identify your extension's entries on reload.
 
 Records RLM child usage folded into a parent assistant message. This entry is daemon bookkeeping and does not enter model context.
 
-```typescript
-interface ChildUsageAttributionEntry extends SessionEntryBase {
-  type: "child_usage_attributed";
-  targetId: string;       // Parent assistant message entry
-  childUsage: Usage;      // Usage added by one child
-  aggregateUsage: Usage;  // Updated parent aggregate
-}
-```
+The entry has a `targetId`, the incremental `childUsage`, and the updated `aggregateUsage`.
 
 Reload applies `aggregateUsage` to the target assistant message. Context-tree accounting can then subtract `childUsage` when reporting the parent node's own usage.
 
@@ -352,104 +197,20 @@ Entries form a tree:
 
 Bookkeeping entries such as child usage attribution, session lifecycle, agent status, and git state are ignored when building model context.
 
-## Parsing Example
+## Parsing a transcript in Rust
 
-```typescript
-import { readFileSync } from "fs";
+```rust
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use wasmedge_agent_sdk::types::session::FileEntry;
 
-const lines = readFileSync("session.jsonl", "utf8").trim().split("\n");
-
-for (const line of lines) {
-  const entry = JSON.parse(line);
-
-  switch (entry.type) {
-    case "session":
-      console.log(`Session v${entry.version ?? 1}: ${entry.id}`);
-      break;
-    case "message":
-      console.log(`[${entry.id}] ${entry.message.role}: ${JSON.stringify(entry.message.content)}`);
-      break;
-    case "compaction":
-      console.log(`[${entry.id}] Compaction: ${entry.tokensBefore} tokens summarized`);
-      break;
-    case "branch_summary":
-      console.log(`[${entry.id}] Branch from ${entry.fromId}`);
-      break;
-    case "custom":
-      console.log(`[${entry.id}] Custom (${entry.customType}): ${JSON.stringify(entry.data)}`);
-      break;
-    case "custom_message":
-      console.log(`[${entry.id}] Extension message (${entry.customType}): ${entry.content}`);
-      break;
-    case "label":
-      console.log(`[${entry.id}] Label "${entry.label}" on ${entry.targetId}`);
-      break;
-    case "model_change":
-      console.log(`[${entry.id}] Model: ${entry.provider}/${entry.modelId}`);
-      break;
-    case "thinking_level_change":
-      console.log(`[${entry.id}] Thinking: ${entry.thinkingLevel}`);
-      break;
-  }
+fn read_entries(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    for line in BufReader::new(File::open(path)?).lines() {
+        let entry: FileEntry = serde_json::from_str(&line?)?;
+        println!("{entry:?}");
+    }
+    Ok(())
 }
 ```
 
-## SessionManager API
-
-Key methods for working with sessions programmatically.
-
-### Static Creation Methods
-- `SessionManager.create(cwd, sessionDir?)` - New session
-- `SessionManager.open(path, sessionDir?)` - Open existing session file
-- `SessionManager.continueRecent(cwd, sessionDir?)` - Continue most recent or create new
-- `SessionManager.inMemory(cwd?)` - No file persistence
-- `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?)` - Fork session from another project
-
-### Static Listing Methods
-- `SessionManager.list(cwd, sessionDir?, callbacks?)` - List sessions for a directory
-- `SessionManager.listAll(callbacks?, sessionDir?)` - List all sessions across all projects
-
-`callbacks` can provide `onProgress(loaded, total)` and `onSession(session)` handlers.
-
-### Instance Methods - Session Management
-- `newSession(options?)` - Start a new session (options: `{ parentSession?: string }`)
-- `setSessionFile(path)` - Switch to a different session file
-- `createBranchedSession(leafId)` - Extract branch to new session file
-
-### Instance Methods - Appending (all return entry ID)
-- `appendMessage(message)` - Add message
-- `appendThinkingLevelChange(level)` - Record thinking change
-- `appendServiceTierChange(tier)` - Record provider service-tier change
-- `appendModelChange(provider, modelId)` - Record model change
-- `appendCompaction(summary, firstKeptEntryId, tokensBefore, details?, fromHook?, customInstructions?)` - Add compaction
-- `appendCustomEntry(customType, data?)` - Extension state (not in context)
-- `appendChildUsageAttribution(targetId, childUsage, aggregateUsage)` - Persist RLM child usage folded into a parent assistant message
-- `appendSessionInfo(name)` - Set session display name
-- `appendSessionState(state)` - Record daemon-managed lifecycle state
-- `appendAgentStatus(status)` - Record an agents-view status summary
-- `appendGitState(git)` - Record repository state
-- `appendCustomMessageEntry(customType, content, display, details?)` - Extension message (in context)
-- `appendLabelChange(targetId, label)` - Set/clear label
-
-### Instance Methods - Tree Navigation
-- `getLeafId()` - Current position
-- `getLeafEntry()` - Get current leaf entry
-- `getEntry(id)` - Get entry by ID
-- `getBranch(fromId?)` - Walk from entry to root
-- `getTree()` - Get full tree structure
-- `getChildren(parentId)` - Get direct children
-- `getLabel(id)` - Get label for entry
-- `branch(entryId)` - Move leaf to earlier entry
-- `resetLeaf()` - Reset leaf to null (before any entries)
-- `branchWithSummary(entryId, summary, details?, fromHook?)` - Branch with context summary
-
-### Instance Methods - Context & Info
-- `buildSessionContext()` - Get messages, thinkingLevel, and model for LLM
-- `getEntries()` - All entries (excluding header)
-- `getHeader()` - Session header metadata
-- `getSessionName()` - Get display name from latest session_info entry
-- `getCwd()` - Working directory
-- `getSessionDir()` - Session storage directory
-- `getSessionId()` - Session UUID
-- `getSessionFile()` - Session file path (undefined for in-memory)
-- `isPersisted()` - Whether session is saved to disk
+Use the SDK's `SessionManager` to resume or branch an existing session. See the [SDK guide](sdk.md).

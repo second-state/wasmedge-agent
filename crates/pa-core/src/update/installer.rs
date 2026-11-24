@@ -271,7 +271,7 @@ pub async fn run_bundled_installer(
         // The local-mode pre-flight (the exact-equivalence source): the
         // rollback's generations record rides the script's OWN prefix
         // spelling (cygpath + physical_path), and the archive's checks
-        // (name, tar, payload, the version the packaged package.json
+        // (name, tar, payload, the version the packaged version.json
         // reports) are the script's staged run's own — no native mirror
         // can answer either faithfully, so the script itself answers, in
         // its WASMEDGE_AGENT_ROLLBACK_CHECK / WASMEDGE_AGENT_ARCHIVE_CHECK

@@ -506,8 +506,8 @@ fn manifest_supports_glob_patterns_for_skills() {
     let mut fixture = Fixture::new();
     let pkg_dir = fixture.temp_dir.join("skill-manifest-pkg");
     write(
-        &pkg_dir.join("package.json"),
-        r#"{"name":"skill-manifest-pkg","pi":{"skills":["skills","!**/bad-skill"]}}"#,
+        &pkg_dir.join("wasmedge-agent.json"),
+        r#"{"skills":["skills","!**/bad-skill"]}"#,
     );
     skill_md(&pkg_dir.join("skills"), "good-skill", "Good");
     skill_md(&pkg_dir.join("skills"), "bad-skill", "Bad");
@@ -525,12 +525,36 @@ fn manifest_supports_glob_patterns_for_skills() {
 }
 
 #[test]
+fn existing_resource_filters_survive_migration_and_native_manifest_wins() {
+    let mut fixture = Fixture::new();
+    let package = fixture.temp_dir.join("old-resource-layout");
+    write(
+        &package.join("package.json"),
+        r#"{"pi":{"prompts":["prompts/allowed.md"]}}"#,
+    );
+    for file in ["allowed.md", "private.md"] {
+        write(&package.join("prompts").join(file), "prompt");
+    }
+    fixture.set_user_packages(serde_json::json!([package]));
+    let old = fixture.manager.resolve().unwrap();
+    assert!(is_enabled(&old.prompts, "allowed.md"));
+    assert!(!is_enabled(&old.prompts, "private.md"));
+    write(
+        &package.join("wasmedge-agent.json"),
+        r#"{"prompts":["prompts/private.md"]}"#,
+    );
+    let native = fixture.manager.resolve().unwrap();
+    assert!(is_enabled(&native.prompts, "private.md"));
+    assert!(!is_enabled(&native.prompts, "allowed.md"));
+}
+
+#[test]
 fn manifest_expands_positive_glob_entries_before_collecting_skills() {
     let mut fixture = Fixture::new();
     let pkg_dir = fixture.temp_dir.join("skill-manifest-glob-pkg");
     write(
-        &pkg_dir.join("package.json"),
-        r#"{"name":"skill-manifest-glob-pkg","pi":{"skills":["./plugins/*/skills"]}}"#,
+        &pkg_dir.join("wasmedge-agent.json"),
+        r#"{"skills":["./plugins/*/skills"]}"#,
     );
     skill_md(
         &pkg_dir
@@ -564,8 +588,8 @@ fn user_filters_layer_on_top_of_manifest_filters() {
     let mut fixture = Fixture::new();
     let pkg_dir = fixture.temp_dir.join("layered-pkg");
     write(
-        &pkg_dir.join("package.json"),
-        r#"{"name":"layered-pkg","pi":{"prompts":["prompts","!**/baz.md"]}}"#,
+        &pkg_dir.join("wasmedge-agent.json"),
+        r#"{"prompts":["prompts","!**/baz.md"]}"#,
     );
     for name in ["foo.md", "bar.md", "baz.md"] {
         write(&pkg_dir.join("prompts").join(name), "A prompt");
@@ -709,8 +733,8 @@ fn force_include_in_manifest_patterns() {
     let mut fixture = Fixture::new();
     let pkg_dir = fixture.temp_dir.join("manifest-force-pkg");
     write(
-        &pkg_dir.join("package.json"),
-        r#"{"name":"manifest-force-pkg","pi":{"prompts":["prompts","!**/two.md","+prompts/two.md"]}}"#,
+        &pkg_dir.join("wasmedge-agent.json"),
+        r#"{"prompts":["prompts","!**/two.md","+prompts/two.md"]}"#,
     );
     for name in ["one.md", "two.md", "three.md"] {
         write(&pkg_dir.join("prompts").join(name), "A prompt");
@@ -854,7 +878,7 @@ fn offline_mode_skips_installing_missing_sources() {
     let previous = std::env::var("PI_OFFLINE").ok();
     std::env::set_var("PI_OFFLINE", "1");
     let mut fixture = Fixture::new();
-    fixture.set_user_packages(serde_json::json!(["npm:missing-package"]));
+    fixture.set_user_packages(serde_json::json!(["git:github.com/example/missing-user"]));
     let project_dir = fixture.manager.cwd().join(crate::settings::CONFIG_DIR_NAME);
     std::fs::create_dir_all(&project_dir).unwrap();
     std::fs::write(
@@ -882,23 +906,26 @@ fn offline_mode_skips_installing_missing_sources() {
 fn on_missing_error_fails_resolution() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let mut fixture = Fixture::new();
-    fixture.set_user_packages(serde_json::json!(["npm:missing-package"]));
+    fixture.set_user_packages(serde_json::json!(["git:github.com/example/missing-user"]));
 
     let error = fixture
         .manager
         .resolve_with_on_missing(Some(&mut |source| {
-            assert_eq!(source, "npm:missing-package");
+            assert_eq!(source, "git:github.com/example/missing-user");
             crate::packages::MissingSourceAction::Error
         }))
         .unwrap_err();
-    assert_eq!(error.to_string(), "Missing source: npm:missing-package");
+    assert_eq!(
+        error.to_string(),
+        "Missing source: git:github.com/example/missing-user"
+    );
 }
 
 #[test]
 fn on_missing_skip_leaves_the_source_out() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let mut fixture = Fixture::new();
-    fixture.set_user_packages(serde_json::json!(["npm:missing-package"]));
+    fixture.set_user_packages(serde_json::json!(["git:github.com/example/missing-user"]));
 
     let result = fixture
         .manager

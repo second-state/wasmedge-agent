@@ -151,16 +151,10 @@ Update preparation is two-phase:
 
 If preparation or manifest validation fails, prepared workers are released and all roots continue running.
 
-## Benchmarks
+## Worker lifecycle tests
 
-From `packages/coding-agent`:
+Run the native daemon integration tests from the workspace root:
 
 ```sh
-npx tsx test/daemon-multiclient-bench.ts
-npx tsx test/daemon-multiclient-bench.ts --generated-session-mib 100
-npx tsx test/daemon-multiclient-bench.ts --generated-session-mib 500
-npx tsx test/daemon-multiclient-bench.ts --session-file /path/to/session.jsonl
-WASMEDGE_AGENT_STRESS_WORKERS=50 npx tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-supervisor-process.test.ts -t "hosts resident roots"
+cargo test --release --locked -p pa-daemon --test worker_orphan_exit_e2e --test create_reuse_e2e
 ```
-
-The benchmark compares fanout and attach paths, including serialization count, throughput, elapsed time, and sampled RSS. The stress case starts many resident roots and verifies that their schedules advance independently while sessions are busy.

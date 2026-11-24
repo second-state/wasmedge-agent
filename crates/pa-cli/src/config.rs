@@ -68,15 +68,12 @@ fn package_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|exe| pa_core::packages::exe_dir_of(&exe))
-        .map(pa_types::platform::dirs::package_root)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub(crate) fn packaged_manifest_version() -> Option<String> {
     let package = package_dir();
-    let manifest = std::fs::read_to_string(package.join("version.json"))
-        .or_else(|_| std::fs::read_to_string(package.join("package.json")))
-        .ok()?;
+    let manifest = std::fs::read_to_string(package.join("version.json")).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&manifest).ok()?;
     let version = parsed.get("version")?.as_str()?.trim();
     (!version.is_empty()).then(|| version.to_string())
