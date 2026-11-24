@@ -559,8 +559,7 @@ struct LedgerReader {
 
 impl LedgerReader {
     fn new(master: OwnedFd) -> LedgerReader {
-        let fd = master.as_raw_fd();
-        fcntl(fd, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
+        fcntl(&master, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
         LedgerReader {
             file: master.into(),
             output: Vec::new(),

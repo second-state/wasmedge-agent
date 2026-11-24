@@ -85,8 +85,13 @@ fn inspected(bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
             _ => {}
         }
         if let Some((id, range)) = payload.as_section() {
+            let start = usize::try_from(range.start)?;
+            let end = usize::try_from(range.end)?;
+            let section = bytes
+                .get(start..end)
+                .context("invalid Wasm section range")?;
             clean.push(id);
-            let mut n = range.len();
+            let mut n = section.len();
             loop {
                 let low = (n & 127) as u8;
                 n >>= 7;
@@ -95,7 +100,7 @@ fn inspected(bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
                     break;
                 }
             }
-            clean.extend_from_slice(&bytes[range]);
+            clean.extend_from_slice(section);
         }
     }
     Ok((clean, native))
@@ -151,5 +156,18 @@ mod tests {
         assert!(!allowed("sock_open"));
         assert!(allowed("fd_write"));
         assert!(inspected(b"invalid").is_err());
+    }
+
+    #[test]
+    fn preserves_sections_with_multibyte_lengths() {
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        // A type section containing 43 empty function signatures occupies 130 bytes.
+        module.extend_from_slice(&[1, 0x82, 0x01, 43]);
+        for _ in 0..43 {
+            module.extend_from_slice(&[0x60, 0, 0]);
+        }
+        let mut with_custom = module.clone();
+        with_custom.extend_from_slice(b"\0\x04\x01x12");
+        assert_eq!(inspected(&with_custom).unwrap().0, module);
     }
 }

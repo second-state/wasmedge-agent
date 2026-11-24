@@ -18,7 +18,7 @@
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -340,8 +340,7 @@ struct PtyReader {
 
 impl PtyReader {
     fn new(master: OwnedFd) -> PtyReader {
-        let fd = master.as_raw_fd();
-        fcntl(fd, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
+        fcntl(&master, F_SETFL(OFlag::O_NONBLOCK)).expect("pty master non-blocking");
         PtyReader {
             file: master.into(),
             output: Vec::new(),

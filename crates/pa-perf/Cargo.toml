@@ -23,7 +23,7 @@ vt100 = "0.15"
 # already resolves for pa-core/pa-cli.
 [target.'cfg(unix)'.dependencies]
 # `feature` provides sysconf(CLK_TCK) for idle-cost's /proc tick counts.
-nix = { version = "0.29", features = ["term", "signal", "process", "fs", "poll", "feature"] }
+nix = { version = "0.32", features = ["term", "signal", "process", "fs", "poll", "feature"] }
 
 [dependencies.pa-types]
 path = "../pa-types"

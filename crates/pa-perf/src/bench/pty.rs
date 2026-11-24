@@ -4,7 +4,7 @@
 //! slave, the same discipline the repo's pty e2es use.
 
 use std::io::Read;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -83,8 +83,7 @@ impl PtyChild {
             .stdout(slave_as_stdio(&pty.slave))
             .stderr(slave_as_stdio(&pty.slave));
         pa_core::platform::process::set_new_session(&mut command);
-        let fd = pty.master.as_raw_fd();
-        fcntl(fd, F_SETFL(OFlag::O_NONBLOCK))?;
+        fcntl(&pty.master, F_SETFL(OFlag::O_NONBLOCK))?;
         let child = command.spawn()?;
         drop(pty.slave);
         Ok(Self {
