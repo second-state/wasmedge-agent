@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 pub const TEMPLATE_RENDERED_TOOLS: [&str; 2] = ["bash", "edit"];
 
 /// Pre-rendered HTML for one custom tool call and result: the export
-/// data's `renderedTools` entry (template.js reads these keys).
+/// data's `renderedTools` entry.
 #[derive(Debug, Default, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedToolHtml {

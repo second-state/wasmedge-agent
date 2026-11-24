@@ -1,7 +1,4 @@
-//! Session HTML export: the standalone viewer file a session export
-//! produces. The template (see `assets/export-html/NOTICE.md`) is
-//! embedded verbatim; the session data rides inside as a base64 JSON
-//! blob the template renders client-side.
+//! Standalone, pre-rendered session exports with an embedded copy of the session data.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +14,7 @@ use pa_types::session::FileEntry;
 use self::theme::resolve_export_theme;
 
 pub mod ansi_to_html;
+mod render;
 mod theme;
 pub mod tool_render;
 
@@ -29,12 +27,8 @@ pub const EXPORT_APP_NAME: &str = "wasmedge-agent";
 
 const TEMPLATE_HTML: &str = include_str!("../../assets/export-html/template.html");
 const TEMPLATE_CSS: &str = include_str!("../../assets/export-html/template.css");
-const TEMPLATE_JS: &str = include_str!("../../assets/export-html/template.js");
-const MARKED_JS: &str = include_str!("../../assets/export-html/vendor/marked.min.js");
-const HIGHLIGHT_JS: &str = include_str!("../../assets/export-html/vendor/highlight.min.js");
-
 /// The session data embedded into an exported file; field names are the template's wire contract.
-/// Absent optional sections serialize to `null`, which the template treats as "not present".
+/// Optional sections are omitted when unavailable.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionExportData {
@@ -51,9 +45,7 @@ pub struct SessionExportData {
     /// when the exporter knows them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
-    /// Pre-rendered HTML for custom tool calls/results, keyed by tool-call id; the template falls
-    /// back to its generic rendering for entries without one. Omitted (not `null`) like TS
-    /// `JSON.stringify` drops undefined.
+    /// Optional custom tool HTML keyed by tool-call ID. The renderer sanitizes it before display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered_tools: Option<Value>,
 }
@@ -77,8 +69,7 @@ pub fn default_html_output_path(session_file: &Path) -> String {
     )
 }
 
-/// Fill the export template: the CSS block, the inline scripts, and the
-/// base64 session data.
+/// Render the visible transcript and preserve the original session data for readers.
 fn generate_html(data: &SessionExportData, theme: &theme::ExportTheme) -> String {
     let session_data = serde_json::to_string(data).unwrap_or_default();
     let session_data = base64::engine::general_purpose::STANDARD.encode(session_data);
@@ -89,10 +80,8 @@ fn generate_html(data: &SessionExportData, theme: &theme::ExportTheme) -> String
         .replacen("{{INFO_BG}}", &theme.info_bg, 1);
     TEMPLATE_HTML
         .replacen("{{CSS}}", &css, 1)
-        .replacen("{{JS}}", TEMPLATE_JS, 1)
         .replacen("{{SESSION_DATA}}", &session_data, 1)
-        .replacen("{{MARKED_JS}}", MARKED_JS, 1)
-        .replacen("{{HIGHLIGHT_JS}}", HIGHLIGHT_JS, 1)
+        .replacen("{{TRANSCRIPT}}", &render::transcript(data), 1)
 }
 
 /// Write the export file and return the output path as the caller will
@@ -178,11 +167,7 @@ fn session_data_from_file(input_path: &Path) -> Result<SessionExportData> {
         .filter(|entry| !matches!(entry, FileEntry::Header { .. }))
         .map(serde_json::to_value)
         .collect::<Result<_, serde_json::Error>>()?;
-    let leaf_id = body
-        .last()
-        .and_then(|entry| entry.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let leaf_id = manager.get_leaf_id().map(str::to_owned);
     Ok(SessionExportData {
         header: header.unwrap_or(Value::Null),
         entries: body,
@@ -234,12 +219,12 @@ mod tests {
         let html = std::fs::read_to_string(&out).expect("read export");
         assert!(html.contains("Session Export"));
         assert!(html.contains("--accent: #7c6faf;"));
-        assert!(html.contains("marked.min.js") || html.contains("marked"));
-        let start = html
-            .find("session-data\" type=\"application/json\">")
-            .expect("session data element");
-        let blob = &html[start + "session-data\" type=\"application/json\">".len()..];
-        let blob = blob.split('<').next().expect("script end");
+        assert!(html.contains("<p>hello</p>"));
+        assert!(html.contains("<p>hi there</p>"));
+        assert!(!html.contains("<script"));
+        let start = html.find("session-data\">").expect("session data element");
+        let blob = &html[start + "session-data\">".len()..];
+        let blob = blob.split('<').next().expect("end of embedded data");
         let data: Value = serde_json::from_slice(
             &base64::engine::general_purpose::STANDARD
                 .decode(blob.trim())

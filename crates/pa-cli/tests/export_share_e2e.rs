@@ -350,10 +350,12 @@ async fn tui_export_and_share_surface() {
     let html = std::fs::read_to_string(&html_out).expect("exported html");
     assert!(html.contains("Session Export"), "template scaffold");
     assert!(html.contains("--accent: #7c6faf;"), "theme vars embedded");
-    let marker = "session-data\" type=\"application/json\">";
+    assert!(html.contains("<p>say hi</p>"));
+    assert!(!html.contains("<script"));
+    let marker = "session-data\">";
     let start = html.find(marker).expect("session data element");
     let blob = &html[start + marker.len()..];
-    let blob = blob.split('<').next().expect("script close");
+    let blob = blob.split('<').next().expect("end of embedded data");
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(blob.trim())
         .expect("base64 session data");
@@ -377,10 +379,10 @@ async fn tui_export_and_share_surface() {
     // `state.tools` in the live-session export).
     let tools = data["tools"].as_array().expect("tools section");
     assert!(
-        tools.iter().any(|tool| tool["name"] == "python_repl"
+        tools.iter().any(|tool| tool["name"] == "rust"
             && tool["description"].is_string()
             && tool["parameters"].is_object()),
-        "python_repl contract in export tools: {data}"
+        "rust contract in export tools: {data}"
     );
     // No custom tool ran: the pre-render section is omitted, not null.
     assert!(

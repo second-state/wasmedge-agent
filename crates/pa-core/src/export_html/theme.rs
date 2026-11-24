@@ -75,7 +75,7 @@ fn resolve_var_refs(value: &Value, vars: &Map<String, Value>) -> Result<Resolved
         Value::Number(index) => Ok(ResolvedColor::Ansi256(as_index(index)?)),
         Value::String(color) => {
             if color.is_empty() || color.starts_with('#') {
-                Ok(ResolvedColor::Css(color.clone()))
+                css_literal(color)
             } else {
                 let referenced = vars
                     .get(color)
@@ -97,7 +97,7 @@ fn resolve_var_ref_chain<'a>(
         Value::Number(index) => Ok(ResolvedColor::Ansi256(as_index(index)?)),
         Value::String(color) => {
             if color.is_empty() || color.starts_with('#') {
-                return Ok(ResolvedColor::Css(color.clone()));
+                return css_literal(color);
             }
             if visited.contains(color.as_str()) {
                 return Err(anyhow!("Circular variable reference detected: {color}"));
@@ -110,6 +110,16 @@ fn resolve_var_ref_chain<'a>(
         }
         other => Err(anyhow!("Invalid color value: {other}")),
     }
+}
+
+fn css_literal(color: &str) -> Result<ResolvedColor> {
+    let hex = color.strip_prefix('#').unwrap_or_default();
+    anyhow::ensure!(
+        color.is_empty()
+            || matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Invalid theme color: {color}"
+    );
+    Ok(ResolvedColor::Css(color.to_owned()))
 }
 
 fn as_index(value: &serde_json::Number) -> Result<u64> {
@@ -236,7 +246,7 @@ fn detect_light_terminal_background(value: Option<&str>) -> bool {
 /// `parseColor`: `#RRGGBB` or `rgb(r, g, b)` to RGB, else `None`.
 fn parse_color(color: &str) -> Option<(u8, u8, u8)> {
     if let Some(hex) = color.strip_prefix('#') {
-        if hex.len() == 6 {
+        if hex.len() == 6 && hex.is_ascii() {
             return Some((
                 u8::from_str_radix(&hex[0..2], 16).ok()?,
                 u8::from_str_radix(&hex[2..4], 16).ok()?,
@@ -321,6 +331,13 @@ pub(crate) fn resolve_export_theme(
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect();
     for (key, value) in &theme.colors {
+        anyhow::ensure!(
+            !key.is_empty()
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "Invalid theme color key: {key}"
+        );
         css_colors.insert(
             key.clone(),
             css_color(resolve_var_refs(value, &theme.vars)?, light),
